@@ -24,7 +24,7 @@ Early stage. The work is tracked in GitHub issues, milestone POC. Start with iss
 
 - Every Rust function has a doc comment saying what it does and what its caller must know.
 - No Rust code without a test. `cargo clippy --all-targets -- -D warnings` and `cargo test` pass before a pull request.
-- TypeScript rules (documentation, tests, lint) come with the scaffold, like the commands below.
+- Every named TypeScript function, method and class has a JSDoc comment (enforced by ESLint). `pnpm lint`, `pnpm typecheck` and `pnpm test` pass before a pull request.
 - A bug starts with the test that reproduces it.
 
 ## Public repository
@@ -38,4 +38,14 @@ Plugin system, running a regular shell, SSH, tab notifications, pasted images an
 
 ## Commands
 
-To be added with the project scaffold.
+From the repository root:
+
+- `pnpm install`
+- `pnpm tauri dev`: run the app
+- `pnpm lint`, `pnpm typecheck`, `pnpm test`
+- `pnpm tauri build --debug`
+
+From `src-tauri`:
+
+- `cargo clippy --all-targets -- -D warnings`
+- `cargo test`

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cloître</title>
+    <script type="module" src="/src/main.ts"></script>
+  </head>
+
+  <body>
+    <header class="controls">
+      <button id="pick-folder" type="button">Choose a folder</button>
+      <label>
+        Renderer
+        <select id="renderer">
+          <option value="dom" selected>DOM</option>
+          <option value="webgl">WebGL</option>
+        </select>
+      </label>
+      <label>
+        Unicode widths
+        <select id="unicode">
+          <option value="6" selected>6</option>
+          <option value="11">11</option>
+        </select>
+      </label>
+      <span id="status">No folder chosen</span>
+    </header>
+    <div id="terminal"></div>
+  </body>
+</html>

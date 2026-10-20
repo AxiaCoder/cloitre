@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-window",
+  "description": "What the main window may call: the session commands and the folder picker.",
+  "windows": ["main"],
+  "permissions": [
+    "allow-pty-spawn",
+    "allow-pty-write",
+    "allow-pty-resize",
+    "allow-pty-kill",
+    "dialog:allow-open"
+  ]
+}

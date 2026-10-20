@@ -1,0 +1,35 @@
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  background: #000;
+  color: #ddd;
+  font: 13px system-ui, sans-serif;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px;
+  background: #1e1e1e;
+  border-bottom: 1px solid #333;
+}
+
+#status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.8;
+}
+
+#terminal {
+  flex: 1;
+  min-height: 0;
+  padding: 4px;
+}
