@@ -156,6 +156,9 @@ impl PtyRegistry {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
     use super::*;
 
     #[test]
@@ -192,5 +195,111 @@ mod tests {
     #[test]
     fn kill_all_on_empty_registry_does_nothing() {
         PtyRegistry::default().kill_all();
+    }
+
+    /// How long a test waits for a short-lived process to print or exit.
+    const PROCESS_TIMEOUT: Duration = Duration::from_secs(20);
+
+    /// Builds a command that prints `marker`, then exits with `code`.
+    fn print_and_exit(marker: &str, code: u32) -> CommandBuilder {
+        if cfg!(windows) {
+            let mut command = CommandBuilder::new("cmd.exe");
+            command.args(["/C", &format!("echo {marker}& exit /b {code}")]);
+            command
+        } else {
+            let mut command = CommandBuilder::new("sh");
+            command.args(["-c", &format!("echo {marker}; exit {code}")]);
+            command
+        }
+    }
+
+    /// Builds a command that waits for about `seconds` without printing anything useful.
+    fn wait_quietly(seconds: u32) -> CommandBuilder {
+        if cfg!(windows) {
+            let mut command = CommandBuilder::new("cmd.exe");
+            command.args(["/C", &format!("ping -n {} 127.0.0.1 >NUL", seconds + 1)]);
+            command
+        } else {
+            let mut command = CommandBuilder::new("sh");
+            command.args(["-c", &format!("sleep {seconds}")]);
+            command
+        }
+    }
+
+    /// Reads output chunks of session `id` from `receiver` until their concatenation
+    /// contains `marker`. Answers the cursor position requests the Windows console
+    /// sends before it lets the process print, as a real terminal would.
+    fn wait_for_output(
+        registry: &PtyRegistry,
+        id: u32,
+        receiver: &mpsc::Receiver<Vec<u8>>,
+        marker: &str,
+    ) -> bool {
+        let deadline = Instant::now() + PROCESS_TIMEOUT;
+        let mut seen = Vec::new();
+        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+            let Ok(chunk) = receiver.recv_timeout(left) else {
+                return false;
+            };
+            if chunk.windows(4).any(|window| window == b"[6n") {
+                let _ = registry.write(id, b"[1;1R");
+            }
+            seen.extend_from_slice(&chunk);
+            if String::from_utf8_lossy(&seen).contains(marker) {
+                return true;
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn spawn_forwards_output_and_exit_code() {
+        let registry = PtyRegistry::default();
+        let (output_tx, output_rx) = mpsc::channel();
+        let (exit_tx, exit_rx) = mpsc::channel();
+        let id = registry
+            .spawn(
+                print_and_exit("cloitre-marker", 3),
+                pty_size(80, 24).unwrap(),
+                move |bytes| {
+                    let _ = output_tx.send(bytes.to_vec());
+                },
+                move |code| {
+                    let _ = exit_tx.send(code);
+                },
+            )
+            .unwrap();
+        assert!(wait_for_output(&registry, id, &output_rx, "cloitre-marker"));
+        assert_eq!(exit_rx.recv_timeout(PROCESS_TIMEOUT), Ok(3));
+        assert_eq!(registry.kill(id), Ok(()));
+    }
+
+    #[test]
+    fn live_session_accepts_write_and_resize_until_killed() {
+        let registry = PtyRegistry::default();
+        let id = registry
+            .spawn(wait_quietly(10), pty_size(80, 24).unwrap(), |_| {}, |_| {})
+            .unwrap();
+        assert_eq!(registry.write(id, b"x"), Ok(()));
+        assert_eq!(registry.resize(id, pty_size(100, 30).unwrap()), Ok(()));
+        assert_eq!(registry.kill(id), Ok(()));
+        assert_eq!(registry.write(id, b"x"), Err(AppError::UnknownPty(id)));
+        assert_eq!(registry.kill(id), Err(AppError::UnknownPty(id)));
+    }
+
+    #[test]
+    fn session_ids_are_distinct_and_kill_all_releases_them() {
+        let registry = PtyRegistry::default();
+        let size = pty_size(80, 24).unwrap();
+        let first = registry
+            .spawn(wait_quietly(10), size, |_| {}, |_| {})
+            .unwrap();
+        let second = registry
+            .spawn(wait_quietly(10), size, |_| {}, |_| {})
+            .unwrap();
+        assert_ne!(first, second);
+        registry.kill_all();
+        assert_eq!(registry.kill(first), Err(AppError::UnknownPty(first)));
+        assert_eq!(registry.kill(second), Err(AppError::UnknownPty(second)));
     }
 }

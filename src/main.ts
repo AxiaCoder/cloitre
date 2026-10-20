@@ -3,7 +3,7 @@ import "./styles.css";
 
 import { open } from "@tauri-apps/plugin-dialog";
 
-import { killPty, resizePty, spawnPty, writePty, type PtySession } from "./pty";
+import { SessionSlot } from "./session";
 import { TerminalView, isRenderer, isUnicodeVersion } from "./terminal-view";
 
 /** Returns the element with `id`, or throws when the page lacks it. */
@@ -20,43 +20,29 @@ const rendererSelect = element("renderer", HTMLSelectElement);
 const unicodeSelect = element("unicode", HTMLSelectElement);
 const statusText = element("status", HTMLSpanElement);
 const view = new TerminalView(element("terminal", HTMLDivElement));
-
-let session: PtySession | undefined;
-let generation = 0;
+const slot = new SessionSlot();
 
 /** Shows a short message in the control bar. */
 function showStatus(message: string): void {
   statusText.textContent = message;
 }
 
-/** Stops the current session, if any. Output still in flight from it is ignored. */
-async function stopSession(): Promise<void> {
-  generation += 1;
-  const current = session;
-  session = undefined;
-  if (current) {
-    await killPty(current).catch(() => undefined);
-  }
+/** Clears the screen, refits it and returns the size to start a session with. */
+function prepareScreen(): { cols: number; rows: number } {
+  view.terminal.reset();
+  view.fit();
+  return { cols: view.terminal.cols, rows: view.terminal.rows };
 }
 
 /** Stops the current session and starts `claude` in `folder` on a cleared screen. */
 async function startSession(folder: string): Promise<void> {
-  await stopSession();
-  const mine = generation;
-  view.terminal.reset();
-  view.fit();
   try {
-    session = await spawnPty(folder, view.terminal.cols, view.terminal.rows, {
+    await slot.start(folder, prepareScreen, {
       onOutput: (bytes) => {
-        if (mine === generation) {
-          view.terminal.write(bytes);
-        }
+        view.terminal.write(bytes);
       },
       onExit: (code) => {
-        if (mine === generation) {
-          view.terminal.write(`\r\n[claude exited with code ${String(code)}]\r\n`);
-          void stopSession();
-        }
+        view.terminal.write(`\r\n[claude exited with code ${String(code)}]\r\n`);
       },
     });
     showStatus(folder);
@@ -67,19 +53,15 @@ async function startSession(folder: string): Promise<void> {
 }
 
 view.terminal.onData((data) => {
-  if (session) {
-    writePty(session, data).catch((error: unknown) => {
-      showStatus(String(error));
-    });
-  }
+  slot.write(data).catch((error: unknown) => {
+    showStatus(String(error));
+  });
 });
 
-view.terminal.onResize(({ cols, rows }) => {
-  if (session) {
-    resizePty(session, cols, rows).catch((error: unknown) => {
-      showStatus(String(error));
-    });
-  }
+view.terminal.onResize((size) => {
+  slot.resize(size).catch((error: unknown) => {
+    showStatus(String(error));
+  });
 });
 
 pickButton.addEventListener("click", () => {
@@ -113,5 +95,5 @@ unicodeSelect.addEventListener("change", () => {
 });
 
 window.addEventListener("beforeunload", () => {
-  void stopSession();
+  void slot.stop();
 });
