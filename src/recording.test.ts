@@ -1,3 +1,7 @@
+/// <reference types="node" />
+
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -172,5 +176,82 @@ describe("Replay", () => {
       "write e",
     ]);
     expect(log.filter((line) => line === "reset")).toHaveLength(1);
+  });
+});
+
+describe("decodeRecording on the file written by the Rust recorder tests", () => {
+  it("decodes the shared fixture to the records Rust wrote", () => {
+    const fixture = new Uint8Array(readFileSync(new URL("../fixtures/recording.rec", import.meta.url)));
+    expect(decodeRecording(fixture)).toEqual({
+      events: [
+        { kind: "resize", at: 0, cols: 80, rows: 24 },
+        { kind: "output", at: 12, data: Uint8Array.from(text("\x1b[2Jhello")) },
+        { kind: "output", at: 12, data: Uint8Array.from([0xe2, 0x94]) },
+        { kind: "output", at: 13, data: Uint8Array.from([0x80]) },
+        { kind: "resize", at: 20, cols: 300, rows: 40 },
+        { kind: "marker", at: 25 },
+        { kind: "output", at: 30, data: new Uint8Array() },
+      ],
+      truncated: false,
+    });
+  });
+});
+
+describe("Replay runs", () => {
+  it("lets a new run stop the one still going and resume where it stopped", async () => {
+    const { log, target } = logTarget();
+    let waiting = false;
+    const replay = new Replay(events, target, (_ms, signal) => {
+      waiting = true;
+      return new Promise<void>((resolve) => {
+        signal.addEventListener("abort", () => {
+          resolve();
+        });
+      });
+    });
+    const first = replay.run("realtime", false);
+    await vi.waitFor(() => {
+      expect(waiting).toBe(true);
+    });
+    const second = replay.run("instant", false);
+    expect(await first).toBe("stopped");
+    expect(await second).toBe("end");
+    expect(log.filter((line) => line.startsWith("write"))).toEqual([
+      "write a",
+      "write b",
+      "write c",
+      "write d",
+      "write e",
+    ]);
+    expect(log.filter((line) => line === "reset")).toHaveLength(1);
+  });
+
+  it("lets the target draw what was written before waiting in real time", async () => {
+    const { log, target } = logTarget();
+    const replay = new Replay(events, target, (ms) => {
+      log.push(`wait ${String(ms)}`);
+      return Promise.resolve();
+    });
+    await replay.run("realtime", false);
+    const waits = log.flatMap((line, index) => (line.startsWith("wait") ? [index] : []));
+    expect(waits).toHaveLength(7);
+    for (const index of waits) {
+      expect(log[index - 1]).toBe("drained");
+    }
+  });
+
+  it("stops at a marker in real time too", async () => {
+    const { log, target } = logTarget();
+    const replay = new Replay(events, target, () => Promise.resolve());
+    expect(await replay.run("realtime", true)).toBe("marker");
+    expect(log.filter((line) => line.startsWith("write"))).toEqual(["write a", "write b", "write c"]);
+    expect(replay.finished).toBe(false);
+  });
+
+  it("resolves a stop with no run going", async () => {
+    const { log, target } = logTarget();
+    const replay = new Replay(events, target);
+    await replay.stop();
+    expect(log).toEqual([]);
   });
 });

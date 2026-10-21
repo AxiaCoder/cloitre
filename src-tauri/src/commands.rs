@@ -151,3 +151,79 @@ pub fn recording_read(
 ) -> Result<Response, AppError> {
     recordings.read(&name).map(Response::new)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io::{self, Write};
+    use std::sync::Mutex;
+
+    use super::*;
+    use crate::recording::Recorder;
+
+    /// A sink whose bytes stay readable through a clone of it.
+    #[derive(Clone, Default)]
+    struct SharedSink(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for SharedSink {
+        /// Appends every byte.
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            lock(&self.0).extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        /// Does nothing.
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn output_sink_records_each_chunk_before_sending_it() {
+        let file = SharedSink::default();
+        let recorder: SharedRecorder =
+            Arc::new(Mutex::new(Recorder::new(Box::new(file.clone()), 80, 24)));
+        let seen_at_send = Arc::new(Mutex::new(Vec::new()));
+        let channel = {
+            let recorder = Arc::clone(&recorder);
+            let file = file.clone();
+            let seen_at_send = Arc::clone(&seen_at_send);
+            Channel::new(move |body| {
+                lock(&recorder).mark();
+                let recorded = lock(&file.0).clone();
+                if let InvokeResponseBody::Raw(sent) = body {
+                    lock(&seen_at_send).push((sent, recorded));
+                }
+                Ok(())
+            })
+        };
+        let mut sink = output_sink(channel, Some(Arc::clone(&recorder)));
+        sink(b"chunk");
+
+        let seen = lock(&seen_at_send);
+        assert_eq!(seen.len(), 1);
+        let (sent, recorded) = &seen[0];
+        assert_eq!(sent, b"chunk");
+        assert!(
+            recorded.windows(5).any(|window| window == b"chunk"),
+            "the chunk was sent before it was recorded"
+        );
+    }
+
+    #[test]
+    fn output_sink_without_recorder_still_sends() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let channel = {
+            let sent = Arc::clone(&sent);
+            Channel::new(move |body| {
+                if let InvokeResponseBody::Raw(bytes) = body {
+                    lock(&sent).push(bytes);
+                }
+                Ok(())
+            })
+        };
+        let mut sink = output_sink(channel, None);
+        sink(b"a");
+        sink(b"b");
+        assert_eq!(*lock(&sent), vec![b"a".to_vec(), b"b".to_vec()]);
+    }
+}

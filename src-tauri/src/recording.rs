@@ -400,6 +400,209 @@ mod tests {
         }
     }
 
+    /// A sink whose bytes stay readable through a clone of it.
+    #[derive(Clone, Default)]
+    struct SharedSink(Arc<Mutex<Vec<u8>>>);
+
+    impl SharedSink {
+        /// The bytes written out so far.
+        fn bytes(&self) -> Vec<u8> {
+            lock(&self.0).clone()
+        }
+    }
+
+    impl Write for SharedSink {
+        /// Appends every byte.
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            lock(&self.0).extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        /// Does nothing.
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A sink that fails its first flush only, and keeps every byte it accepts.
+    struct FailsOnceSink {
+        bytes: SharedSink,
+        failed: bool,
+    }
+
+    impl Write for FailsOnceSink {
+        /// Appends every byte.
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.bytes.write(buf)
+        }
+
+        /// Fails the first time, then succeeds.
+        fn flush(&mut self) -> io::Result<()> {
+            if self.failed {
+                Ok(())
+            } else {
+                self.failed = true;
+                Err(io::Error::other("disk full"))
+            }
+        }
+    }
+
+    /// The recording file shared with the TypeScript decoder tests.
+    const FIXTURE: &[u8] = include_bytes!("../../fixtures/recording.rec");
+
+    #[test]
+    fn recorder_writes_the_fixture_shared_with_the_typescript_decoder() {
+        let sink = SharedSink::default();
+        let mut recorder = Recorder::new(Box::new(sink.clone()), 80, 24);
+        recorder.output(b"\x1b[2Jhello");
+        recorder.output(&[0xe2, 0x94]);
+        recorder.output(&[0x80]);
+        std::thread::sleep(Duration::from_millis(5));
+        recorder.resize(300, 40);
+        recorder.mark();
+        recorder.output(&[]);
+        recorder.finish();
+
+        let mut written = sink.bytes();
+        assert_eq!(written.len(), FIXTURE.len());
+        let mut offset = 0;
+        let mut last_at = 0;
+        while offset < FIXTURE.len() {
+            let at = u64::from_le_bytes(written[offset..offset + 8].try_into().unwrap());
+            assert!(at < 60_000, "time {at} at offset {offset}");
+            last_at = at;
+            written[offset..offset + 8].copy_from_slice(&FIXTURE[offset..offset + 8]);
+            let length = u32::from_le_bytes(FIXTURE[offset + 9..offset + 13].try_into().unwrap());
+            offset += 13 + length as usize;
+        }
+        assert!(last_at >= 5, "last record at {last_at} ms");
+        assert_eq!(written, FIXTURE);
+    }
+
+    #[test]
+    fn initial_size_is_recorded_at_time_zero() {
+        let sink = SharedSink::default();
+        let mut recorder = Recorder::new(Box::new(sink.clone()), 120, 40);
+        recorder.finish();
+        assert_eq!(
+            decode(&sink.bytes()),
+            vec![(0, KIND_RESIZE, vec![120, 0, 40, 0])]
+        );
+    }
+
+    #[test]
+    fn mark_writes_buffered_records_out_at_once() {
+        let sink = SharedSink::default();
+        let mut recorder = Recorder::new(Box::new(sink.clone()), 80, 24);
+        recorder.output(b"before the mark");
+        recorder.mark();
+        assert_eq!(
+            kinds_and_data(&decode(&sink.bytes())),
+            vec![
+                (KIND_RESIZE, vec![80, 0, 24, 0]),
+                (KIND_OUTPUT, b"before the mark".to_vec()),
+                (KIND_MARKER, vec![]),
+            ]
+        );
+    }
+
+    #[test]
+    fn records_older_than_the_flush_interval_are_written_out_with_the_next_one() {
+        let sink = SharedSink::default();
+        let mut recorder = Recorder::new(Box::new(sink.clone()), 80, 24);
+        recorder.output(b"first");
+        std::thread::sleep(FLUSH_INTERVAL + Duration::from_millis(20));
+        recorder.output(b"second");
+        assert_eq!(
+            kinds_and_data(&decode(&sink.bytes())),
+            vec![
+                (KIND_RESIZE, vec![80, 0, 24, 0]),
+                (KIND_OUTPUT, b"first".to_vec()),
+                (KIND_OUTPUT, b"second".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_failed_write_of_a_large_chunk_stops_recording_at_once() {
+        let mut recorder = Recorder::new(Box::new(FailingSink { budget: 0 }), 80, 24);
+        recorder.output(&vec![b'x'; WRITE_BUFFER_SIZE + 1]);
+        assert!(!recorder.is_active());
+    }
+
+    #[test]
+    fn nothing_is_written_after_the_first_failure_even_if_the_sink_recovers() {
+        let bytes = SharedSink::default();
+        let sink = FailsOnceSink {
+            bytes: bytes.clone(),
+            failed: false,
+        };
+        let mut recorder = Recorder::new(Box::new(sink), 80, 24);
+        recorder.mark();
+        let at_failure = bytes.bytes().len();
+        recorder.output(b"after the failure");
+        recorder.mark();
+        recorder.finish();
+        assert!(!recorder.is_active());
+        assert_eq!(bytes.bytes().len(), at_failure);
+    }
+
+    #[test]
+    fn create_gives_none_when_the_folder_cannot_be_made() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a-file");
+        fs::write(&file, b"x").unwrap();
+        let registry = RecordingRegistry::new(file.join("recordings"));
+        assert!(registry.create(80, 24).is_none());
+    }
+
+    #[test]
+    fn finish_all_writes_out_and_stops_every_recording() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = RecordingRegistry::new(dir.path().to_path_buf());
+        let first = registry.create(80, 24).unwrap();
+        let second = registry.create(80, 24).unwrap();
+        let (first_name, second_name) = (first.name.clone(), second.name.clone());
+        let first_recorder = Arc::clone(&first.recorder);
+        registry.attach(1, first);
+        registry.attach(2, second);
+        lock(&first_recorder).output(b"pending");
+        registry.finish_all();
+        assert_eq!(registry.current(1), None);
+        assert_eq!(registry.current(2), None);
+        assert_eq!(registry.mark(1), Err(AppError::NoRecording(1)));
+        assert_eq!(
+            kinds_and_data(&decode(&registry.read(&first_name).unwrap())),
+            vec![
+                (KIND_RESIZE, vec![80, 0, 24, 0]),
+                (KIND_OUTPUT, b"pending".to_vec()),
+            ]
+        );
+        assert_eq!(decode(&registry.read(&second_name).unwrap()).len(), 1);
+    }
+
+    #[test]
+    fn resize_of_a_session_without_recording_does_nothing() {
+        let registry = RecordingRegistry::new(PathBuf::from("unused"));
+        registry.resize(7, 100, 30);
+        assert_eq!(registry.current(7), None);
+    }
+
+    #[test]
+    fn names_with_an_overlong_or_non_digit_suffix_are_refused() {
+        assert!(is_recording_name("20261021-153012-99999999.rec"));
+        for name in [
+            "20261021-153012-123456789.rec",
+            "20261021-153012-a.rec",
+            "20261021-153012-1 .rec",
+            "020261021-153012.rec",
+            "20261021-1530120.rec",
+            "20261021-153012.REC",
+        ] {
+            assert!(!is_recording_name(name), "accepted {name:?}");
+        }
+    }
+
     #[test]
     fn timestamp_formats_utc_date_and_time() {
         assert_eq!(timestamp(0), "19700101-000000");

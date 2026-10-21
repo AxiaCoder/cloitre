@@ -68,4 +68,24 @@ mod tests {
         let json = serde_json::to_string(&AppError::UnknownPty(7)).unwrap();
         assert_eq!(json, "\"no session with id 7\"");
     }
+
+    #[test]
+    fn recording_errors_say_what_was_refused() {
+        assert_eq!(
+            AppError::InvalidRecordingName.to_string(),
+            "not a recording name"
+        );
+        assert_eq!(
+            AppError::UnknownRecording.to_string(),
+            "no recording with this name"
+        );
+        assert_eq!(
+            AppError::NoRecording(3).to_string(),
+            "session 3 is not being recorded"
+        );
+        assert_eq!(
+            AppError::Recording("denied".into()).to_string(),
+            "recording error: denied"
+        );
+    }
 }
