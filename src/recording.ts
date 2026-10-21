@@ -129,14 +129,16 @@ export class Replay {
   /**
    * Replays from the current position at `speed`, until the end or, when
    * `untilMarker` is set, until the next marker included. The first run resets
-   * the target. Resolves once the target has processed what was written.
+   * the target. Resolves once the target has processed what was written, or
+   * `"stopped"` when a stop or a later run came first, even before it started playing.
    */
-  async run(speed: ReplaySpeed, untilMarker: boolean): Promise<ReplayStop> {
+  run(speed: ReplaySpeed, untilMarker: boolean): Promise<ReplayStop> {
     this.controller?.abort();
-    await this.running;
     const controller = new AbortController();
     this.controller = controller;
-    const run = this.play(speed, untilMarker, controller.signal);
+    const run = this.running.then(() =>
+      controller.signal.aborted ? "stopped" : this.play(speed, untilMarker, controller.signal),
+    );
     this.running = run.catch(() => undefined);
     return run;
   }

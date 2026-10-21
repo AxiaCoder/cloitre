@@ -4,15 +4,14 @@ import "./styles.css";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import {
-  Replay,
   currentRecording,
-  decodeRecording,
   listRecordings,
   markRecording,
   readRecording,
   type ReplaySpeed,
   type ReplayTarget,
 } from "./recording";
+import { ReplayDeck, type LoadedReplay } from "./replay-deck";
 import { SessionSlot } from "./session";
 import { TerminalView, isRenderer, isUnicodeVersion } from "./terminal-view";
 
@@ -56,8 +55,21 @@ const replayTarget: ReplayTarget = {
     }),
 };
 
-/** The replay on screen, with the name of its recording and the markers reached so far. */
-let replay: { readonly player: Replay; readonly name: string; marks: number } | undefined;
+/** The replay on screen; loads, session starts and stops take their turn through it. */
+const deck = new ReplayDeck(replayTarget, {
+  stopSession: async () => {
+    await slot.stop();
+    showRecording(undefined);
+  },
+  read: readRecording,
+  hold: () => {
+    view.autoFit = false;
+  },
+  release: () => {
+    view.autoFit = true;
+    view.fit();
+  },
+});
 
 /** Shows a short message in the control bar. */
 function showStatus(message: string): void {
@@ -92,17 +104,6 @@ function refreshRecordingsOrReport(): void {
   });
 }
 
-/** Stops the replay on screen, if any, and gives the grid back to its container. */
-async function endReplay(): Promise<void> {
-  const ending = replay;
-  replay = undefined;
-  if (ending) {
-    await ending.player.stop();
-    view.autoFit = true;
-    view.fit();
-  }
-}
-
 /** Clears the screen, refits it and returns the size to start a session with. */
 function prepareScreen(): { cols: number; rows: number } {
   view.terminal.reset();
@@ -113,17 +114,18 @@ function prepareScreen(): { cols: number; rows: number } {
 /** Stops the current session and the replay, then starts `claude` in `folder` on a cleared screen. */
 async function startSession(folder: string): Promise<void> {
   try {
-    await endReplay();
-    const running = await slot.start(folder, prepareScreen, {
-      onOutput: (bytes) => {
-        view.terminal.write(bytes);
-      },
-      onExit: (code) => {
-        view.terminal.write(`\r\n[claude exited with code ${String(code)}]\r\n`);
-        showRecording(undefined);
-        refreshRecordingsOrReport();
-      },
-    });
+    const running = await deck.claim(() =>
+      slot.start(folder, prepareScreen, {
+        onOutput: (bytes) => {
+          view.terminal.write(bytes);
+        },
+        onExit: (code) => {
+          view.terminal.write(`\r\n[claude exited with code ${String(code)}]\r\n`);
+          showRecording(undefined);
+          refreshRecordingsOrReport();
+        },
+      }),
+    );
     const session = slot.current;
     if (running && session) {
       showStatus(folder);
@@ -154,19 +156,14 @@ async function mark(): Promise<void> {
  * Stops the session and any replay, then loads the chosen recording on a
  * replay of its own. The grid stops following its container until the replay ends.
  */
-async function loadReplay(): Promise<NonNullable<typeof replay> | undefined> {
+async function loadReplay(): Promise<LoadedReplay | undefined> {
   const name = recordingsSelect.value;
   if (name === "") {
     showStatus("No recording chosen");
     return undefined;
   }
-  await endReplay();
-  await slot.stop();
-  showRecording(undefined);
-  const decoded = decodeRecording(await readRecording(name));
-  view.autoFit = false;
-  replay = { player: new Replay(decoded.events, replayTarget), name, marks: 0 };
-  if (decoded.truncated) {
+  const { replay, truncated } = await deck.load(name);
+  if (truncated) {
     showStatus(`${name}: the last record is incomplete and was dropped`);
   }
   return replay;
@@ -180,7 +177,7 @@ async function replayFromStart(): Promise<void> {
   }
   const speed: ReplaySpeed = speedSelect.value === "realtime" ? "realtime" : "instant";
   showStatus(`Replaying ${loaded.name}`);
-  const stop = await loaded.player.run(speed, false);
+  const stop = await deck.run(loaded, speed, false);
   if (stop === "end") {
     showStatus(`${loaded.name}: end of recording`);
   }
@@ -188,12 +185,13 @@ async function replayFromStart(): Promise<void> {
 
 /** Replays instantly up to the next marker of the chosen recording, then pauses there. */
 async function replayToNextMark(): Promise<void> {
+  const onScreen = deck.current;
   const current =
-    replay?.name === recordingsSelect.value && !replay.player.finished ? replay : await loadReplay();
+    onScreen?.name === recordingsSelect.value && !onScreen.player.finished ? onScreen : await loadReplay();
   if (!current) {
     return;
   }
-  const stop = await current.player.run("instant", true);
+  const stop = await deck.run(current, "instant", true);
   if (stop === "marker") {
     current.marks += 1;
     showStatus(`${current.name}: paused at marker ${String(current.marks)}`);
@@ -256,8 +254,7 @@ nextMarkButton.addEventListener("click", () => {
 
 stopReplayButton.addEventListener("click", () => {
   report(async () => {
-    if (replay) {
-      await endReplay();
+    if (await deck.stop()) {
       showStatus("Replay stopped");
     }
   });

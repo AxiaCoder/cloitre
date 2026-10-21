@@ -80,7 +80,7 @@ pub fn pty_write(registry: State<'_, PtyRegistry>, id: u32, data: String) -> Res
     registry.write(id, data.as_bytes())
 }
 
-/// Resizes session `id` to `cols` x `rows`, and records the new size.
+/// Records the new size `cols` x `rows` of session `id`, then resizes it.
 ///
 /// # Errors
 /// An unknown id, a zero size, or a failed resize.
@@ -92,9 +92,26 @@ pub fn pty_resize(
     cols: u16,
     rows: u16,
 ) -> Result<(), AppError> {
-    registry.resize(id, pty_size(cols, rows)?)?;
+    resize_and_record(&registry, &recordings, id, cols, rows)
+}
+
+/// Records the size `cols` x `rows` in `recordings`, then resizes session `id`
+/// of `registry` to it.
+///
+/// The size is recorded first, and stays recorded when the resize fails.
+///
+/// # Errors
+/// An unknown id, a zero size, or a failed resize.
+fn resize_and_record(
+    registry: &PtyRegistry,
+    recordings: &RecordingRegistry,
+    id: u32,
+    cols: u16,
+    rows: u16,
+) -> Result<(), AppError> {
+    let size = pty_size(cols, rows)?;
     recordings.resize(id, cols, rows);
-    Ok(())
+    registry.resize(id, size)
 }
 
 /// Stops session `id`, releases it and closes its recording.
@@ -158,7 +175,7 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
-    use crate::recording::Recorder;
+    use crate::recording::{KIND_RESIZE, NewRecording, Recorder};
 
     /// A sink whose bytes stay readable through a clone of it.
     #[derive(Clone, Default)]
@@ -225,5 +242,27 @@ mod tests {
         sink(b"a");
         sink(b"b");
         assert_eq!(*lock(&sent), vec![b"a".to_vec(), b"b".to_vec()]);
+    }
+
+    #[test]
+    fn resize_is_recorded_even_when_the_pty_refuses_it() {
+        let file = SharedSink::default();
+        let recordings = RecordingRegistry::new(std::env::temp_dir());
+        recordings.attach(
+            7,
+            NewRecording {
+                name: "unused.rec".to_owned(),
+                recorder: Arc::new(Mutex::new(Recorder::new(Box::new(file.clone()), 80, 24))),
+            },
+        );
+
+        let resized = resize_and_record(&PtyRegistry::default(), &recordings, 7, 100, 30);
+        recordings.finish(7);
+
+        assert!(resized.is_err());
+        let written = lock(&file.0).clone();
+        let last = &written[written.len() - 13 - 4..];
+        assert_eq!(last[8], KIND_RESIZE);
+        assert_eq!(&last[13..], &[100, 0, 30, 0]);
     }
 }
