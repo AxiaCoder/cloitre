@@ -122,8 +122,7 @@ async function startSession(folder: string): Promise<void> {
         onExit: (code) => {
           view.terminal.write(`\r\n[claude exited with code ${String(code)}]\r\n`);
           showRecording(undefined);
-          startRenderer(view, rendererSelect, showStatus);
-refreshRecordingsOrReport();
+          refreshRecordingsOrReport();
         },
       }),
     );
@@ -135,8 +134,7 @@ refreshRecordingsOrReport();
       if (slot.current === session) {
         showRecording(name === null ? "not recorded" : `● recording ${name}`);
       }
-      startRenderer(view, rendererSelect, showStatus);
-refreshRecordingsOrReport();
+      refreshRecordingsOrReport();
     }
   } catch (error) {
     showStatus(String(error));
