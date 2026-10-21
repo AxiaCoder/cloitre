@@ -32,6 +32,14 @@ describe("decideKey", () => {
     expect(decideKey(key({ code: "KeyV", key: "м", keyCode: 86, ctrlKey: true }))).toBe("paste");
   });
 
+  it("leaves Ctrl+V to the browser paste when V is not on the QWERTY V key", () => {
+    expect(decideKey(key({ code: "Period", key: "v", keyCode: 86, ctrlKey: true }))).toBe("paste");
+  });
+
+  it("sends to the terminal the Ctrl key typed on the QWERTY V key when that key is not V", () => {
+    expect(decideKey(key({ code: "KeyV", key: "k", keyCode: 75, ctrlKey: true }))).toBe("terminal");
+  });
+
   it("leaves Ctrl+Shift+V to the browser paste", () => {
     expect(
       decideKey(key({ code: "KeyV", key: "V", keyCode: 86, ctrlKey: true, shiftKey: true })),

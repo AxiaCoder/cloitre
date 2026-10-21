@@ -109,3 +109,93 @@ describe("ReplayDeck, overlapping", () => {
     expect(log).toEqual([]);
   });
 });
+
+/** Hooks that log each call and read `bytes`, or reject the reads named in `failing`. */
+function loggedHooks(bytes: Uint8Array, failing: string[] = []) {
+  const calls: string[] = [];
+  const hooks: ReplayDeckHooks = {
+    stopSession: () => {
+      calls.push("stopSession");
+      return Promise.resolve();
+    },
+    read: (name) => {
+      calls.push(`read ${name}`);
+      return failing.includes(name) ? Promise.reject(new Error(`cannot read ${name}`)) : Promise.resolve(bytes);
+    },
+    hold: () => calls.push("hold"),
+    release: () => calls.push("release"),
+  };
+  return { calls, hooks };
+}
+
+describe("ReplayDeck, around the page", () => {
+  it("stops the session, reads the recording, then holds the screen", async () => {
+    const { target } = logTarget();
+    const { calls, hooks } = loggedHooks(slowRecording);
+    const deck = new ReplayDeck(target, hooks);
+
+    const { replay, truncated } = await deck.load("one");
+
+    expect(calls).toEqual(["stopSession", "read one", "hold"]);
+    expect(replay.name).toBe("one");
+    expect(replay.marks).toBe(0);
+    expect(truncated).toBe(false);
+    expect(deck.current).toBe(replay);
+  });
+
+  it("tells when the last record of the recording was dropped", async () => {
+    const { target } = logTarget();
+    const { hooks } = loggedHooks(slowRecording.slice(0, -1));
+    const deck = new ReplayDeck(target, hooks);
+
+    expect((await deck.load("one")).truncated).toBe(true);
+  });
+
+  it("releases the screen once when the replay on screen is stopped", async () => {
+    const { target } = logTarget();
+    const { calls, hooks } = loggedHooks(slowRecording);
+    const deck = new ReplayDeck(target, hooks);
+    await deck.load("one");
+
+    expect(await deck.stop()).toBe(true);
+    expect(await deck.stop()).toBe(false);
+    expect(calls.filter((call) => call === "release")).toEqual(["release"]);
+    expect(deck.current).toBeUndefined();
+  });
+
+  it("resolves a stop with no replay on screen as false, without releasing the screen", async () => {
+    const { target } = logTarget();
+    const { calls, hooks } = loggedHooks(slowRecording);
+    const deck = new ReplayDeck(target, hooks);
+
+    expect(await deck.stop()).toBe(false);
+    expect(calls).toEqual([]);
+  });
+
+  it("releases the screen of the replay a claim ends", async () => {
+    const { target } = logTarget();
+    const { calls, hooks } = loggedHooks(slowRecording);
+    const deck = new ReplayDeck(target, hooks);
+    await deck.load("one");
+
+    await deck.claim(() => {
+      calls.push("operation");
+      return Promise.resolve();
+    });
+
+    expect(calls.slice(-2)).toEqual(["release", "operation"]);
+  });
+
+  it("rejects a load whose read fails, and still runs the next one", async () => {
+    const { target } = logTarget();
+    const { hooks } = loggedHooks(slowRecording, ["broken"]);
+    const deck = new ReplayDeck(target, hooks);
+
+    const failed = deck.load("broken");
+    const next = deck.load("one");
+
+    await expect(failed).rejects.toThrow("cannot read broken");
+    expect((await next).replay.name).toBe("one");
+    expect(deck.current?.name).toBe("one");
+  });
+});

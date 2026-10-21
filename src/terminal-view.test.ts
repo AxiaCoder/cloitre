@@ -40,8 +40,8 @@ const xterm = vi.hoisted(() => {
     unicode = { activeVersion: "6" };
     loaded: FakeAddon[] = [];
     refreshed: [number, number][] = [];
-    /** Registers the terminal so the test can reach it. */
-    constructor() {
+    /** Registers the terminal, with the `options` it was opened with, so the test can reach it. */
+    constructor(readonly options: { theme?: { background?: string } } = {}) {
       state.terminals.push(this);
     }
     /** Loads `addon`, or throws like xterm.js when WebGL is set to fail. */
@@ -276,6 +276,13 @@ describe("TerminalView.setUnicodeVersion", () => {
     view.setUnicodeVersion("15");
     expect(terminal.unicode.activeVersion).toBe("15");
     expect(terminal.refreshed).toEqual([[0, 23]]);
+  });
+});
+
+describe("TerminalView theme", () => {
+  it("draws on a black background", () => {
+    const { terminal } = openView();
+    expect(terminal.options.theme?.background).toBe("#000000");
   });
 });
 

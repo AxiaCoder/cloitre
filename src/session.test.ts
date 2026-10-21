@@ -208,6 +208,37 @@ describe("SessionSlot.start, overlapping", () => {
     await expect(started).resolves.toBe(true);
     expect(calls("pty_resize")).toEqual([{ id: 1, cols: 100, rows: 30 }]);
   });
+  it("sends a resize made right after the start behind the size it resends", async () => {
+    const slot = new SessionSlot();
+    const pending = deferSpawns();
+    const started = slot.start("/projects/a", size, recorder().handlers);
+    await vi.waitFor(() => {
+      expect(pending).toHaveLength(1);
+    });
+    await slot.resize({ cols: 100, rows: 30 });
+    let finishResend: () => void = () => undefined;
+    tauri.invoke.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishResend = resolve;
+        }),
+    );
+    pending[0]?.(1);
+    await vi.waitFor(() => {
+      expect(calls("pty_resize")).toHaveLength(1);
+    });
+    const next = slot.resize({ cols: 120, rows: 40 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(calls("pty_resize")).toEqual([{ id: 1, cols: 100, rows: 30 }]);
+    finishResend();
+    await expect(started).resolves.toBe(true);
+    await next;
+    expect(calls("pty_resize")).toEqual([
+      { id: 1, cols: 100, rows: 30 },
+      { id: 1, cols: 120, rows: 40 },
+    ]);
+  });
+
   it("does not spawn a session started just before another one", async () => {
     const slot = new SessionSlot();
     const pending = deferSpawns();
