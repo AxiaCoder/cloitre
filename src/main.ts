@@ -220,7 +220,8 @@ view.terminal.onResize((size) => {
 });
 
 view.terminal.attachCustomKeyEventHandler((event) => {
-  const isMarkShortcut = event.ctrlKey && event.shiftKey && !event.altKey && event.code === "KeyM";
+  const isMarkShortcut =
+    event.code === "F9" && !event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey;
   if (!isMarkShortcut) {
     return true;
   }

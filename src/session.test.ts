@@ -294,6 +294,43 @@ describe("SessionSlot.write and resize", () => {
     ]);
   });
 
+  it("sends resizes in order when an earlier one is slow", async () => {
+    const slot = new SessionSlot();
+    await slot.start("/projects/a", size, recorder().handlers);
+    let finishFirst: () => void = () => undefined;
+    tauri.invoke.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishFirst = resolve;
+        }),
+    );
+    const first = slot.resize({ cols: 100, rows: 30 });
+    const second = slot.resize({ cols: 120, rows: 40 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(calls("pty_resize")).toEqual([{ id: 1, cols: 100, rows: 30 }]);
+    finishFirst();
+    await first;
+    await second;
+    expect(calls("pty_resize")).toEqual([
+      { id: 1, cols: 100, rows: 30 },
+      { id: 1, cols: 120, rows: 40 },
+    ]);
+  });
+
+  it("pass a rejected resize to its caller and still send the next one", async () => {
+    const slot = new SessionSlot();
+    await slot.start("/projects/a", size, recorder().handlers);
+    tauri.invoke.mockRejectedValueOnce(new Error("resize failed"));
+    const first = slot.resize({ cols: 100, rows: 30 });
+    const second = slot.resize({ cols: 120, rows: 40 });
+    await expect(first).rejects.toThrow("resize failed");
+    await expect(second).resolves.toBeUndefined();
+    expect(calls("pty_resize")).toEqual([
+      { id: 1, cols: 100, rows: 30 },
+      { id: 1, cols: 120, rows: 40 },
+    ]);
+  });
+
   it("pass a Rust refusal on to the caller", async () => {
     const slot = new SessionSlot();
     await slot.start("/projects/a", size, recorder().handlers);

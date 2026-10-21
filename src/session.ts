@@ -16,6 +16,7 @@ export class SessionSlot {
   private generation = 0;
   private size: TerminalSize | undefined;
   private lastWrite: Promise<unknown> = Promise.resolve();
+  private lastResize: Promise<unknown> = Promise.resolve();
 
   /** The running session, or `undefined` when none is running. */
   get current(): PtySession | undefined {
@@ -82,7 +83,7 @@ export class SessionSlot {
     this.session = session;
     const wanted = this.size;
     if (wanted.cols !== spawnedSize.cols || wanted.rows !== spawnedSize.rows) {
-      await resizePty(session, wanted.cols, wanted.rows).catch(() => undefined);
+      await this.queueResize(session, wanted).catch(() => undefined);
     }
     return true;
   }
@@ -110,13 +111,23 @@ export class SessionSlot {
   }
 
   /**
-   * Resizes the current session's terminal. Without a running session, only
-   * remembers the size for a session still starting.
+   * Resizes the current session's terminal, after every earlier resize.
+   * Without a running session, only remembers the size for a session still
+   * starting.
    */
-  async resize(size: TerminalSize): Promise<void> {
+  resize(size: TerminalSize): Promise<void> {
     this.size = size;
-    if (this.session) {
-      await resizePty(this.session, size.cols, size.rows);
+    const session = this.session;
+    if (!session) {
+      return Promise.resolve();
     }
+    return this.queueResize(session, size);
+  }
+
+  /** Resizes `session` once every earlier resize has settled; a rejection only reaches this caller. */
+  private queueResize(session: PtySession, size: TerminalSize): Promise<void> {
+    const resized = this.lastResize.then(() => resizePty(session, size.cols, size.rows));
+    this.lastResize = resized.catch(() => undefined);
+    return resized;
   }
 }

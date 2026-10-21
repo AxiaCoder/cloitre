@@ -248,6 +248,41 @@ describe("Replay runs", () => {
     expect(replay.finished).toBe(false);
   });
 
+  it("stops a run before it started playing", async () => {
+    const { log, target } = logTarget();
+    const replay = new Replay(events, target);
+    const run = replay.run("instant", false);
+    await replay.stop();
+    expect(await run).toBe("stopped");
+    expect(log).toEqual([]);
+  });
+
+  it("stops a run queued behind one that waits for the target to drain", async () => {
+    const { log, target } = logTarget();
+    let release: () => void = () => undefined;
+    const draining = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const replay = new Replay(events, {
+      ...target,
+      drained: () => {
+        log.push("drained");
+        return draining;
+      },
+    });
+    const first = replay.run("instant", false);
+    await vi.waitFor(() => {
+      expect(log).toContain("drained");
+    });
+    const second = replay.run("instant", false);
+    const stopped = replay.stop();
+    release();
+    await stopped;
+    expect(await first).toBe("stopped");
+    expect(await second).toBe("stopped");
+    expect(log.filter((line) => line.startsWith("write"))).toEqual([]);
+  });
+
   it("resolves a stop with no run going", async () => {
     const { log, target } = logTarget();
     const replay = new Replay(events, target);
