@@ -30,6 +30,7 @@ const xterm = vi.hoisted(() => {
     /** Counts one fit. */
     fit(): void {
       this.fits += 1;
+      state.events.push("fit");
     }
   }
 
@@ -54,6 +55,10 @@ const xterm = vi.hoisted(() => {
     open(): void {
       return undefined;
     }
+    /** Records the reset in the shared event log. */
+    reset(): void {
+      state.events.push("reset");
+    }
     /** Records the redrawn row range. */
     refresh(start: number, end: number): void {
       this.refreshed.push([start, end]);
@@ -64,6 +69,7 @@ const xterm = vi.hoisted(() => {
     webglFails: false,
     webglAddons: [] as FakeWebglAddon[],
     terminals: [] as FakeTerminal[],
+    events: [] as string[],
   };
   return { FakeAddon, FakeFitAddon, FakeTerminal, FakeWebglAddon, state };
 });
@@ -81,6 +87,7 @@ beforeEach(() => {
   xterm.state.webglFails = false;
   xterm.state.webglAddons = [];
   xterm.state.terminals = [];
+  xterm.state.events = [];
   observers = [];
   vi.stubGlobal(
     "ResizeObserver",
@@ -213,10 +220,25 @@ describe("TerminalView.setRenderer", () => {
 });
 
 describe("TerminalView.setUnicodeVersion", () => {
+  it("starts with the Unicode 11 table", () => {
+    const { terminal } = openView();
+    expect(terminal.unicode.activeVersion).toBe("11");
+  });
+
   it("switches the width table and redraws every row", () => {
     const { view, terminal } = openView();
     view.setUnicodeVersion("11");
     expect(terminal.unicode.activeVersion).toBe("11");
     expect(terminal.refreshed).toEqual([[0, 23]]);
+  });
+});
+
+describe("TerminalView.clearAndFit", () => {
+  it("clears the screen before fitting it to its container again", () => {
+    const { view } = openView();
+    view.autoFit = false;
+    view.clearAndFit();
+    expect(xterm.state.events).toEqual(["reset", "fit"]);
+    expect(view.autoFit).toBe(true);
   });
 });

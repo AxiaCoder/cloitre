@@ -66,8 +66,7 @@ const deck = new ReplayDeck(replayTarget, {
     view.autoFit = false;
   },
   release: () => {
-    view.autoFit = true;
-    view.fit();
+    view.clearAndFit();
   },
 });
 

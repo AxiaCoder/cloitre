@@ -28,7 +28,7 @@ export class TerminalView {
   private readonly fitAddon = new FitAddon();
   private webglAddon: WebglAddon | undefined;
 
-  /** Opens a terminal in `container`, with the DOM renderer and the Unicode 6 table. */
+  /** Opens a terminal in `container`, with the DOM renderer and the Unicode 11 table. */
   constructor(container: HTMLElement) {
     this.terminal = new Terminal({
       allowProposedApi: true,
@@ -39,6 +39,7 @@ export class TerminalView {
     });
     this.terminal.loadAddon(this.fitAddon);
     this.terminal.loadAddon(new Unicode11Addon());
+    this.terminal.unicode.activeVersion = "11";
     this.terminal.open(container);
     new ResizeObserver(() => {
       if (this.autoFit) {
@@ -56,6 +57,16 @@ export class TerminalView {
   /** Resizes the terminal grid to fill its container. */
   fit(): void {
     this.fitAddon.fit();
+  }
+
+  /**
+   * Clears the screen and its scrollback, then makes the grid follow its
+   * container again and fits it at once.
+   */
+  clearAndFit(): void {
+    this.terminal.reset();
+    this.autoFit = true;
+    this.fit();
   }
 
   /**
