@@ -31,7 +31,10 @@ export class TerminalView {
   private readonly fitAddon = new FitAddon();
   private webglAddon: WebglAddon | undefined;
 
-  /** Opens a terminal in `container`, with the DOM renderer and the Unicode 15 grapheme table. */
+  /**
+   * Opens a terminal in `container`, drawn by the DOM renderer until
+   * {@link TerminalView.setRenderer} switches it, with the Unicode 15 grapheme table.
+   */
   constructor(container: HTMLElement) {
     this.terminal = new Terminal({
       allowProposedApi: true,
@@ -113,4 +116,38 @@ export class TerminalView {
     this.terminal.unicode.activeVersion = version;
     this.terminal.refresh(0, this.terminal.rows - 1);
   }
+}
+
+/** The control that shows which renderer is in use, such as a `<select>`. */
+export interface RendererPicker {
+  value: string;
+}
+
+/**
+ * Switches `view` to `wanted` and keeps `picker` on the renderer actually in
+ * use. When WebGL cannot start, or its context is lost later, the view falls
+ * back to the DOM renderer, `picker` moves to `"dom"` and `showStatus` says why.
+ */
+export function showRenderer(
+  view: TerminalView,
+  wanted: Renderer,
+  picker: RendererPicker,
+  showStatus: (message: string) => void,
+): void {
+  picker.value = view.setRenderer(wanted, () => {
+    picker.value = "dom";
+    showStatus("WebGL context lost, back to the DOM renderer");
+  });
+  if (picker.value !== wanted) {
+    showStatus("WebGL is not available, DOM renderer kept");
+  }
+}
+
+/** Starts `view` on the WebGL renderer, through {@link showRenderer} and its DOM fallback. */
+export function startRenderer(
+  view: TerminalView,
+  picker: RendererPicker,
+  showStatus: (message: string) => void,
+): void {
+  showRenderer(view, "webgl", picker, showStatus);
 }

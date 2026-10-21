@@ -14,7 +14,7 @@ import {
 import { decideKey } from "./keys";
 import { ReplayDeck, type LoadedReplay } from "./replay-deck";
 import { SessionSlot } from "./session";
-import { TerminalView, isRenderer, isUnicodeVersion } from "./terminal-view";
+import { TerminalView, isRenderer, isUnicodeVersion, showRenderer, startRenderer } from "./terminal-view";
 
 /** Returns the element with `id`, or throws when the page lacks it. */
 function element<T extends HTMLElement>(id: string, type: new () => T): T {
@@ -122,7 +122,8 @@ async function startSession(folder: string): Promise<void> {
         onExit: (code) => {
           view.terminal.write(`\r\n[claude exited with code ${String(code)}]\r\n`);
           showRecording(undefined);
-          refreshRecordingsOrReport();
+          startRenderer(view, rendererSelect, showStatus);
+refreshRecordingsOrReport();
         },
       }),
     );
@@ -134,7 +135,8 @@ async function startSession(folder: string): Promise<void> {
       if (slot.current === session) {
         showRecording(name === null ? "not recorded" : `● recording ${name}`);
       }
-      refreshRecordingsOrReport();
+      startRenderer(view, rendererSelect, showStatus);
+refreshRecordingsOrReport();
     }
   } catch (error) {
     showStatus(String(error));
@@ -266,13 +268,7 @@ stopReplayButton.addEventListener("click", () => {
 rendererSelect.addEventListener("change", () => {
   const wanted = rendererSelect.value;
   if (isRenderer(wanted)) {
-    rendererSelect.value = view.setRenderer(wanted, () => {
-      rendererSelect.value = "dom";
-      showStatus("WebGL context lost, back to the DOM renderer");
-    });
-    if (rendererSelect.value !== wanted) {
-      showStatus("WebGL is not available, DOM renderer kept");
-    }
+    showRenderer(view, wanted, rendererSelect, showStatus);
     view.terminal.focus();
   }
 });
@@ -285,4 +281,5 @@ unicodeSelect.addEventListener("change", () => {
   }
 });
 
+startRenderer(view, rendererSelect, showStatus);
 refreshRecordingsOrReport();

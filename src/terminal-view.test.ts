@@ -79,7 +79,7 @@ vi.mock("@xterm/addon-fit", () => ({ FitAddon: xterm.FakeFitAddon }));
 vi.mock("@xterm/addon-unicode-graphemes", () => ({ UnicodeGraphemesAddon: xterm.FakeAddon }));
 vi.mock("@xterm/addon-webgl", () => ({ WebglAddon: xterm.FakeWebglAddon }));
 
-import { TerminalView, isRenderer, isUnicodeVersion } from "./terminal-view";
+import { TerminalView, isRenderer, isUnicodeVersion, showRenderer, startRenderer } from "./terminal-view";
 
 let observers: { callback: () => void; observed: unknown[] }[];
 
@@ -217,6 +217,51 @@ describe("TerminalView.setRenderer", () => {
     expect(addon.disposed).toBe(1);
     expect(view.setRenderer("webgl", vi.fn())).toBe("webgl");
     expect(xterm.state.webglAddons).toHaveLength(2);
+  });
+});
+
+describe("startRenderer", () => {
+  it("asks for WebGL and shows it in the picker", () => {
+    const { view, terminal } = openView();
+    const picker = { value: "dom" };
+    const showStatus = vi.fn();
+    startRenderer(view, picker, showStatus);
+    expect(terminal.loaded).toContain(xterm.state.webglAddons[0]);
+    expect(picker.value).toBe("webgl");
+    expect(showStatus).not.toHaveBeenCalled();
+  });
+
+  it("keeps the DOM renderer, sets the picker on DOM and says so when WebGL cannot start", () => {
+    const { view } = openView();
+    xterm.state.webglFails = true;
+    const picker = { value: "webgl" };
+    const showStatus = vi.fn();
+    startRenderer(view, picker, showStatus);
+    expect(picker.value).toBe("dom");
+    expect(showStatus).toHaveBeenCalledWith("WebGL is not available, DOM renderer kept");
+  });
+
+  it("sets the picker back on DOM and says so when the WebGL context is lost", () => {
+    const { view } = openView();
+    const picker = { value: "dom" };
+    const showStatus = vi.fn();
+    startRenderer(view, picker, showStatus);
+    xterm.state.webglAddons[0]?.loseContext?.();
+    expect(picker.value).toBe("dom");
+    expect(showStatus).toHaveBeenCalledWith("WebGL context lost, back to the DOM renderer");
+  });
+});
+
+describe("showRenderer", () => {
+  it("goes back to DOM when DOM is chosen", () => {
+    const { view } = openView();
+    const picker = { value: "webgl" };
+    startRenderer(view, picker, vi.fn());
+    const showStatus = vi.fn();
+    showRenderer(view, "dom", picker, showStatus);
+    expect(picker.value).toBe("dom");
+    expect(xterm.state.webglAddons[0]?.disposed).toBe(1);
+    expect(showStatus).not.toHaveBeenCalled();
   });
 });
 
