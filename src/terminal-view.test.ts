@@ -76,7 +76,7 @@ const xterm = vi.hoisted(() => {
 
 vi.mock("@xterm/xterm", () => ({ Terminal: xterm.FakeTerminal }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: xterm.FakeFitAddon }));
-vi.mock("@xterm/addon-unicode11", () => ({ Unicode11Addon: xterm.FakeAddon }));
+vi.mock("@xterm/addon-unicode-graphemes", () => ({ UnicodeGraphemesAddon: xterm.FakeAddon }));
 vi.mock("@xterm/addon-webgl", () => ({ WebglAddon: xterm.FakeWebglAddon }));
 
 import { TerminalView, isRenderer, isUnicodeVersion } from "./terminal-view";
@@ -138,7 +138,8 @@ describe("isRenderer and isUnicodeVersion", () => {
       false,
       false,
     ]);
-    expect(["6", "11", "15", "", " 6"].map(isUnicodeVersion)).toEqual([
+    expect(["6", "15", "15-graphemes", "11", "", " 6"].map(isUnicodeVersion)).toEqual([
+      true,
       true,
       true,
       false,
@@ -220,15 +221,15 @@ describe("TerminalView.setRenderer", () => {
 });
 
 describe("TerminalView.setUnicodeVersion", () => {
-  it("starts with the Unicode 11 table", () => {
+  it("starts with the Unicode 15 grapheme table", () => {
     const { terminal } = openView();
-    expect(terminal.unicode.activeVersion).toBe("11");
+    expect(terminal.unicode.activeVersion).toBe("15-graphemes");
   });
 
   it("switches the width table and redraws every row", () => {
     const { view, terminal } = openView();
-    view.setUnicodeVersion("11");
-    expect(terminal.unicode.activeVersion).toBe("11");
+    view.setUnicodeVersion("15");
+    expect(terminal.unicode.activeVersion).toBe("15");
     expect(terminal.refreshed).toEqual([[0, 23]]);
   });
 });

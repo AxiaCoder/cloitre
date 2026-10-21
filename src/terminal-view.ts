@@ -1,13 +1,16 @@
 import { FitAddon } from "@xterm/addon-fit";
-import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 
 /** How xterm.js draws the screen. */
 export type Renderer = "dom" | "webgl";
 
-/** Which Unicode table xterm.js uses to measure character widths. */
-export type UnicodeVersion = "6" | "11";
+/**
+ * Which Unicode table xterm.js uses to measure character widths.
+ * `"15-graphemes"` also measures a grapheme cluster (emoji with VS16, ZWJ sequence) as one unit.
+ */
+export type UnicodeVersion = "6" | "15" | "15-graphemes";
 
 /** Tells whether a string names a {@link Renderer}. */
 export function isRenderer(value: string): value is Renderer {
@@ -16,7 +19,7 @@ export function isRenderer(value: string): value is Renderer {
 
 /** Tells whether a string names a {@link UnicodeVersion}. */
 export function isUnicodeVersion(value: string): value is UnicodeVersion {
-  return value === "6" || value === "11";
+  return value === "6" || value === "15" || value === "15-graphemes";
 }
 
 /**
@@ -28,7 +31,7 @@ export class TerminalView {
   private readonly fitAddon = new FitAddon();
   private webglAddon: WebglAddon | undefined;
 
-  /** Opens a terminal in `container`, with the DOM renderer and the Unicode 11 table. */
+  /** Opens a terminal in `container`, with the DOM renderer and the Unicode 15 grapheme table. */
   constructor(container: HTMLElement) {
     this.terminal = new Terminal({
       allowProposedApi: true,
@@ -38,8 +41,8 @@ export class TerminalView {
       scrollback: 10_000,
     });
     this.terminal.loadAddon(this.fitAddon);
-    this.terminal.loadAddon(new Unicode11Addon());
-    this.terminal.unicode.activeVersion = "11";
+    this.terminal.loadAddon(new UnicodeGraphemesAddon());
+    this.terminal.unicode.activeVersion = "15-graphemes";
     this.terminal.open(container);
     new ResizeObserver(() => {
       if (this.autoFit) {
