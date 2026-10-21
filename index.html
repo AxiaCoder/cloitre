@@ -24,6 +24,19 @@
           <option value="11">11</option>
         </select>
       </label>
+      <button id="mark" type="button" title="Mark the recording (Ctrl+Shift+M)">Mark</button>
+      <span id="recording" hidden></span>
+      <label>
+        Recording
+        <select id="recordings"></select>
+      </label>
+      <select id="replay-speed" aria-label="Replay speed">
+        <option value="instant" selected>Instant</option>
+        <option value="realtime">Real time</option>
+      </select>
+      <button id="replay" type="button">Replay</button>
+      <button id="next-mark" type="button">Next mark</button>
+      <button id="stop-replay" type="button">Stop replay</button>
       <span id="status">No folder chosen</span>
     </header>
     <div id="terminal"></div>

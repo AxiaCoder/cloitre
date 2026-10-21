@@ -21,6 +21,11 @@ body {
   border-bottom: 1px solid #333;
 }
 
+#recording {
+  color: #e55;
+  white-space: nowrap;
+}
+
 #status {
   overflow: hidden;
   text-overflow: ellipsis;

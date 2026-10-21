@@ -21,6 +21,14 @@ pub enum AppError {
     UnknownPty(u32),
     /// The pseudo-terminal layer failed; carries the underlying message.
     Pty(String),
+    /// A recording name is not a name the app creates.
+    InvalidRecordingName,
+    /// No recording file has this name.
+    UnknownRecording,
+    /// Session `id` has no recording, or its recording stopped after a write error.
+    NoRecording(u32),
+    /// A recording file could not be read; carries the underlying message.
+    Recording(String),
 }
 
 impl fmt::Display for AppError {
@@ -34,6 +42,10 @@ impl fmt::Display for AppError {
             Self::InvalidSize => write!(f, "the terminal size must be at least 1x1"),
             Self::UnknownPty(id) => write!(f, "no session with id {id}"),
             Self::Pty(message) => write!(f, "pseudo-terminal error: {message}"),
+            Self::InvalidRecordingName => write!(f, "not a recording name"),
+            Self::UnknownRecording => write!(f, "no recording with this name"),
+            Self::NoRecording(id) => write!(f, "session {id} is not being recorded"),
+            Self::Recording(message) => write!(f, "recording error: {message}"),
         }
     }
 }

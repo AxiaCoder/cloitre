@@ -10,6 +10,10 @@ fn main() {
             "pty_write",
             "pty_resize",
             "pty_kill",
+            "recording_mark",
+            "recording_current",
+            "recording_list",
+            "recording_read",
         ]),
     ))
     .expect("failed to run the Tauri build script");

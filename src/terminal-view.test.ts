@@ -151,6 +151,17 @@ describe("TerminalView resize", () => {
     observers[0]?.callback();
     expect(fit.fits).toBe(2);
   });
+
+  it("leaves the grid alone while auto fit is off", () => {
+    const { view, terminal } = openView();
+    const fit = fitAddonOf(terminal);
+    view.autoFit = false;
+    observers[0]?.callback();
+    expect(fit.fits).toBe(0);
+    view.autoFit = true;
+    observers[0]?.callback();
+    expect(fit.fits).toBe(1);
+  });
 });
 
 describe("TerminalView.setRenderer", () => {

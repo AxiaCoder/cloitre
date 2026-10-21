@@ -1,0 +1,176 @@
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+
+import { Replay, decodeRecording, type RecordingEvent, type ReplayTarget } from "./recording";
+
+/** Encodes one record the way Rust writes it. */
+function record(at: number, kind: number, data: number[]): number[] {
+  const header = new DataView(new ArrayBuffer(13));
+  header.setBigUint64(0, BigInt(at), true);
+  header.setUint8(8, kind);
+  header.setUint32(9, data.length, true);
+  return [...new Uint8Array(header.buffer), ...data];
+}
+
+/** Encodes a resize record of `cols` x `rows`. */
+function resize(at: number, cols: number, rows: number): number[] {
+  return record(at, 2, [cols & 0xff, cols >> 8, rows & 0xff, rows >> 8]);
+}
+
+/** A target that logs every call; `drained` resolves at once. */
+function logTarget() {
+  const log: string[] = [];
+  const target: ReplayTarget = {
+    reset: () => log.push("reset"),
+    resize: (cols, rows) => log.push(`resize ${String(cols)}x${String(rows)}`),
+    write: (data) => log.push(`write ${new TextDecoder().decode(data)}`),
+    drained: () => {
+      log.push("drained");
+      return Promise.resolve();
+    },
+  };
+  return { log, target };
+}
+
+const text = (value: string) => [...new TextEncoder().encode(value)];
+
+describe("decodeRecording", () => {
+  it("decodes output, resize and marker records in order", () => {
+    const bytes = Uint8Array.from([
+      ...resize(0, 300, 24),
+      ...record(5, 1, text("ab")),
+      ...record(5, 1, [0xe2, 0x94]),
+      ...record(7, 3, []),
+      ...record(4_294_967_396, 1, []),
+    ]);
+    const { events, truncated } = decodeRecording(bytes);
+    expect(truncated).toBe(false);
+    expect(events).toEqual([
+      { kind: "resize", at: 0, cols: 300, rows: 24 },
+      { kind: "output", at: 5, data: Uint8Array.from(text("ab")) },
+      { kind: "output", at: 5, data: Uint8Array.from([0xe2, 0x94]) },
+      { kind: "marker", at: 7 },
+      { kind: "output", at: 4_294_967_396, data: new Uint8Array() },
+    ]);
+  });
+
+  it("decodes an empty file as no record", () => {
+    expect(decodeRecording(new Uint8Array())).toEqual({ events: [], truncated: false });
+  });
+
+  it("drops an incomplete last record and flags it", () => {
+    const whole = [...resize(0, 80, 24), ...record(1, 1, text("hello"))];
+    for (const cut of [whole.length - 1, 17 + 13 - 1, 17 + 3]) {
+      const { events, truncated } = decodeRecording(Uint8Array.from(whole.slice(0, cut)));
+      expect(truncated).toBe(true);
+      expect(events).toEqual([{ kind: "resize", at: 0, cols: 80, rows: 24 }]);
+    }
+  });
+
+  it("reads records from a view that does not start the buffer", () => {
+    const buffer = Uint8Array.from([9, 9, ...record(3, 3, [])]);
+    expect(decodeRecording(buffer.subarray(2)).events).toEqual([{ kind: "marker", at: 3 }]);
+  });
+
+  it("refuses an unknown record type or a malformed resize", () => {
+    expect(() => decodeRecording(Uint8Array.from(record(0, 9, [])))).toThrow("unknown record type 9");
+    expect(() => decodeRecording(Uint8Array.from(record(0, 2, [1, 2])))).toThrow("resize record of 2 bytes");
+  });
+});
+
+const events: RecordingEvent[] = [
+  { kind: "resize", at: 0, cols: 80, rows: 24 },
+  { kind: "output", at: 10, data: Uint8Array.from(text("a")) },
+  { kind: "output", at: 10, data: Uint8Array.from(text("b")) },
+  { kind: "resize", at: 30, cols: 100, rows: 30 },
+  { kind: "output", at: 40, data: Uint8Array.from(text("c")) },
+  { kind: "marker", at: 50 },
+  { kind: "output", at: 60, data: Uint8Array.from(text("d")) },
+  { kind: "marker", at: 70 },
+  { kind: "output", at: 75, data: Uint8Array.from(text("e")) },
+];
+
+describe("Replay", () => {
+  it("resets, then writes every chunk in order and resizes after draining", async () => {
+    const { log, target } = logTarget();
+    const replay = new Replay(events, target);
+    expect(await replay.run("instant", false)).toBe("end");
+    expect(log).toEqual([
+      "reset",
+      "drained",
+      "resize 80x24",
+      "write a",
+      "write b",
+      "drained",
+      "resize 100x30",
+      "write c",
+      "write d",
+      "write e",
+      "drained",
+    ]);
+    expect(replay.finished).toBe(true);
+  });
+
+  it("pauses on each marker, then resumes after it", async () => {
+    const { log, target } = logTarget();
+    const replay = new Replay(events, target);
+    expect(await replay.run("instant", true)).toBe("marker");
+    expect(log.filter((line) => line.startsWith("write"))).toEqual(["write a", "write b", "write c"]);
+    expect(log[log.length - 1]).toBe("drained");
+    log.length = 0;
+    expect(await replay.run("instant", true)).toBe("marker");
+    expect(log).toEqual(["write d", "drained"]);
+    log.length = 0;
+    expect(await replay.run("instant", true)).toBe("end");
+    expect(log).toEqual(["write e", "drained"]);
+    expect(await replay.run("instant", true)).toBe("end");
+  });
+
+  it("waits the recorded delays in real time", async () => {
+    const { log, target } = logTarget();
+    const waits: number[] = [];
+    const replay = new Replay(events, target, (ms) => {
+      waits.push(ms);
+      return Promise.resolve();
+    });
+    expect(await replay.run("realtime", false)).toBe("end");
+    expect(waits).toEqual([10, 20, 10, 10, 10, 10, 5]);
+    expect(log.filter((line) => line.startsWith("write"))).toEqual([
+      "write a",
+      "write b",
+      "write c",
+      "write d",
+      "write e",
+    ]);
+  });
+
+  it("stops a real-time run, and a later run resumes where it stopped", async () => {
+    const { log, target } = logTarget();
+    let release: (() => void) | undefined;
+    const replay = new Replay(events, target, (_ms, signal) => {
+      return new Promise<void>((resolve) => {
+        release = resolve;
+        signal.addEventListener("abort", () => {
+          resolve();
+        });
+      });
+    });
+    const running = replay.run("realtime", false);
+    await vi.waitFor(() => {
+      expect(release).toBeDefined();
+    });
+    await replay.stop();
+    expect(await running).toBe("stopped");
+    expect(log.filter((line) => line.startsWith("write"))).toEqual([]);
+    expect(await replay.run("instant", false)).toBe("end");
+    expect(log.filter((line) => line.startsWith("write"))).toEqual([
+      "write a",
+      "write b",
+      "write c",
+      "write d",
+      "write e",
+    ]);
+    expect(log.filter((line) => line === "reset")).toHaveLength(1);
+  });
+});

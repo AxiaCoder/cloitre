@@ -3,6 +3,16 @@ import "./styles.css";
 
 import { open } from "@tauri-apps/plugin-dialog";
 
+import {
+  Replay,
+  currentRecording,
+  decodeRecording,
+  listRecordings,
+  markRecording,
+  readRecording,
+  type ReplaySpeed,
+  type ReplayTarget,
+} from "./recording";
 import { SessionSlot } from "./session";
 import { TerminalView, isRenderer, isUnicodeVersion } from "./terminal-view";
 
@@ -18,13 +28,79 @@ function element<T extends HTMLElement>(id: string, type: new () => T): T {
 const pickButton = element("pick-folder", HTMLButtonElement);
 const rendererSelect = element("renderer", HTMLSelectElement);
 const unicodeSelect = element("unicode", HTMLSelectElement);
+const markButton = element("mark", HTMLButtonElement);
+const recordingText = element("recording", HTMLSpanElement);
+const recordingsSelect = element("recordings", HTMLSelectElement);
+const speedSelect = element("replay-speed", HTMLSelectElement);
+const replayButton = element("replay", HTMLButtonElement);
+const nextMarkButton = element("next-mark", HTMLButtonElement);
+const stopReplayButton = element("stop-replay", HTMLButtonElement);
 const statusText = element("status", HTMLSpanElement);
 const view = new TerminalView(element("terminal", HTMLDivElement));
 const slot = new SessionSlot();
 
+/** The xterm.js terminal, as a replay draws into it. */
+const replayTarget: ReplayTarget = {
+  reset: () => {
+    view.terminal.reset();
+  },
+  resize: (cols, rows) => {
+    view.terminal.resize(cols, rows);
+  },
+  write: (data) => {
+    view.terminal.write(data);
+  },
+  drained: () =>
+    new Promise((resolve) => {
+      view.terminal.write("", resolve);
+    }),
+};
+
+/** The replay on screen, with the name of its recording and the markers reached so far. */
+let replay: { readonly player: Replay; readonly name: string; marks: number } | undefined;
+
 /** Shows a short message in the control bar. */
 function showStatus(message: string): void {
   statusText.textContent = message;
+}
+
+/** Shows the recording indicator with `text`, or hides it when `text` is `undefined`. */
+function showRecording(text: string | undefined): void {
+  recordingText.hidden = text === undefined;
+  recordingText.textContent = text ?? "";
+}
+
+/** Reloads the list of recordings, keeping the current choice when it is still there. */
+async function refreshRecordings(): Promise<void> {
+  const chosen = recordingsSelect.value;
+  const recordings = await listRecordings();
+  recordingsSelect.replaceChildren(
+    ...recordings.map((recording) => {
+      const kilobytes = Math.ceil(recording.size / 1024);
+      return new Option(`${recording.name} (${String(kilobytes)} KB)`, recording.name);
+    }),
+  );
+  if (recordings.some((recording) => recording.name === chosen)) {
+    recordingsSelect.value = chosen;
+  }
+}
+
+/** Reloads the list of recordings, showing a failure in the control bar. */
+function refreshRecordingsOrReport(): void {
+  refreshRecordings().catch((error: unknown) => {
+    showStatus(String(error));
+  });
+}
+
+/** Stops the replay on screen, if any, and gives the grid back to its container. */
+async function endReplay(): Promise<void> {
+  const ending = replay;
+  replay = undefined;
+  if (ending) {
+    await ending.player.stop();
+    view.autoFit = true;
+    view.fit();
+  }
 }
 
 /** Clears the screen, refits it and returns the size to start a session with. */
@@ -34,24 +110,103 @@ function prepareScreen(): { cols: number; rows: number } {
   return { cols: view.terminal.cols, rows: view.terminal.rows };
 }
 
-/** Stops the current session and starts `claude` in `folder` on a cleared screen. */
+/** Stops the current session and the replay, then starts `claude` in `folder` on a cleared screen. */
 async function startSession(folder: string): Promise<void> {
   try {
+    await endReplay();
     const running = await slot.start(folder, prepareScreen, {
       onOutput: (bytes) => {
         view.terminal.write(bytes);
       },
       onExit: (code) => {
         view.terminal.write(`\r\n[claude exited with code ${String(code)}]\r\n`);
+        showRecording(undefined);
+        refreshRecordingsOrReport();
       },
     });
-    if (running) {
+    const session = slot.current;
+    if (running && session) {
       showStatus(folder);
       view.terminal.focus();
+      const name = await currentRecording(session);
+      if (slot.current === session) {
+        showRecording(name === null ? "not recorded" : `● recording ${name}`);
+      }
+      refreshRecordingsOrReport();
     }
   } catch (error) {
     showStatus(String(error));
   }
+}
+
+/** Writes a marker in the recording of the running session. */
+async function mark(): Promise<void> {
+  const session = slot.current;
+  if (!session) {
+    showStatus("No session to mark");
+    return;
+  }
+  await markRecording(session);
+  showStatus(`Marked at ${new Date().toLocaleTimeString()}`);
+}
+
+/**
+ * Stops the session and any replay, then loads the chosen recording on a
+ * replay of its own. The grid stops following its container until the replay ends.
+ */
+async function loadReplay(): Promise<NonNullable<typeof replay> | undefined> {
+  const name = recordingsSelect.value;
+  if (name === "") {
+    showStatus("No recording chosen");
+    return undefined;
+  }
+  await endReplay();
+  await slot.stop();
+  showRecording(undefined);
+  const decoded = decodeRecording(await readRecording(name));
+  view.autoFit = false;
+  replay = { player: new Replay(decoded.events, replayTarget), name, marks: 0 };
+  if (decoded.truncated) {
+    showStatus(`${name}: the last record is incomplete and was dropped`);
+  }
+  return replay;
+}
+
+/** Replays the chosen recording from its start, at the chosen speed. */
+async function replayFromStart(): Promise<void> {
+  const loaded = await loadReplay();
+  if (!loaded) {
+    return;
+  }
+  const speed: ReplaySpeed = speedSelect.value === "realtime" ? "realtime" : "instant";
+  showStatus(`Replaying ${loaded.name}`);
+  const stop = await loaded.player.run(speed, false);
+  if (stop === "end") {
+    showStatus(`${loaded.name}: end of recording`);
+  }
+}
+
+/** Replays instantly up to the next marker of the chosen recording, then pauses there. */
+async function replayToNextMark(): Promise<void> {
+  const current =
+    replay?.name === recordingsSelect.value && !replay.player.finished ? replay : await loadReplay();
+  if (!current) {
+    return;
+  }
+  const stop = await current.player.run("instant", true);
+  if (stop === "marker") {
+    current.marks += 1;
+    showStatus(`${current.name}: paused at marker ${String(current.marks)}`);
+  } else if (stop === "end") {
+    showStatus(`${current.name}: no marker left, end of recording`);
+  }
+}
+
+/** Runs `action`, showing its failure in the control bar. */
+function report(action: () => Promise<void>): void {
+  action().catch((error: unknown) => {
+    showStatus(String(error));
+  });
 }
 
 view.terminal.onData((data) => {
@@ -66,10 +221,44 @@ view.terminal.onResize((size) => {
   });
 });
 
+view.terminal.attachCustomKeyEventHandler((event) => {
+  const isMarkShortcut = event.ctrlKey && event.shiftKey && !event.altKey && event.code === "KeyM";
+  if (!isMarkShortcut) {
+    return true;
+  }
+  event.preventDefault();
+  if (event.type === "keydown" && !event.repeat) {
+    report(mark);
+  }
+  return false;
+});
+
 pickButton.addEventListener("click", () => {
   void open({ directory: true, multiple: false }).then((folder) => {
     if (folder !== null) {
       return startSession(folder);
+    }
+  });
+});
+
+markButton.addEventListener("click", () => {
+  report(mark);
+  view.terminal.focus();
+});
+
+replayButton.addEventListener("click", () => {
+  report(replayFromStart);
+});
+
+nextMarkButton.addEventListener("click", () => {
+  report(replayToNextMark);
+});
+
+stopReplayButton.addEventListener("click", () => {
+  report(async () => {
+    if (replay) {
+      await endReplay();
+      showStatus("Replay stopped");
     }
   });
 });
@@ -95,3 +284,5 @@ unicodeSelect.addEventListener("change", () => {
     view.terminal.focus();
   }
 });
+
+refreshRecordingsOrReport();

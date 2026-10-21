@@ -41,9 +41,17 @@ export class TerminalView {
     this.terminal.loadAddon(new Unicode11Addon());
     this.terminal.open(container);
     new ResizeObserver(() => {
-      this.fit();
+      if (this.autoFit) {
+        this.fit();
+      }
     }).observe(container);
   }
+
+  /**
+   * Whether the grid follows the size of its container. Turned off during a
+   * replay, so the recorded sizes stay in place.
+   */
+  autoFit = true;
 
   /** Resizes the terminal grid to fill its container. */
   fit(): void {
