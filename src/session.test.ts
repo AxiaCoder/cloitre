@@ -256,6 +256,44 @@ describe("SessionSlot.write and resize", () => {
     expect(calls("pty_resize")).toEqual([{ id: 1, cols: 100, rows: 30 }]);
   });
 
+  it("sends writes in order when an earlier one is slow", async () => {
+    const slot = new SessionSlot();
+    await slot.start("/projects/a", size, recorder().handlers);
+    let finishFirst: () => void = () => undefined;
+    tauri.invoke.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishFirst = resolve;
+        }),
+    );
+    const first = slot.write("a");
+    const second = slot.write("b");
+    await vi.waitFor(() => {
+      expect(calls("pty_write")).toEqual([{ id: 1, data: "a" }]);
+    });
+    finishFirst();
+    await first;
+    await second;
+    expect(calls("pty_write")).toEqual([
+      { id: 1, data: "a" },
+      { id: 1, data: "b" },
+    ]);
+  });
+
+  it("pass a rejected write to its caller and still send the next one", async () => {
+    const slot = new SessionSlot();
+    await slot.start("/projects/a", size, recorder().handlers);
+    tauri.invoke.mockRejectedValueOnce(new Error("write failed"));
+    const first = slot.write("a");
+    const second = slot.write("b");
+    await expect(first).rejects.toThrow("write failed");
+    await expect(second).resolves.toBeUndefined();
+    expect(calls("pty_write")).toEqual([
+      { id: 1, data: "a" },
+      { id: 1, data: "b" },
+    ]);
+  });
+
   it("pass a Rust refusal on to the caller", async () => {
     const slot = new SessionSlot();
     await slot.start("/projects/a", size, recorder().handlers);

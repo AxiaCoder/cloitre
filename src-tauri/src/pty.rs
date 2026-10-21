@@ -129,13 +129,18 @@ impl PtyRegistry {
         id
     }
 
-    /// Writes `data` to the input of session `id` and flushes it.
+    /// Writes `data` to the input of session `id` and flushes it. Does nothing
+    /// once its process has exited.
     ///
     /// # Errors
     /// [`AppError::UnknownPty`], or [`AppError::Pty`] when the write fails.
     pub fn write(&self, id: u32, data: &[u8]) -> Result<(), AppError> {
         let mut sessions = lock(&self.sessions);
         let session = sessions.get_mut(&id).ok_or(AppError::UnknownPty(id))?;
+        let master = lock(&session.master);
+        if master.is_none() {
+            return Ok(());
+        }
         session.writer.write_all(data).map_err(pty_error)?;
         session.writer.flush().map_err(pty_error)
     }
@@ -374,6 +379,29 @@ mod tests {
         assert!(wait_for_output(&registry, id, &output_rx, "cloitre-marker"));
         assert_eq!(exit_rx.recv_timeout(PROCESS_TIMEOUT), Ok(0));
         assert_eq!(registry.resize(id, pty_size(100, 30).unwrap()), Ok(()));
+        assert_eq!(registry.kill(id), Ok(()));
+    }
+
+    #[test]
+    fn write_after_exit_is_accepted() {
+        let registry = PtyRegistry::default();
+        let (output_tx, output_rx) = mpsc::channel();
+        let (exit_tx, exit_rx) = mpsc::channel();
+        let id = registry
+            .spawn(
+                print_and_exit("cloitre-marker", 0),
+                pty_size(80, 24).unwrap(),
+                move |bytes| {
+                    let _ = output_tx.send(bytes.to_vec());
+                },
+                move |code| {
+                    let _ = exit_tx.send(code);
+                },
+            )
+            .unwrap();
+        assert!(wait_for_output(&registry, id, &output_rx, "cloitre-marker"));
+        assert_eq!(exit_rx.recv_timeout(PROCESS_TIMEOUT), Ok(0));
+        assert_eq!(registry.write(id, b"typed after the end"), Ok(()));
         assert_eq!(registry.kill(id), Ok(()));
     }
 

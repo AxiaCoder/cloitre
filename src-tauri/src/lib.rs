@@ -9,6 +9,12 @@ use tauri::{Manager, RunEvent};
 
 use crate::pty::PtyRegistry;
 
+/// Tells whether a page load `event` must stop every session: true when the
+/// page starts loading, false when it has finished.
+fn stops_sessions(event: PageLoadEvent) -> bool {
+    event == PageLoadEvent::Started
+}
+
 /// Builds and runs the app until its last window closes, then stops every session.
 ///
 /// Every session is also stopped when the page starts loading, so a reload of
@@ -22,7 +28,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(PtyRegistry::default())
         .on_page_load(|webview, payload| {
-            if payload.event() == PageLoadEvent::Started {
+            if stops_sessions(payload.event()) {
                 webview.state::<PtyRegistry>().kill_all();
             }
         })
@@ -39,4 +45,19 @@ pub fn run() {
                 app.state::<PtyRegistry>().kill_all();
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn page_load_start_stops_sessions() {
+        assert!(stops_sessions(PageLoadEvent::Started));
+    }
+
+    #[test]
+    fn page_load_finish_keeps_sessions() {
+        assert!(!stops_sessions(PageLoadEvent::Finished));
+    }
 }

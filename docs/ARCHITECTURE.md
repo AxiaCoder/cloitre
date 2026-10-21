@@ -28,7 +28,7 @@ Sends input to a session.
 
 - **Arguments**: `id` (integer), `data` (string, written as UTF-8).
 - **Returns**: nothing.
-- **Refuses**: an unknown id; a failed write.
+- **Refuses**: an unknown id; a failed write. Once the process has exited, a write is accepted and does nothing.
 
 ### `pty_resize`
 
