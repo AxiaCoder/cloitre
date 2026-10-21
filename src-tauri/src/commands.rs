@@ -25,7 +25,7 @@ fn output_sink(channel: Channel<InvokeResponseBody>) -> impl FnMut(&[u8]) + Send
 /// # Errors
 /// A folder that is not absolute, missing or not a directory; a zero size;
 /// `claude` missing from the `PATH`; a pseudo-terminal failure.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn pty_spawn(
     registry: State<'_, PtyRegistry>,
     folder: String,
@@ -46,7 +46,7 @@ pub fn pty_spawn(
 ///
 /// # Errors
 /// An unknown id, or a failed write.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn pty_write(registry: State<'_, PtyRegistry>, id: u32, data: String) -> Result<(), AppError> {
     registry.write(id, data.as_bytes())
 }
@@ -55,7 +55,7 @@ pub fn pty_write(registry: State<'_, PtyRegistry>, id: u32, data: String) -> Res
 ///
 /// # Errors
 /// An unknown id, a zero size, or a failed resize.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn pty_resize(
     registry: State<'_, PtyRegistry>,
     id: u32,
@@ -69,7 +69,7 @@ pub fn pty_resize(
 ///
 /// # Errors
 /// An unknown id.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn pty_kill(registry: State<'_, PtyRegistry>, id: u32) -> Result<(), AppError> {
     registry.kill(id)
 }

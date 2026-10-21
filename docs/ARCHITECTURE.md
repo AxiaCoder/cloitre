@@ -10,7 +10,7 @@ The webview (TypeScript, xterm.js) draws the terminal and handles everything the
 
 ## Commands
 
-Errors reach the webview as a plain message string.
+Errors reach the webview as a plain message string. Every command runs off the main thread, so a slow pseudo-terminal never freezes the window; calls are not ordered between themselves, so the webview sends each write only after the previous one has resolved.
 
 ### `pty_spawn`
 
@@ -18,7 +18,7 @@ Starts `claude` in a folder, in a new pseudo-terminal.
 
 - **Arguments**: `folder` (string, absolute path), `cols` and `rows` (integers from 1 to 65535), `onOutput` (channel), `onExit` (channel).
 - **Returns**: the session id (integer, starts at 1, never reused).
-- **Streams**: `onOutput` receives the raw output bytes as `ArrayBuffer` chunks, in order. A chunk may end in the middle of a multi-byte character; xterm.js decodes the stream. `onExit` receives the exit code once, when `claude` ends. The session stays registered until `pty_kill`.
+- **Streams**: `onOutput` receives the raw output bytes as `ArrayBuffer` chunks, in order. A chunk may end in the middle of a multi-byte character; xterm.js decodes the stream. `onExit` receives the exit code once, when `claude` ends: Rust then closes the pseudo-terminal and sends the exit code only after the last output chunk was sent, or after 2 seconds if the output is still not drained. The two channels are not ordered between themselves on the webview side (a large chunk is fetched later than a small message), so an output chunk can still arrive after the exit code. The session stays registered until `pty_kill`.
 - **What Rust decides alone**: the program is `claude`, looked up on the app's `PATH`, with no argument. The working directory is the canonical form of `folder`. `TERM=xterm-256color` and `COLORTERM=truecolor` are added to the inherited environment. The webview cannot pass any argument or environment variable.
 - **Refuses**: a relative folder path; a folder that does not exist; a path that is not a directory; a size of zero columns or rows; `claude` missing from the `PATH`; a pseudo-terminal that cannot be opened.
 
@@ -36,7 +36,7 @@ Changes the size of a session's terminal.
 
 - **Arguments**: `id` (integer), `cols` and `rows` (integers from 1 to 65535).
 - **Returns**: nothing.
-- **Refuses**: an unknown id; a size of zero columns or rows; a failed resize.
+- **Refuses**: an unknown id; a size of zero columns or rows; a failed resize. Once the process has exited, a resize is accepted and does nothing.
 
 ### `pty_kill`
 
@@ -46,4 +46,4 @@ Stops a session's process and closes its pseudo-terminal. Also used to release a
 - **Returns**: nothing.
 - **Refuses**: an unknown id.
 
-When the app exits, every session still registered is stopped.
+When the app exits, and whenever the page starts loading (a reload of the webview), every session still registered is stopped.

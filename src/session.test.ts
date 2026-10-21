@@ -116,13 +116,20 @@ describe("SessionSlot.start", () => {
     await slot.start("/projects/a", size, seen.handlers);
     spawns[0]?.onExit.onmessage(3);
     spawns[0]?.onExit.onmessage(3);
-    spawns[0]?.onOutput.onmessage([1]);
     await vi.waitFor(() => {
       expect(calls("pty_kill")).toEqual([{ id: 1 }]);
     });
     expect(seen.exits).toEqual([3]);
-    expect(seen.output).toEqual([]);
     expect(slot.current).toBeUndefined();
+  });
+
+  it("still forwards output that arrives after the exit notice", async () => {
+    const slot = new SessionSlot();
+    const seen = recorder();
+    await slot.start("/projects/a", size, seen.handlers);
+    spawns[0]?.onExit.onmessage(0);
+    spawns[0]?.onOutput.onmessage([1]);
+    expect(seen.output).toEqual([[1]]);
   });
 
   it("rejects with the Rust refusal and leaves no session", async () => {
@@ -134,6 +141,86 @@ describe("SessionSlot.start", () => {
       "folder not found",
     );
     expect(slot.current).toBeUndefined();
+  });
+});
+
+/** Makes every later `pty_spawn` wait until the test calls the returned resolver at its rank. */
+function deferSpawns(): ((id: number) => void)[] {
+  const pending: ((id: number) => void)[] = [];
+  tauri.invoke.mockImplementation((command, args) => {
+    if (command === "pty_spawn") {
+      spawns.push(args as SpawnArgs);
+      return new Promise((resolve) => pending.push(resolve));
+    }
+    return Promise.resolve();
+  });
+  return pending;
+}
+
+describe("SessionSlot.start, overlapping", () => {
+  it("kills the first session when its spawn resolves after a second start", async () => {
+    const slot = new SessionSlot();
+    const pending = deferSpawns();
+    const first = slot.start("/projects/a", size, recorder().handlers);
+    await vi.waitFor(() => {
+      expect(pending).toHaveLength(1);
+    });
+    const second = slot.start("/projects/b", size, recorder().handlers);
+    await vi.waitFor(() => {
+      expect(pending).toHaveLength(2);
+    });
+    pending[0]?.(1);
+    pending[1]?.(2);
+    await expect(first).resolves.toBe(false);
+    await expect(second).resolves.toBe(true);
+    expect(calls("pty_kill")).toEqual([{ id: 1 }]);
+    expect(slot.current).toEqual({ id: 2 });
+  });
+
+  it("keeps the second session when the first spawn resolves last", async () => {
+    const slot = new SessionSlot();
+    const pending = deferSpawns();
+    const first = slot.start("/projects/a", size, recorder().handlers);
+    await vi.waitFor(() => {
+      expect(pending).toHaveLength(1);
+    });
+    const second = slot.start("/projects/b", size, recorder().handlers);
+    await vi.waitFor(() => {
+      expect(pending).toHaveLength(2);
+    });
+    pending[1]?.(2);
+    await expect(second).resolves.toBe(true);
+    pending[0]?.(1);
+    await expect(first).resolves.toBe(false);
+    expect(calls("pty_kill")).toEqual([{ id: 1 }]);
+    expect(slot.current).toEqual({ id: 2 });
+  });
+
+  it("resends a size that changed while the session was starting", async () => {
+    const slot = new SessionSlot();
+    const pending = deferSpawns();
+    const started = slot.start("/projects/a", size, recorder().handlers);
+    await vi.waitFor(() => {
+      expect(pending).toHaveLength(1);
+    });
+    await slot.resize({ cols: 100, rows: 30 });
+    pending[0]?.(1);
+    await expect(started).resolves.toBe(true);
+    expect(calls("pty_resize")).toEqual([{ id: 1, cols: 100, rows: 30 }]);
+  });
+  it("does not spawn a session started just before another one", async () => {
+    const slot = new SessionSlot();
+    const pending = deferSpawns();
+    const first = slot.start("/projects/a", size, recorder().handlers);
+    const second = slot.start("/projects/b", size, recorder().handlers);
+    await expect(first).resolves.toBe(false);
+    await vi.waitFor(() => {
+      expect(pending).toHaveLength(1);
+    });
+    pending[0]?.(1);
+    await expect(second).resolves.toBe(true);
+    expect(spawns.map(({ folder }) => folder)).toEqual(["/projects/b"]);
+    expect(slot.current).toEqual({ id: 1 });
   });
 });
 

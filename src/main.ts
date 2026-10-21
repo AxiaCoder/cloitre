@@ -37,7 +37,7 @@ function prepareScreen(): { cols: number; rows: number } {
 /** Stops the current session and starts `claude` in `folder` on a cleared screen. */
 async function startSession(folder: string): Promise<void> {
   try {
-    await slot.start(folder, prepareScreen, {
+    const running = await slot.start(folder, prepareScreen, {
       onOutput: (bytes) => {
         view.terminal.write(bytes);
       },
@@ -45,8 +45,10 @@ async function startSession(folder: string): Promise<void> {
         view.terminal.write(`\r\n[claude exited with code ${String(code)}]\r\n`);
       },
     });
-    showStatus(folder);
-    view.terminal.focus();
+    if (running) {
+      showStatus(folder);
+      view.terminal.focus();
+    }
   } catch (error) {
     showStatus(String(error));
   }
@@ -92,8 +94,4 @@ unicodeSelect.addEventListener("change", () => {
     view.setUnicodeVersion(wanted);
     view.terminal.focus();
   }
-});
-
-window.addEventListener("beforeunload", () => {
-  void slot.stop();
 });

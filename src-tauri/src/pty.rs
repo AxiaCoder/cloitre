@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 use std::thread;
+use std::time::Duration;
 
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
@@ -11,9 +12,17 @@ use crate::error::AppError;
 /// Size of the buffer the reader thread fills before each forward, in bytes.
 const READ_BUFFER_SIZE: usize = 8192;
 
+/// How long the exit notice waits, once the process has ended, for the
+/// remaining output to be read.
+const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// The controlling side of a pseudo-terminal, shared between the registry and
+/// the thread that closes it when the process ends. `None` once closed.
+type SharedMaster = Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>;
+
 /// One running session: the controlling side of its pseudo-terminal and a handle to stop it.
 struct PtySession {
-    master: Box<dyn MasterPty + Send>,
+    master: SharedMaster,
     writer: Box<dyn Write + Send>,
     killer: Box<dyn ChildKiller + Send + Sync>,
 }
@@ -46,18 +55,28 @@ fn pty_error(error: impl std::fmt::Display) -> AppError {
     AppError::Pty(error.to_string())
 }
 
+/// Locks `mutex`, recovering its value if a thread panicked while holding it.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 impl PtyRegistry {
     /// Opens a pseudo-terminal of `size`, runs `command` in it and registers the session.
     ///
     /// Two threads are started. The reader passes every chunk of raw output bytes
     /// to `on_output`, in order, until the pseudo-terminal closes; chunks may split
-    /// a multi-byte character. The waiter calls `on_exit` once with the exit code
-    /// when the process ends. The session stays registered after the process
-    /// exits: the caller still calls [`PtyRegistry::kill`] to release it.
+    /// a multi-byte character. The waiter, when the process ends, closes the
+    /// pseudo-terminal, waits for the reader to finish, then calls `on_exit` once
+    /// with the exit code: `on_exit` runs after the last `on_output`, unless the
+    /// output is still not drained after [`DRAIN_TIMEOUT`]. The session stays
+    /// registered after the process exits: the caller still calls
+    /// [`PtyRegistry::kill`] to release it.
     ///
     /// # Errors
     /// [`AppError::Pty`] when the pseudo-terminal cannot be opened or the process
-    /// cannot be started.
+    /// cannot be started. No process is left running in that case.
     pub fn spawn(
         &self,
         command: CommandBuilder,
@@ -66,13 +85,16 @@ impl PtyRegistry {
         on_exit: impl FnOnce(u32) + Send + 'static,
     ) -> Result<u32, AppError> {
         let pair = native_pty_system().openpty(size).map_err(pty_error)?;
-        let mut child = pair.slave.spawn_command(command).map_err(pty_error)?;
-        drop(pair.slave);
         let mut reader = pair.master.try_clone_reader().map_err(pty_error)?;
         let writer = pair.master.take_writer().map_err(pty_error)?;
+        let mut child = pair.slave.spawn_command(command).map_err(pty_error)?;
+        drop(pair.slave);
         let killer = child.clone_killer();
+        let master: SharedMaster = Arc::new(Mutex::new(Some(pair.master)));
 
+        let (drained_tx, drained_rx) = mpsc::channel::<()>();
         thread::spawn(move || {
+            let _drained = drained_tx;
             let mut buffer = [0u8; READ_BUFFER_SIZE];
             loop {
                 match reader.read(&mut buffer) {
@@ -81,16 +103,20 @@ impl PtyRegistry {
                 }
             }
         });
+        let waiter_master = Arc::clone(&master);
         thread::spawn(move || {
             let code = child
                 .wait()
                 .map(|status| status.exit_code())
                 .unwrap_or(u32::MAX);
+            let closed = lock(&waiter_master).take();
+            drop(closed);
+            let _ = drained_rx.recv_timeout(DRAIN_TIMEOUT);
             on_exit(code);
         });
 
         Ok(self.insert(PtySession {
-            master: pair.master,
+            master,
             writer,
             killer,
         }))
@@ -99,15 +125,8 @@ impl PtyRegistry {
     /// Registers a session and returns its new id.
     fn insert(&self, session: PtySession) -> u32 {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
-        self.lock().insert(id, session);
+        lock(&self.sessions).insert(id, session);
         id
-    }
-
-    /// Locks the session map, recovering it if a thread panicked while holding it.
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<u32, PtySession>> {
-        self.sessions
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Writes `data` to the input of session `id` and flushes it.
@@ -115,20 +134,23 @@ impl PtyRegistry {
     /// # Errors
     /// [`AppError::UnknownPty`], or [`AppError::Pty`] when the write fails.
     pub fn write(&self, id: u32, data: &[u8]) -> Result<(), AppError> {
-        let mut sessions = self.lock();
+        let mut sessions = lock(&self.sessions);
         let session = sessions.get_mut(&id).ok_or(AppError::UnknownPty(id))?;
         session.writer.write_all(data).map_err(pty_error)?;
         session.writer.flush().map_err(pty_error)
     }
 
-    /// Resizes the pseudo-terminal of session `id`.
+    /// Resizes the pseudo-terminal of session `id`. Does nothing once its process has exited.
     ///
     /// # Errors
     /// [`AppError::UnknownPty`], or [`AppError::Pty`] when the resize fails.
     pub fn resize(&self, id: u32, size: PtySize) -> Result<(), AppError> {
-        let sessions = self.lock();
+        let sessions = lock(&self.sessions);
         let session = sessions.get(&id).ok_or(AppError::UnknownPty(id))?;
-        session.master.resize(size).map_err(pty_error)
+        match lock(&session.master).as_ref() {
+            Some(master) => master.resize(size).map_err(pty_error),
+            None => Ok(()),
+        }
     }
 
     /// Stops the process of session `id` and closes its pseudo-terminal.
@@ -139,15 +161,20 @@ impl PtyRegistry {
     /// # Errors
     /// [`AppError::UnknownPty`].
     pub fn kill(&self, id: u32) -> Result<(), AppError> {
-        let mut session = self.lock().remove(&id).ok_or(AppError::UnknownPty(id))?;
+        let mut session = lock(&self.sessions)
+            .remove(&id)
+            .ok_or(AppError::UnknownPty(id))?;
         // An already exited process makes kill fail; the session is released either way.
         let _ = session.killer.kill();
         Ok(())
     }
 
-    /// Stops every registered session. Called when the app exits.
+    /// Stops every registered session. Called when the app exits and when the page reloads.
     pub fn kill_all(&self) {
-        let sessions: Vec<PtySession> = self.lock().drain().map(|(_, session)| session).collect();
+        let sessions: Vec<PtySession> = lock(&self.sessions)
+            .drain()
+            .map(|(_, session)| session)
+            .collect();
         for mut session in sessions {
             let _ = session.killer.kill();
         }
@@ -156,8 +183,7 @@ impl PtyRegistry {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc;
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
 
     use super::*;
 
@@ -226,9 +252,16 @@ mod tests {
         }
     }
 
+    /// Answers a cursor position request found in `chunk`, as a real terminal
+    /// would: the Windows console sends one before it lets the process print.
+    fn answer_cursor_request(registry: &PtyRegistry, id: u32, chunk: &[u8]) {
+        if chunk.windows(4).any(|window| window == b"\x1b[6n") {
+            let _ = registry.write(id, b"\x1b[1;1R");
+        }
+    }
+
     /// Reads output chunks of session `id` from `receiver` until their concatenation
-    /// contains `marker`. Answers the cursor position requests the Windows console
-    /// sends before it lets the process print, as a real terminal would.
+    /// contains `marker`, answering cursor position requests on the way.
     fn wait_for_output(
         registry: &PtyRegistry,
         id: u32,
@@ -241,9 +274,7 @@ mod tests {
             let Ok(chunk) = receiver.recv_timeout(left) else {
                 return false;
             };
-            if chunk.windows(4).any(|window| window == b"[6n") {
-                let _ = registry.write(id, b"[1;1R");
-            }
+            answer_cursor_request(registry, id, &chunk);
             seen.extend_from_slice(&chunk);
             if String::from_utf8_lossy(&seen).contains(marker) {
                 return true;
@@ -271,6 +302,78 @@ mod tests {
             .unwrap();
         assert!(wait_for_output(&registry, id, &output_rx, "cloitre-marker"));
         assert_eq!(exit_rx.recv_timeout(PROCESS_TIMEOUT), Ok(3));
+        assert_eq!(registry.kill(id), Ok(()));
+    }
+
+    /// What a session reported, in the order the callbacks ran.
+    enum Event {
+        Output(Vec<u8>),
+        Exit(u32),
+    }
+
+    #[test]
+    fn exit_is_reported_after_the_last_output() {
+        let marker = "cloitre-last-words";
+        for _ in 0..10 {
+            let registry = PtyRegistry::default();
+            let (output_tx, events) = mpsc::channel();
+            let exit_tx = output_tx.clone();
+            let id = registry
+                .spawn(
+                    print_and_exit(marker, 0),
+                    pty_size(80, 24).unwrap(),
+                    move |bytes| {
+                        let _ = output_tx.send(Event::Output(bytes.to_vec()));
+                    },
+                    move |code| {
+                        let _ = exit_tx.send(Event::Exit(code));
+                    },
+                )
+                .unwrap();
+            let mut seen = Vec::new();
+            loop {
+                match events.recv_timeout(PROCESS_TIMEOUT) {
+                    Ok(Event::Output(chunk)) => {
+                        answer_cursor_request(&registry, id, &chunk);
+                        seen.extend_from_slice(&chunk);
+                    }
+                    Ok(Event::Exit(code)) => {
+                        assert_eq!(code, 0);
+                        break;
+                    }
+                    Err(error) => panic!("no exit notice: {error}"),
+                }
+            }
+            let text = String::from_utf8_lossy(&seen);
+            assert!(
+                text.contains(marker),
+                "exit came before the output: {text:?}"
+            );
+            assert!(events.try_recv().is_err(), "output came after the exit");
+            let _ = registry.kill(id);
+        }
+    }
+
+    #[test]
+    fn resize_after_exit_is_accepted() {
+        let registry = PtyRegistry::default();
+        let (output_tx, output_rx) = mpsc::channel();
+        let (exit_tx, exit_rx) = mpsc::channel();
+        let id = registry
+            .spawn(
+                print_and_exit("cloitre-marker", 0),
+                pty_size(80, 24).unwrap(),
+                move |bytes| {
+                    let _ = output_tx.send(bytes.to_vec());
+                },
+                move |code| {
+                    let _ = exit_tx.send(code);
+                },
+            )
+            .unwrap();
+        assert!(wait_for_output(&registry, id, &output_rx, "cloitre-marker"));
+        assert_eq!(exit_rx.recv_timeout(PROCESS_TIMEOUT), Ok(0));
+        assert_eq!(registry.resize(id, pty_size(100, 30).unwrap()), Ok(()));
         assert_eq!(registry.kill(id), Ok(()));
     }
 
