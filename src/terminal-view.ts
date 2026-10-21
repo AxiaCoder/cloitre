@@ -39,6 +39,12 @@ export class TerminalView {
       fontFamily: '"Cascadia Mono", Consolas, monospace',
       fontSize: 14,
       scrollback: 10_000,
+      theme: {
+        background: "#000000",
+        scrollbarSliderBackground: "rgba(255, 255, 255, 0.1)",
+        scrollbarSliderHoverBackground: "rgba(255, 255, 255, 0.25)",
+        scrollbarSliderActiveBackground: "rgba(255, 255, 255, 0.35)",
+      },
     });
     this.terminal.loadAddon(this.fitAddon);
     this.terminal.loadAddon(new UnicodeGraphemesAddon());
