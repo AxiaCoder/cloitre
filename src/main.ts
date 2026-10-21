@@ -11,6 +11,7 @@ import {
   type ReplaySpeed,
   type ReplayTarget,
 } from "./recording";
+import { decideKey } from "./keys";
 import { ReplayDeck, type LoadedReplay } from "./replay-deck";
 import { SessionSlot } from "./session";
 import { TerminalView, isRenderer, isUnicodeVersion } from "./terminal-view";
@@ -219,10 +220,12 @@ view.terminal.onResize((size) => {
 });
 
 view.terminal.attachCustomKeyEventHandler((event) => {
-  const isMarkShortcut =
-    event.code === "F9" && !event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey;
-  if (!isMarkShortcut) {
+  const decision = decideKey(event);
+  if (decision === "terminal") {
     return true;
+  }
+  if (decision === "paste") {
+    return false;
   }
   event.preventDefault();
   if (event.type === "keydown" && !event.repeat) {
