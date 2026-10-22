@@ -67,7 +67,17 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl PtyRegistry {
-    /// Opens a pseudo-terminal of `size`, runs `command` in it and registers the session.
+    /// Returns the current epoch, to pass to [`PtyRegistry::spawn`].
+    ///
+    /// The caller reads it as soon as it receives the request to start a session,
+    /// before any other work: a [`PtyRegistry::kill_all`] after that point cancels
+    /// the spawn.
+    pub fn epoch(&self) -> u64 {
+        self.epoch.load(Ordering::SeqCst)
+    }
+
+    /// Opens a pseudo-terminal of `size`, runs `command` in it and registers the
+    /// session, for a start requested in `epoch`, read by [`PtyRegistry::epoch`].
     ///
     /// Two threads are started. The reader passes every chunk of raw output bytes
     /// to `on_output`, in order, until the pseudo-terminal closes; chunks may split
@@ -80,28 +90,11 @@ impl PtyRegistry {
     ///
     /// # Errors
     /// [`AppError::Pty`] when the pseudo-terminal cannot be opened or the process
-    /// cannot be started; [`AppError::SpawnCancelled`] when
-    /// [`PtyRegistry::kill_all`] ran while the session was starting. No process
-    /// is left running in either case; a cancelled process still reports its
-    /// exit to `on_exit`.
+    /// cannot be started; [`AppError::SpawnCancelled`] when `epoch` is no longer
+    /// the current one at registration, that is when [`PtyRegistry::kill_all`]
+    /// ran since `epoch` was read. No process is left running in either case; a
+    /// cancelled process still reports its exit to `on_exit`.
     pub fn spawn(
-        &self,
-        command: CommandBuilder,
-        size: PtySize,
-        on_output: impl FnMut(&[u8]) + Send + 'static,
-        on_exit: impl FnOnce(u32) + Send + 'static,
-    ) -> Result<u32, AppError> {
-        let epoch = self.epoch.load(Ordering::SeqCst);
-        self.spawn_in_epoch(epoch, command, size, on_output, on_exit)
-    }
-
-    /// Does what [`PtyRegistry::spawn`] does, for a spawn that started in `epoch`:
-    /// the session is refused, and its process stopped, unless `epoch` is still
-    /// the current one when it is registered.
-    ///
-    /// # Errors
-    /// As [`PtyRegistry::spawn`].
-    fn spawn_in_epoch(
         &self,
         epoch: u64,
         command: CommandBuilder,
@@ -335,6 +328,7 @@ mod tests {
         let (exit_tx, exit_rx) = mpsc::channel();
         let id = registry
             .spawn(
+                registry.epoch(),
                 print_and_exit("cloitre-marker", 3),
                 pty_size(80, 24).unwrap(),
                 move |bytes| {
@@ -365,6 +359,7 @@ mod tests {
             let exit_tx = output_tx.clone();
             let id = registry
                 .spawn(
+                    registry.epoch(),
                     print_and_exit(marker, 0),
                     pty_size(80, 24).unwrap(),
                     move |bytes| {
@@ -406,6 +401,7 @@ mod tests {
         let (exit_tx, exit_rx) = mpsc::channel();
         let id = registry
             .spawn(
+                registry.epoch(),
                 print_and_exit("cloitre-marker", 0),
                 pty_size(80, 24).unwrap(),
                 move |bytes| {
@@ -429,6 +425,7 @@ mod tests {
         let (exit_tx, exit_rx) = mpsc::channel();
         let id = registry
             .spawn(
+                registry.epoch(),
                 print_and_exit("cloitre-marker", 0),
                 pty_size(80, 24).unwrap(),
                 move |bytes| {
@@ -449,7 +446,13 @@ mod tests {
     fn live_session_accepts_write_and_resize_until_killed() {
         let registry = PtyRegistry::default();
         let id = registry
-            .spawn(wait_quietly(10), pty_size(80, 24).unwrap(), |_| {}, |_| {})
+            .spawn(
+                registry.epoch(),
+                wait_quietly(10),
+                pty_size(80, 24).unwrap(),
+                |_| {},
+                |_| {},
+            )
             .unwrap();
         assert_eq!(registry.write(id, b"x"), Ok(()));
         assert_eq!(registry.resize(id, pty_size(100, 30).unwrap()), Ok(()));
@@ -461,10 +464,10 @@ mod tests {
     #[test]
     fn spawn_overtaken_by_kill_all_is_refused_and_stopped() {
         let registry = PtyRegistry::default();
-        let started_in = registry.epoch.load(Ordering::SeqCst);
+        let started_in = registry.epoch();
         registry.kill_all();
         let (exit_tx, exit_rx) = mpsc::channel();
-        let spawned = registry.spawn_in_epoch(
+        let spawned = registry.spawn(
             started_in,
             wait_quietly(30),
             pty_size(80, 24).unwrap(),
@@ -494,6 +497,7 @@ mod tests {
         let (exit_tx, exit_rx) = mpsc::channel();
         let id = registry
             .spawn(
+                registry.epoch(),
                 crate::launch::claude_command(&script, folder.path()),
                 pty_size(80, 24).unwrap(),
                 move |bytes| {
@@ -519,10 +523,10 @@ mod tests {
         let registry = PtyRegistry::default();
         let size = pty_size(80, 24).unwrap();
         let first = registry
-            .spawn(wait_quietly(10), size, |_| {}, |_| {})
+            .spawn(registry.epoch(), wait_quietly(10), size, |_| {}, |_| {})
             .unwrap();
         let second = registry
-            .spawn(wait_quietly(10), size, |_| {}, |_| {})
+            .spawn(registry.epoch(), wait_quietly(10), size, |_| {}, |_| {})
             .unwrap();
         assert_ne!(first, second);
         registry.kill_all();
@@ -535,7 +539,13 @@ mod tests {
         let registry = PtyRegistry::default();
         registry.kill_all();
         let id = registry
-            .spawn(wait_quietly(10), pty_size(80, 24).unwrap(), |_| {}, |_| {})
+            .spawn(
+                registry.epoch(),
+                wait_quietly(10),
+                pty_size(80, 24).unwrap(),
+                |_| {},
+                |_| {},
+            )
             .unwrap();
         assert_eq!(registry.kill(id), Ok(()));
     }

@@ -82,8 +82,32 @@ mod tests {
 
     #[test]
     fn main_window_gets_exactly_the_closed_list_of_permissions() {
+        let capability_files: Vec<String> =
+            std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/capabilities"))
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+        assert_eq!(capability_files, ["default.json"]);
+
         let capability: serde_json::Value =
             serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        let mut keys: Vec<&str> = capability
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "$schema",
+                "description",
+                "identifier",
+                "permissions",
+                "windows"
+            ]
+        );
         assert_eq!(capability["windows"], serde_json::json!(["main"]));
         let mut granted: Vec<&str> = capability["permissions"]
             .as_array()

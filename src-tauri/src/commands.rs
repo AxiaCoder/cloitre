@@ -35,7 +35,8 @@ fn output_sink(
 /// # Errors
 /// A folder that is not absolute, missing or not a directory; a zero size;
 /// `claude` found neither on the `PATH` nor at its install locations; a
-/// pseudo-terminal failure; a page reload during the start.
+/// pseudo-terminal failure; a page reload at any point after the command is
+/// received.
 #[tauri::command(async)]
 pub fn pty_spawn(
     registry: State<'_, PtyRegistry>,
@@ -46,12 +47,14 @@ pub fn pty_spawn(
     on_output: Channel<InvokeResponseBody>,
     on_exit: Channel<u32>,
 ) -> Result<u32, AppError> {
+    let epoch = registry.epoch();
     let folder = validate_folder(&folder)?;
     let size = pty_size(cols, rows)?;
     let command = claude_command(&resolve_claude()?, &folder);
     let recording = recordings.create(cols, rows);
     let recorder = recording.as_ref().map(|new| Arc::clone(&new.recorder));
     let spawned = registry.spawn(
+        epoch,
         command,
         size,
         output_sink(on_output, recorder),
