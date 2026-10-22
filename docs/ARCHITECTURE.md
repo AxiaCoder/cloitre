@@ -49,13 +49,13 @@ Changes the size of a session's terminal.
 
 ### `pty_kill`
 
-Stops a session's process, closes its pseudo-terminal and closes its recording. Also used to release a session whose process has already exited.
+Stops a session's process, closes its pseudo-terminal and closes its recording. On Windows, the processes the session started are stopped too, even those with their own console. Also used to release a session whose process has already exited.
 
 - **Arguments**: `id` (integer).
 - **Returns**: nothing.
 - **Refuses**: an unknown id.
 
-When the app exits, and whenever the page starts loading (a reload of the webview), every session still registered is stopped and every recording closed.
+When the app exits, and whenever the page starts loading (a reload of the webview), every session still registered is stopped and every recording closed. On Windows, the processes of every session are also stopped when the app ends abruptly.
 
 ### `recording_mark`
 

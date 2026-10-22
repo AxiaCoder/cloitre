@@ -9,6 +9,9 @@ use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_s
 
 use crate::error::AppError;
 
+#[cfg(windows)]
+mod windows_job;
+
 /// Size of the buffer the reader thread fills before each forward, in bytes.
 const READ_BUFFER_SIZE: usize = 8192;
 
@@ -21,10 +24,27 @@ const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 type SharedMaster = Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>;
 
 /// One running session: the controlling side of its pseudo-terminal and a handle to stop it.
+///
+/// On Windows, `job` holds the process and everything it starts; `None` when
+/// the process could not be put in a job.
 struct PtySession {
     master: SharedMaster,
     writer: Box<dyn Write + Send>,
     killer: Box<dyn ChildKiller + Send + Sync>,
+    #[cfg(windows)]
+    job: Option<windows_job::Job>,
+}
+
+impl PtySession {
+    /// Stops the session's process and, on Windows, every process it started.
+    /// Failures are ignored: an already exited process makes the kill fail.
+    fn stop(&mut self) {
+        #[cfg(windows)]
+        if let Some(job) = &self.job {
+            job.terminate();
+        }
+        let _ = self.killer.kill();
+    }
 }
 
 /// The running sessions, by id. Ids start at 1 and are never reused.
@@ -108,6 +128,10 @@ impl PtyRegistry {
         let mut child = pair.slave.spawn_command(command).map_err(pty_error)?;
         drop(pair.slave);
         let killer = child.clone_killer();
+        #[cfg(windows)]
+        let job = child
+            .process_id()
+            .and_then(|pid| windows_job::Job::assign(pid).ok());
         let master: SharedMaster = Arc::new(Mutex::new(Some(pair.master)));
 
         let (drained_tx, drained_rx) = mpsc::channel::<()>();
@@ -137,9 +161,11 @@ impl PtyRegistry {
             master,
             writer,
             killer,
+            #[cfg(windows)]
+            job,
         };
         self.insert(epoch, session).map_err(|mut refused| {
-            let _ = refused.killer.kill();
+            refused.stop();
             AppError::SpawnCancelled
         })
     }
@@ -187,7 +213,8 @@ impl PtyRegistry {
         }
     }
 
-    /// Stops the process of session `id` and closes its pseudo-terminal.
+    /// Stops the process of session `id`, and on Windows every process it
+    /// started, and closes its pseudo-terminal.
     ///
     /// The session is unregistered even when the process had already exited,
     /// which makes the reader thread end.
@@ -198,8 +225,7 @@ impl PtyRegistry {
         let mut session = lock(&self.sessions)
             .remove(&id)
             .ok_or(AppError::UnknownPty(id))?;
-        // An already exited process makes kill fail; the session is released either way.
-        let _ = session.killer.kill();
+        session.stop();
         Ok(())
     }
 
@@ -214,7 +240,7 @@ impl PtyRegistry {
             registered.drain().map(|(_, session)| session).collect()
         };
         for mut session in sessions {
-            let _ = session.killer.kill();
+            session.stop();
         }
     }
 }
@@ -516,6 +542,100 @@ mod tests {
         ));
         assert_eq!(exit_rx.recv_timeout(PROCESS_TIMEOUT), Ok(0));
         assert_eq!(registry.kill(id), Ok(()));
+    }
+
+    /// Kills the Windows process `pid` and its descendants when dropped, so a test
+    /// that fails never leaves a stray process behind.
+    #[cfg(windows)]
+    struct KillOnDrop(u32);
+
+    #[cfg(windows)]
+    impl Drop for KillOnDrop {
+        /// Runs `taskkill /T /F` on the guarded process, ignoring any failure.
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/PID", &self.0.to_string(), "/T", "/F"])
+                .output();
+        }
+    }
+
+    /// Tells whether a Windows process with id `pid` is running, according to `tasklist`.
+    #[cfg(windows)]
+    fn process_is_alive(pid: u32) -> bool {
+        let output = std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+            .output()
+            .expect("tasklist runs");
+        String::from_utf8_lossy(&output.stdout).contains(&format!("\"{pid}\""))
+    }
+
+    /// Reads output chunks of session `id` until `label=` followed by a complete
+    /// number appears, answering cursor position requests on the way, and returns
+    /// that number; `None` when the session stays silent past `PROCESS_TIMEOUT`.
+    #[cfg(windows)]
+    fn wait_for_number(
+        registry: &PtyRegistry,
+        id: u32,
+        receiver: &mpsc::Receiver<Vec<u8>>,
+        label: &str,
+    ) -> Option<u32> {
+        let prefix = format!("{label}=");
+        let deadline = Instant::now() + PROCESS_TIMEOUT;
+        let mut seen = Vec::new();
+        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+            let chunk = receiver.recv_timeout(left).ok()?;
+            answer_cursor_request(registry, id, &chunk);
+            seen.extend_from_slice(&chunk);
+            let text = String::from_utf8_lossy(&seen);
+            if let Some(start) = text.find(&prefix) {
+                let after = &text[start + prefix.len()..];
+                let digits: String = after.chars().take_while(char::is_ascii_digit).collect();
+                if !digits.is_empty() && after.len() > digits.len() {
+                    return digits.parse().ok();
+                }
+            }
+        }
+        None
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn kill_stops_a_process_the_session_started_in_its_own_console() {
+        let mut command = CommandBuilder::new("powershell.exe");
+        command.args([
+            "-NoProfile",
+            "-Command",
+            "$p = Start-Process ping -ArgumentList '-n','60','127.0.0.1' -WindowStyle Hidden -PassThru; \
+             Write-Output \"cloitre-child=$($p.Id)\"; Start-Sleep 60",
+        ]);
+        let registry = PtyRegistry::default();
+        let (output_tx, output_rx) = mpsc::channel();
+        let id = registry
+            .spawn(
+                registry.epoch(),
+                command,
+                pty_size(80, 24).unwrap(),
+                move |bytes| {
+                    let _ = output_tx.send(bytes.to_vec());
+                },
+                |_| {},
+            )
+            .unwrap();
+        let child = wait_for_number(&registry, id, &output_rx, "cloitre-child")
+            .expect("the session prints the id of the process it started");
+        let _guard = KillOnDrop(child);
+        assert!(process_is_alive(child), "child {child} never ran");
+
+        assert_eq!(registry.kill(id), Ok(()));
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while process_is_alive(child) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(200));
+        }
+        assert!(
+            !process_is_alive(child),
+            "process {child}, started by the session, survived kill"
+        );
     }
 
     #[test]
