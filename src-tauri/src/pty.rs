@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -28,9 +28,13 @@ struct PtySession {
 }
 
 /// The running sessions, by id. Ids start at 1 and are never reused.
+///
+/// The epoch counts the calls to [`PtyRegistry::kill_all`]; it only changes
+/// while `sessions` is locked.
 #[derive(Default)]
 pub struct PtyRegistry {
     next_id: AtomicU32,
+    epoch: AtomicU64,
     sessions: Mutex<HashMap<u32, PtySession>>,
 }
 
@@ -76,9 +80,30 @@ impl PtyRegistry {
     ///
     /// # Errors
     /// [`AppError::Pty`] when the pseudo-terminal cannot be opened or the process
-    /// cannot be started. No process is left running in that case.
+    /// cannot be started; [`AppError::SpawnCancelled`] when
+    /// [`PtyRegistry::kill_all`] ran while the session was starting. No process
+    /// is left running in either case; a cancelled process still reports its
+    /// exit to `on_exit`.
     pub fn spawn(
         &self,
+        command: CommandBuilder,
+        size: PtySize,
+        on_output: impl FnMut(&[u8]) + Send + 'static,
+        on_exit: impl FnOnce(u32) + Send + 'static,
+    ) -> Result<u32, AppError> {
+        let epoch = self.epoch.load(Ordering::SeqCst);
+        self.spawn_in_epoch(epoch, command, size, on_output, on_exit)
+    }
+
+    /// Does what [`PtyRegistry::spawn`] does, for a spawn that started in `epoch`:
+    /// the session is refused, and its process stopped, unless `epoch` is still
+    /// the current one when it is registered.
+    ///
+    /// # Errors
+    /// As [`PtyRegistry::spawn`].
+    fn spawn_in_epoch(
+        &self,
+        epoch: u64,
         command: CommandBuilder,
         size: PtySize,
         mut on_output: impl FnMut(&[u8]) + Send + 'static,
@@ -115,18 +140,29 @@ impl PtyRegistry {
             on_exit(code);
         });
 
-        Ok(self.insert(PtySession {
+        let session = PtySession {
             master,
             writer,
             killer,
-        }))
+        };
+        self.insert(epoch, session).map_err(|mut refused| {
+            let _ = refused.killer.kill();
+            AppError::SpawnCancelled
+        })
     }
 
-    /// Registers a session and returns its new id.
-    fn insert(&self, session: PtySession) -> u32 {
+    /// Registers a session started in `epoch` and returns its new id.
+    ///
+    /// # Errors
+    /// The session itself, unregistered, when `epoch` is no longer the current one.
+    fn insert(&self, epoch: u64, session: PtySession) -> Result<u32, PtySession> {
+        let mut sessions = lock(&self.sessions);
+        if self.epoch.load(Ordering::SeqCst) != epoch {
+            return Err(session);
+        }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
-        lock(&self.sessions).insert(id, session);
-        id
+        sessions.insert(id, session);
+        Ok(id)
     }
 
     /// Writes `data` to the input of session `id` and flushes it. Does nothing
@@ -175,11 +211,15 @@ impl PtyRegistry {
     }
 
     /// Stops every registered session. Called when the app exits and when the page reloads.
+    ///
+    /// A session still starting when this runs is refused and stopped by
+    /// [`PtyRegistry::spawn`] instead.
     pub fn kill_all(&self) {
-        let sessions: Vec<PtySession> = lock(&self.sessions)
-            .drain()
-            .map(|(_, session)| session)
-            .collect();
+        let sessions: Vec<PtySession> = {
+            let mut registered = lock(&self.sessions);
+            self.epoch.fetch_add(1, Ordering::SeqCst);
+            registered.drain().map(|(_, session)| session).collect()
+        };
         for mut session in sessions {
             let _ = session.killer.kill();
         }
@@ -416,6 +456,62 @@ mod tests {
         assert_eq!(registry.kill(id), Ok(()));
         assert_eq!(registry.write(id, b"x"), Err(AppError::UnknownPty(id)));
         assert_eq!(registry.kill(id), Err(AppError::UnknownPty(id)));
+    }
+
+    #[test]
+    fn spawn_overtaken_by_kill_all_is_refused_and_stopped() {
+        let registry = PtyRegistry::default();
+        let started_in = registry.epoch.load(Ordering::SeqCst);
+        registry.kill_all();
+        let (exit_tx, exit_rx) = mpsc::channel();
+        let spawned = registry.spawn_in_epoch(
+            started_in,
+            wait_quietly(30),
+            pty_size(80, 24).unwrap(),
+            |_| {},
+            move |code| {
+                let _ = exit_tx.send(code);
+            },
+        );
+        assert_eq!(spawned, Err(AppError::SpawnCancelled));
+        assert!(exit_rx.recv_timeout(Duration::from_secs(10)).is_ok());
+        assert!(lock(&registry.sessions).is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn batch_file_runs_in_the_pseudo_terminal() {
+        let folder = tempfile::tempdir().unwrap();
+        let script = folder.path().join("claude.cmd");
+        std::fs::write(
+            &script,
+            "@echo cloitre-batch-marker
+",
+        )
+        .unwrap();
+        let registry = PtyRegistry::default();
+        let (output_tx, output_rx) = mpsc::channel();
+        let (exit_tx, exit_rx) = mpsc::channel();
+        let id = registry
+            .spawn(
+                crate::launch::claude_command(&script, folder.path()),
+                pty_size(80, 24).unwrap(),
+                move |bytes| {
+                    let _ = output_tx.send(bytes.to_vec());
+                },
+                move |code| {
+                    let _ = exit_tx.send(code);
+                },
+            )
+            .unwrap();
+        assert!(wait_for_output(
+            &registry,
+            id,
+            &output_rx,
+            "cloitre-batch-marker"
+        ));
+        assert_eq!(exit_rx.recv_timeout(PROCESS_TIMEOUT), Ok(0));
+        assert_eq!(registry.kill(id), Ok(()));
     }
 
     #[test]

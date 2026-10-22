@@ -79,4 +79,31 @@ mod tests {
     fn page_load_finish_keeps_sessions() {
         assert!(!stops_sessions(PageLoadEvent::Finished));
     }
+
+    #[test]
+    fn main_window_gets_exactly_the_closed_list_of_permissions() {
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        assert_eq!(capability["windows"], serde_json::json!(["main"]));
+        let mut granted: Vec<&str> = capability["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|permission| permission.as_str().unwrap())
+            .collect();
+        granted.sort_unstable();
+        let mut expected = vec![
+            "allow-pty-spawn",
+            "allow-pty-write",
+            "allow-pty-resize",
+            "allow-pty-kill",
+            "allow-recording-mark",
+            "allow-recording-current",
+            "allow-recording-list",
+            "allow-recording-read",
+            "dialog:allow-open",
+        ];
+        expected.sort_unstable();
+        assert_eq!(granted, expected);
+    }
 }

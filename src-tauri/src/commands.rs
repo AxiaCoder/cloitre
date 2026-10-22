@@ -34,7 +34,8 @@ fn output_sink(
 ///
 /// # Errors
 /// A folder that is not absolute, missing or not a directory; a zero size;
-/// `claude` missing from the `PATH`; a pseudo-terminal failure.
+/// `claude` found neither on the `PATH` nor at its install locations; a
+/// pseudo-terminal failure; a page reload during the start.
 #[tauri::command(async)]
 pub fn pty_spawn(
     registry: State<'_, PtyRegistry>,
