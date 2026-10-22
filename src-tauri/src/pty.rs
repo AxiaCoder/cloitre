@@ -529,4 +529,14 @@ mod tests {
         assert_eq!(registry.kill(first), Err(AppError::UnknownPty(first)));
         assert_eq!(registry.kill(second), Err(AppError::UnknownPty(second)));
     }
+
+    #[test]
+    fn spawn_after_kill_all_is_registered() {
+        let registry = PtyRegistry::default();
+        registry.kill_all();
+        let id = registry
+            .spawn(wait_quietly(10), pty_size(80, 24).unwrap(), |_| {}, |_| {})
+            .unwrap();
+        assert_eq!(registry.kill(id), Ok(()));
+    }
 }

@@ -98,6 +98,14 @@ mod tests {
     }
 
     #[test]
+    fn spawn_cancelled_says_the_page_reloaded() {
+        assert_eq!(
+            AppError::SpawnCancelled.to_string(),
+            "the session was stopped because the page reloaded while it was starting"
+        );
+    }
+
+    #[test]
     fn recording_errors_say_what_was_refused() {
         assert_eq!(
             AppError::InvalidRecordingName.to_string(),
