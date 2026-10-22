@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-window",
-  "description": "What the main window may call: the session and recording commands and the folder picker.",
+  "description": "What the main window may call: the session, recording and project commands.",
   "windows": ["main"],
   "permissions": [
     "allow-pty-spawn",
@@ -12,6 +12,9 @@
     "allow-recording-current",
     "allow-recording-list",
     "allow-recording-read",
-    "dialog:allow-open"
+    "allow-project-list",
+    "allow-project-add",
+    "allow-project-relocate",
+    "allow-project-remove"
   ]
 }

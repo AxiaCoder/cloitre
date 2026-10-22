@@ -1,8 +1,6 @@
 import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
 
-import { open } from "@tauri-apps/plugin-dialog";
-
 import {
   currentRecording,
   listRecordings,
@@ -12,6 +10,8 @@ import {
   type ReplayTarget,
 } from "./recording";
 import { decideKey } from "./keys";
+import { chooseWorkArea, findProject, keepSelection, projectToStart } from "./project-selection";
+import { addProject, listProjects, relocateProject, removeProject, type Project } from "./projects";
 import { ReplayDeck, type LoadedReplay } from "./replay-deck";
 import { SessionSlot } from "./session";
 import { TerminalView, isRenderer, isUnicodeVersion, showRenderer, startRenderer } from "./terminal-view";
@@ -25,7 +25,17 @@ function element<T extends HTMLElement>(id: string, type: new () => T): T {
   return found;
 }
 
-const pickButton = element("pick-folder", HTMLButtonElement);
+const warningBar = element("warning", HTMLDivElement);
+const warningText = element("warning-text", HTMLSpanElement);
+const warningClose = element("warning-close", HTMLButtonElement);
+const projectList = element("project-list", HTMLUListElement);
+const addProjectButton = element("add-project", HTMLButtonElement);
+const emptyState = element("empty-state", HTMLElement);
+const emptyOpenButton = element("empty-open", HTMLButtonElement);
+const missingState = element("missing-state", HTMLElement);
+const missingPath = element("missing-path", HTMLParagraphElement);
+const relocateButton = element("relocate", HTMLButtonElement);
+const removeButton = element("remove", HTMLButtonElement);
 const rendererSelect = element("renderer", HTMLSelectElement);
 const unicodeSelect = element("unicode", HTMLSelectElement);
 const markButton = element("mark", HTMLButtonElement);
@@ -111,8 +121,19 @@ function prepareScreen(): { cols: number; rows: number } {
   return { cols: view.terminal.cols, rows: view.terminal.rows };
 }
 
-/** Stops the current session and the replay, then starts `claude` in `folder` on a cleared screen. */
-async function startSession(folder: string): Promise<void> {
+/** The projects as last listed by Rust. */
+let projects: readonly Project[] = [];
+/** The id of the selected project, if any. */
+let selectedId: number | undefined;
+/** Whether the user closed the load warning; it stays closed until the app restarts. */
+let warningClosed = false;
+
+/**
+ * Stops the current session and the replay, then starts `claude` in `folder`
+ * on a cleared screen. Resolves with whether the session started; a failure is
+ * shown in the control bar.
+ */
+async function startSession(folder: string): Promise<boolean> {
   try {
     const running = await deck.claim(() =>
       slot.start(folder, prepareScreen, {
@@ -136,9 +157,117 @@ async function startSession(folder: string): Promise<void> {
       }
       refreshRecordingsOrReport();
     }
+    return running;
   } catch (error) {
     showStatus(String(error));
+    return false;
   }
+}
+
+/** Stops the current session and the replay. */
+async function stopSession(): Promise<void> {
+  await deck.claim(async () => {
+    await slot.stop();
+    showRecording(undefined);
+  });
+}
+
+/** Draws the project rail and the work area from `projects` and `selectedId`. */
+function renderProjects(): void {
+  projectList.replaceChildren(
+    ...projects.map((project) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "project";
+      button.classList.toggle("active", project.id === selectedId);
+      button.classList.toggle("missing", !project.exists);
+      button.title = project.exists ? project.path : `Folder not found: ${project.path}`;
+      const name = document.createElement("span");
+      name.className = "project-name";
+      name.textContent = project.name;
+      const path = document.createElement("span");
+      path.className = "project-path";
+      path.textContent = project.path;
+      button.append(name, path);
+      button.addEventListener("click", () => {
+        report(() => selectProject(project.id));
+      });
+      const item = document.createElement("li");
+      item.append(button);
+      return item;
+    }),
+  );
+  const area = chooseWorkArea(projects, selectedId);
+  emptyState.hidden = area.kind !== "empty";
+  missingState.hidden = area.kind !== "missing";
+  missingPath.textContent = area.kind === "missing" ? area.project.path : "";
+}
+
+/** Reloads the project list from Rust, keeps the selection when it is still there, and redraws. */
+async function refreshProjects(): Promise<void> {
+  const list = await listProjects();
+  projects = list.projects;
+  selectedId = keepSelection(projects, selectedId);
+  warningText.textContent = list.warning ?? "";
+  warningBar.hidden = list.warning === null || warningClosed;
+  renderProjects();
+}
+
+/**
+ * Selects project `id` and starts a session in its folder, unless that
+ * project's session already runs. Selecting a project whose folder is gone
+ * stops the running session and shows the missing-folder state; so does a
+ * session start that Rust refuses because the folder has just gone.
+ */
+async function selectProject(id: number): Promise<void> {
+  const toStart = projectToStart(projects, id, selectedId, slot.current !== undefined);
+  selectedId = keepSelection(projects, id);
+  renderProjects();
+  if (toStart) {
+    if (!(await startSession(toStart.path))) {
+      await refreshProjects();
+    }
+  } else if (findProject(projects, id)?.exists === false) {
+    await stopSession();
+  }
+}
+
+/** Opens the folder picker, adds the chosen folder as a project and selects it. */
+async function openFolder(): Promise<void> {
+  const project = await addProject();
+  if (project === null) {
+    return;
+  }
+  await refreshProjects();
+  await selectProject(project.id);
+}
+
+/** Opens the folder picker to give the selected project a new folder, then selects it again. */
+async function relocateSelected(): Promise<void> {
+  const selected = findProject(projects, selectedId);
+  if (!selected) {
+    return;
+  }
+  const moved = await relocateProject(selected.id);
+  if (moved === null) {
+    return;
+  }
+  await refreshProjects();
+  await selectProject(moved.id);
+}
+
+/** Removes the selected project, stopping its session. */
+async function removeSelected(): Promise<void> {
+  const selected = findProject(projects, selectedId);
+  if (!selected) {
+    return;
+  }
+  await removeProject(selected.id);
+  if (selectedId === selected.id) {
+    selectedId = undefined;
+    await stopSession();
+  }
+  await refreshProjects();
 }
 
 /** Writes a marker in the recording of the running session. */
@@ -234,12 +363,25 @@ view.terminal.attachCustomKeyEventHandler((event) => {
   return false;
 });
 
-pickButton.addEventListener("click", () => {
-  void open({ directory: true, multiple: false }).then((folder) => {
-    if (folder !== null) {
-      return startSession(folder);
-    }
-  });
+addProjectButton.addEventListener("click", () => {
+  report(openFolder);
+});
+
+emptyOpenButton.addEventListener("click", () => {
+  report(openFolder);
+});
+
+relocateButton.addEventListener("click", () => {
+  report(relocateSelected);
+});
+
+removeButton.addEventListener("click", () => {
+  report(removeSelected);
+});
+
+warningClose.addEventListener("click", () => {
+  warningClosed = true;
+  warningBar.hidden = true;
 });
 
 markButton.addEventListener("click", () => {
@@ -281,3 +423,4 @@ unicodeSelect.addEventListener("change", () => {
 
 startRenderer(view, rendererSelect, showStatus);
 refreshRecordingsOrReport();
+report(refreshProjects);

@@ -1,11 +1,13 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use tauri::State;
 use tauri::ipc::{Channel, InvokeResponseBody, Response};
+use tauri::{State, Window};
+use tauri_plugin_dialog::DialogExt;
 
 use crate::error::AppError;
-use crate::folder::validate_folder;
 use crate::launch::{claude_command, resolve_claude};
+use crate::projects::{ProjectList, ProjectStore, ProjectView};
 use crate::pty::{PtyRegistry, lock, pty_size};
 use crate::recording::{RecordingInfo, RecordingRegistry, SharedRecorder};
 
@@ -33,14 +35,17 @@ fn output_sink(
 /// unless that file cannot be created. Returns the session id.
 ///
 /// # Errors
-/// A folder that is not absolute, missing or not a directory; a zero size;
+/// A folder that is not absolute, missing, not a directory or not the folder of
+/// a project, or a project whose folder no longer exists; a zero size;
 /// `claude` found neither on the `PATH` nor at its install locations; a
 /// pseudo-terminal failure; a page reload at any point after the command is
 /// received.
 #[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
 pub fn pty_spawn(
     registry: State<'_, PtyRegistry>,
     recordings: State<'_, RecordingRegistry>,
+    projects: State<'_, ProjectStore>,
     folder: String,
     cols: u16,
     rows: u16,
@@ -48,7 +53,7 @@ pub fn pty_spawn(
     on_exit: Channel<u32>,
 ) -> Result<u32, AppError> {
     let epoch = registry.epoch();
-    let folder = validate_folder(&folder)?;
+    let folder = projects.spawn_folder(&folder)?;
     let size = pty_size(cols, rows)?;
     let command = claude_command(&resolve_claude()?, &folder);
     let recording = recordings.create(cols, rows);
@@ -171,6 +176,74 @@ pub fn recording_read(
     name: String,
 ) -> Result<Response, AppError> {
     recordings.read(&name).map(Response::new)
+}
+
+/// Lists the projects, each with whether its folder still exists, and the
+/// warning left when the project file could not be loaded.
+#[tauri::command(async)]
+pub fn project_list(projects: State<'_, ProjectStore>) -> ProjectList {
+    projects.list()
+}
+
+/// Opens the folder picker over `window` and returns the chosen path, or
+/// `None` when the user cancels.
+///
+/// Blocks until the picker closes, so it must not run on the main thread.
+fn pick_folder(window: &Window) -> Option<PathBuf> {
+    window
+        .dialog()
+        .file()
+        .set_parent(window)
+        .blocking_pick_folder()
+        .and_then(|picked| picked.into_path().ok())
+}
+
+/// Lets the user pick a folder and adds it as a project.
+///
+/// Returns the project, the existing one when that folder is already a
+/// project, or `None` when the user cancels.
+///
+/// # Errors
+/// A picked folder that cannot be resolved or stored; a read-only project
+/// list; a failed save.
+#[tauri::command(async)]
+pub fn project_add(
+    window: Window,
+    projects: State<'_, ProjectStore>,
+) -> Result<Option<ProjectView>, AppError> {
+    pick_folder(&window)
+        .map(|folder| projects.add(&folder))
+        .transpose()
+}
+
+/// Lets the user pick a new folder for project `id`.
+///
+/// Returns the updated project, or `None` when the user cancels.
+///
+/// # Errors
+/// An unknown id; a picked folder that cannot be resolved or stored, or that
+/// is already another project's; a read-only project list; a failed save.
+#[tauri::command(async)]
+pub fn project_relocate(
+    window: Window,
+    projects: State<'_, ProjectStore>,
+    id: u32,
+) -> Result<Option<ProjectView>, AppError> {
+    if !projects.list().projects.iter().any(|p| p.id == id) {
+        return Err(AppError::UnknownProject(id));
+    }
+    pick_folder(&window)
+        .map(|folder| projects.relocate(id, &folder))
+        .transpose()
+}
+
+/// Removes project `id` from the list. Its folder is not touched.
+///
+/// # Errors
+/// An unknown id; a read-only project list; a failed save.
+#[tauri::command(async)]
+pub fn project_remove(projects: State<'_, ProjectStore>, id: u32) -> Result<(), AppError> {
+    projects.remove(id)
 }
 
 #[cfg(test)]

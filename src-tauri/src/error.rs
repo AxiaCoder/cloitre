@@ -33,6 +33,20 @@ pub enum AppError {
     NoRecording(u32),
     /// A recording file could not be read; carries the underlying message.
     Recording(String),
+    /// No project is registered under this id.
+    UnknownProject(u32),
+    /// The folder is not the folder of any project.
+    FolderNotRegistered,
+    /// The folder of this project, named here, no longer exists.
+    ProjectFolderMissing(String),
+    /// The folder already belongs to the project named here.
+    FolderTaken(String),
+    /// The folder path is not valid Unicode, so the project file cannot store it.
+    UnsupportedFolderPath,
+    /// The project list could not be written; carries the underlying message.
+    ProjectsNotSaved(String),
+    /// The project file could not be loaded nor copied aside, so no change is saved.
+    ProjectsReadOnly,
 }
 
 impl fmt::Display for AppError {
@@ -61,6 +75,26 @@ impl fmt::Display for AppError {
             Self::UnknownRecording => write!(f, "no recording with this name"),
             Self::NoRecording(id) => write!(f, "session {id} is not being recorded"),
             Self::Recording(message) => write!(f, "recording error: {message}"),
+            Self::UnknownProject(id) => write!(f, "no project with id {id}"),
+            Self::FolderNotRegistered => write!(f, "the folder is not in the project list"),
+            Self::ProjectFolderMissing(name) => write!(
+                f,
+                "the folder of project {name} no longer exists: choose its new location"
+            ),
+            Self::FolderTaken(name) => {
+                write!(f, "the folder is already the folder of project {name}")
+            }
+            Self::UnsupportedFolderPath => write!(
+                f,
+                "the folder path has characters the project list cannot store"
+            ),
+            Self::ProjectsNotSaved(message) => {
+                write!(f, "the project list could not be saved: {message}")
+            }
+            Self::ProjectsReadOnly => write!(
+                f,
+                "the project list is read-only until the app restarts: its file could not be loaded nor copied aside"
+            ),
         }
     }
 }
@@ -122,6 +156,26 @@ mod tests {
         assert_eq!(
             AppError::Recording("denied".into()).to_string(),
             "recording error: denied"
+        );
+    }
+
+    #[test]
+    fn project_errors_say_what_was_refused() {
+        assert_eq!(
+            AppError::UnknownProject(4).to_string(),
+            "no project with id 4"
+        );
+        assert_eq!(
+            AppError::FolderNotRegistered.to_string(),
+            "the folder is not in the project list"
+        );
+        assert_eq!(
+            AppError::ProjectFolderMissing("alpha".into()).to_string(),
+            "the folder of project alpha no longer exists: choose its new location"
+        );
+        assert_eq!(
+            AppError::FolderTaken("beta".into()).to_string(),
+            "the folder is already the folder of project beta"
         );
     }
 }
