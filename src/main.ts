@@ -125,6 +125,8 @@ function prepareScreen(): { cols: number; rows: number } {
 let projects: readonly Project[] = [];
 /** The id of the selected project, if any. */
 let selectedId: number | undefined;
+/** How many project selections have started; the latest one is the only one that acts. */
+let selectionCount = 0;
 /** Whether the user closed the load warning; it stays closed until the app restarts. */
 let warningClosed = false;
 
@@ -218,9 +220,15 @@ async function refreshProjects(): Promise<void> {
  * its folder, unless that project's session already runs. Selecting a project
  * whose folder is gone stops the running session and shows the missing-folder
  * state; so does a session start that Rust refuses because the folder has just gone.
+ * A selection overtaken by a later one while the list reloads does nothing.
  */
 async function selectProject(id: number): Promise<void> {
+  selectionCount += 1;
+  const selection = selectionCount;
   await refreshProjects();
+  if (selection !== selectionCount) {
+    return;
+  }
   const toStart = projectToStart(projects, id, selectedId, slot.current !== undefined);
   selectedId = keepSelection(projects, id);
   renderProjects();
