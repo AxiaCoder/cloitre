@@ -34,7 +34,6 @@ function logTarget() {
 function gatedHooks() {
   const pending = new Map<string, () => void>();
   const hooks: ReplayDeckHooks = {
-    stopSession: () => Promise.resolve(),
     read: (name) =>
       new Promise((resolve) => {
         pending.set(name, () => {
@@ -114,10 +113,6 @@ describe("ReplayDeck, overlapping", () => {
 function loggedHooks(bytes: Uint8Array, failing: string[] = []) {
   const calls: string[] = [];
   const hooks: ReplayDeckHooks = {
-    stopSession: () => {
-      calls.push("stopSession");
-      return Promise.resolve();
-    },
     read: (name) => {
       calls.push(`read ${name}`);
       return failing.includes(name) ? Promise.reject(new Error(`cannot read ${name}`)) : Promise.resolve(bytes);
@@ -129,14 +124,14 @@ function loggedHooks(bytes: Uint8Array, failing: string[] = []) {
 }
 
 describe("ReplayDeck, around the page", () => {
-  it("stops the session, reads the recording, then holds the screen", async () => {
+  it("reads the recording, then holds the screen, without touching any session", async () => {
     const { target } = logTarget();
     const { calls, hooks } = loggedHooks(slowRecording);
     const deck = new ReplayDeck(target, hooks);
 
     const { replay, truncated } = await deck.load("one");
 
-    expect(calls).toEqual(["stopSession", "read one", "hold"]);
+    expect(calls).toEqual(["read one", "hold"]);
     expect(replay.name).toBe("one");
     expect(replay.marks).toBe(0);
     expect(truncated).toBe(false);

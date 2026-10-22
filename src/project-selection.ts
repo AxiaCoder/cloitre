@@ -4,6 +4,7 @@ import type { Project } from "./projects";
 export type WorkArea =
   | { readonly kind: "empty" }
   | { readonly kind: "missing"; readonly project: Project }
+  | { readonly kind: "no-session"; readonly project: Project }
   | { readonly kind: "terminal" };
 
 /** Returns the project with `id`, or `undefined` when `id` is unset or unknown. */
@@ -19,15 +20,23 @@ export function keepSelection(projects: readonly Project[], selectedId: number |
 /**
  * Chooses what the work area shows: the empty state when there is no project,
  * the missing-folder state when the selected project's folder is gone, the
- * terminal otherwise (with or without a selected project).
+ * no-session state when the selected project has no tab (`selectedHasTabs`),
+ * the terminal otherwise (with or without a selected project).
  */
-export function chooseWorkArea(projects: readonly Project[], selectedId: number | undefined): WorkArea {
+export function chooseWorkArea(
+  projects: readonly Project[],
+  selectedId: number | undefined,
+  selectedHasTabs: boolean,
+): WorkArea {
   if (projects.length === 0) {
     return { kind: "empty" };
   }
   const selected = findProject(projects, selectedId);
   if (selected && !selected.exists) {
     return { kind: "missing", project: selected };
+  }
+  if (selected && !selectedHasTabs) {
+    return { kind: "no-session", project: selected };
   }
   return { kind: "terminal" };
 }

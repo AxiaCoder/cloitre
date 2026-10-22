@@ -115,16 +115,18 @@ describe("TabModel.activate and setState", () => {
     model.activate(9);
     model.setState(9, "exited");
     expect(model.activeOf(10)?.id).toBe(first.id);
-    expect(model.find(first.id)?.state).toBe("starting");
+    expect(model.find(first.id)).toMatchObject({ state: "starting" });
   });
 
-  it("moves a tab through its states", () => {
+  it("moves a tab through its states, back to starting on a restart", () => {
     const model = new TabModel();
     const tab = model.open(10);
     model.setState(tab.id, "running");
-    expect(model.find(tab.id)?.state).toBe("running");
+    expect(model.find(tab.id)).toMatchObject({ state: "running" });
     model.setState(tab.id, "exited");
-    expect(model.find(tab.id)?.state).toBe("exited");
+    expect(model.find(tab.id)).toMatchObject({ state: "exited" });
+    model.setState(tab.id, "starting");
+    expect(model.find(tab.id)).toMatchObject({ id: tab.id, state: "starting" });
   });
 
   it("lists a project's tabs in opening order", () => {
@@ -133,5 +135,62 @@ describe("TabModel.activate and setState", () => {
     model.open(20);
     const third = model.open(10);
     expect(model.tabsOf(10).map((tab) => tab.id)).toEqual([first.id, third.id]);
+  });
+});
+
+describe("TabModel replay tabs", () => {
+  it("opens a session tab marked as such", () => {
+    const model = new TabModel();
+    expect(model.open(10).kind).toBe("session");
+  });
+
+  it("opens a replay tab labelled with its recording and makes it active", () => {
+    const model = new TabModel();
+    model.open(10);
+    const replay = model.openReplay(10, "one.rec");
+    expect(replay).toEqual({ kind: "replay", id: 2, projectId: 10, label: "Replay one.rec", recording: "one.rec" });
+    expect(model.activeOf(10)?.id).toBe(replay.id);
+    expect(model.replayTab()?.id).toBe(replay.id);
+  });
+
+  it("reuses the project's replay tab for another recording", () => {
+    const model = new TabModel();
+    const replay = model.openReplay(10, "one.rec");
+    const session = model.open(10);
+    expect(model.activeOf(10)?.id).toBe(session.id);
+    const again = model.openReplay(10, "two.rec");
+    expect(again.id).toBe(replay.id);
+    expect(again.label).toBe("Replay two.rec");
+    expect(model.tabsOf(10)).toHaveLength(2);
+    expect(model.activeOf(10)?.id).toBe(replay.id);
+  });
+
+  it("opens a separate replay tab in another project", () => {
+    const model = new TabModel();
+    const first = model.openReplay(10, "one.rec");
+    const second = model.openReplay(20, "one.rec");
+    expect(second.id).not.toBe(first.id);
+    expect(model.tabsOf(20)).toEqual([second]);
+  });
+
+  it("does not count replay tabs in the session numbers", () => {
+    const model = new TabModel();
+    model.openReplay(10, "one.rec");
+    expect(model.open(10).label).toBe("Session 1");
+  });
+
+  it("leaves a replay tab without a state", () => {
+    const model = new TabModel();
+    const replay = model.openReplay(10, "one.rec");
+    model.setState(replay.id, "exited");
+    expect(model.find(replay.id)).not.toHaveProperty("state");
+  });
+
+  it("has no replay tab once it is closed", () => {
+    const model = new TabModel();
+    const replay = model.openReplay(10, "one.rec");
+    model.close(replay.id);
+    expect(model.replayTab()).toBeUndefined();
+    expect(model.activeOf(10)).toBeUndefined();
   });
 });

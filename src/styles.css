@@ -213,6 +213,10 @@ body {
   font-style: italic;
 }
 
+.tab.replay .tab-label {
+  color: #9db4e0;
+}
+
 .tab-label,
 .tab-close,
 .new-tab {
@@ -263,4 +267,26 @@ body {
 
 .terminal-pane[hidden] {
   display: none;
+}
+
+.end-notice {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  left: 12px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #1e1e1e;
+  border: 1px solid #444;
+}
+
+.end-notice[hidden] {
+  display: none;
+}
+
+.end-notice span {
+  flex: 1;
 }

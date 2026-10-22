@@ -1,8 +1,9 @@
-/** Where a tab's `claude` session stands. */
+/** Where a session tab's `claude` session stands. */
 export type TabState = "starting" | "running" | "exited";
 
-/** One tab of a project: one terminal, one `claude` session. */
-export interface Tab {
+/** One tab of a project running a `claude` session in its terminal. */
+export interface SessionTab {
+  readonly kind: "session";
   /** Unique across every project, starting at 1, never reused. */
   readonly id: number;
   readonly projectId: number;
@@ -11,13 +12,26 @@ export interface Tab {
   readonly state: TabState;
 }
 
-/** A tab as the model stores it, with a state that changes over time. */
-interface StoredTab {
+/** One tab of a project replaying a recording, with no session behind it. */
+export interface ReplayTab {
+  readonly kind: "replay";
+  /** Unique across every project, starting at 1, never reused. */
   readonly id: number;
   readonly projectId: number;
+  /** "Replay <recording>". */
   readonly label: string;
-  state: TabState;
+  /** The name of the recording it replays. */
+  readonly recording: string;
 }
+
+/** One tab of a project: a session tab or a replay tab. */
+export type Tab = SessionTab | ReplayTab;
+
+/** `T` with every property writable. */
+type Writable<T> = { -readonly [K in keyof T]: T[K] };
+
+/** A tab as the model stores it, with the fields that change over time writable. */
+type StoredTab = Writable<SessionTab> | Writable<ReplayTab>;
 
 /** What closing a tab did: the tab removed and its project's active tab afterwards. */
 export interface ClosedTab {
@@ -27,7 +41,8 @@ export interface ClosedTab {
 
 /**
  * The tabs of every project, in opening order, with one active tab per project.
- * Holds no DOM and no session: only ids, labels, states and which tab is active.
+ * Holds no DOM, no session and no replay: only ids, kinds, labels, states and
+ * which tab is active.
  */
 export class TabModel {
   private readonly tabs: StoredTab[] = [];
@@ -36,15 +51,40 @@ export class TabModel {
   private nextId = 1;
 
   /**
-   * Opens a tab for project `projectId`, in the `"starting"` state, and makes it
-   * the project's active tab. Its label number follows the highest one the
-   * project has used, even after closes.
+   * Opens a session tab for project `projectId`, in the `"starting"` state, and
+   * makes it the project's active tab. Its label number follows the highest one
+   * the project has used, even after closes; replay tabs do not count.
    */
-  open(projectId: number): Tab {
+  open(projectId: number): SessionTab {
     const number = (this.lastNumbers.get(projectId) ?? 0) + 1;
     this.lastNumbers.set(projectId, number);
-    const tab: StoredTab = { id: this.nextId, projectId, label: `Session ${String(number)}`, state: "starting" };
-    this.nextId += 1;
+    const tab: StoredTab = {
+      kind: "session",
+      id: this.takeId(),
+      projectId,
+      label: `Session ${String(number)}`,
+      state: "starting",
+    };
+    this.tabs.push(tab);
+    this.activeIds.set(projectId, tab.id);
+    return tab;
+  }
+
+  /**
+   * Shows recording `recording` in the replay tab of project `projectId`: reuses
+   * the project's replay tab when it has one, relabelled, else opens a new one.
+   * Either way the tab becomes the project's active tab.
+   */
+  openReplay(projectId: number, recording: string): ReplayTab {
+    const label = `Replay ${recording}`;
+    const existing = this.tabs.find((tab) => tab.kind === "replay" && tab.projectId === projectId);
+    if (existing?.kind === "replay") {
+      existing.recording = recording;
+      existing.label = label;
+      this.activeIds.set(projectId, existing.id);
+      return existing;
+    }
+    const tab: StoredTab = { kind: "replay", id: this.takeId(), projectId, label, recording };
     this.tabs.push(tab);
     this.activeIds.set(projectId, tab.id);
     return tab;
@@ -83,10 +123,10 @@ export class TabModel {
     }
   }
 
-  /** Sets the state of tab `tabId`. Does nothing for an unknown id. */
+  /** Sets the state of session tab `tabId`. Does nothing for an unknown id or a replay tab. */
   setState(tabId: number, state: TabState): void {
     const tab = this.tabs.find((candidate) => candidate.id === tabId);
-    if (tab) {
+    if (tab?.kind === "session") {
       tab.state = state;
     }
   }
@@ -94,6 +134,11 @@ export class TabModel {
   /** Returns tab `tabId`, or `undefined` when no tab has that id. */
   find(tabId: number): Tab | undefined {
     return this.tabs.find((tab) => tab.id === tabId);
+  }
+
+  /** Returns the first replay tab, whatever its project, or `undefined` when there is none. */
+  replayTab(): ReplayTab | undefined {
+    return this.tabs.find((tab): tab is Writable<ReplayTab> => tab.kind === "replay");
   }
 
   /** Returns the tabs of project `projectId`, in opening order. */
@@ -105,5 +150,12 @@ export class TabModel {
   activeOf(projectId: number): Tab | undefined {
     const id = this.activeIds.get(projectId);
     return id === undefined ? undefined : this.find(id);
+  }
+
+  /** Returns the next unused tab id. */
+  private takeId(): number {
+    const id = this.nextId;
+    this.nextId += 1;
+    return id;
   }
 }

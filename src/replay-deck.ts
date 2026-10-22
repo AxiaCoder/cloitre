@@ -9,8 +9,6 @@ export interface LoadedReplay {
 
 /** What a {@link ReplayDeck} needs from the page around it. */
 export interface ReplayDeckHooks {
-  /** Stops the live session, if any. */
-  stopSession(): Promise<void>;
   /** Returns the raw bytes of recording `name`. */
   read(name: string): Promise<Uint8Array>;
   /** Called when a replay takes the screen. */
@@ -51,13 +49,12 @@ export class ReplayDeck {
   }
 
   /**
-   * Stops the replay on screen and the live session, then loads recording
+   * Stops the replay on screen, then loads recording
    * `name` on a replay of its own. `truncated` tells whether its last record
    * was dropped. Rejects when the read or the decoding fails.
    */
   load(name: string): Promise<{ replay: LoadedReplay; truncated: boolean }> {
     return this.claim(async () => {
-      await this.hooks.stopSession();
       const decoded = decodeRecording(await this.hooks.read(name));
       this.hooks.hold();
       const replay: LoadedReplay = { player: new Replay(decoded.events, this.target), name, marks: 0 };

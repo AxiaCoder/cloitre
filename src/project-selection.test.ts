@@ -8,21 +8,26 @@ const gone: Project = { id: 2, name: "gone", path: "C:\\work\\gone", exists: fal
 
 describe("chooseWorkArea", () => {
   it("shows the empty state when there is no project", () => {
-    expect(chooseWorkArea([], undefined)).toEqual({ kind: "empty" });
-    expect(chooseWorkArea([], 1)).toEqual({ kind: "empty" });
+    expect(chooseWorkArea([], undefined, false)).toEqual({ kind: "empty" });
+    expect(chooseWorkArea([], 1, false)).toEqual({ kind: "empty" });
   });
 
   it("shows the missing-folder state for a selected project whose folder is gone", () => {
-    expect(chooseWorkArea([alpha, gone], 2)).toEqual({ kind: "missing", project: gone });
+    expect(chooseWorkArea([alpha, gone], 2, true)).toEqual({ kind: "missing", project: gone });
+    expect(chooseWorkArea([alpha, gone], 2, false)).toEqual({ kind: "missing", project: gone });
   });
 
-  it("shows the terminal for a selected project whose folder exists", () => {
-    expect(chooseWorkArea([alpha, gone], 1)).toEqual({ kind: "terminal" });
+  it("shows the terminal for a selected project whose folder exists and that has tabs", () => {
+    expect(chooseWorkArea([alpha, gone], 1, true)).toEqual({ kind: "terminal" });
+  });
+
+  it("shows the no-session state for a selected project whose folder exists and that has no tab", () => {
+    expect(chooseWorkArea([alpha, gone], 1, false)).toEqual({ kind: "no-session", project: alpha });
   });
 
   it("shows the terminal when no project, or an unknown one, is selected", () => {
-    expect(chooseWorkArea([alpha, gone], undefined)).toEqual({ kind: "terminal" });
-    expect(chooseWorkArea([alpha, gone], 9)).toEqual({ kind: "terminal" });
+    expect(chooseWorkArea([alpha, gone], undefined, false)).toEqual({ kind: "terminal" });
+    expect(chooseWorkArea([alpha, gone], 9, false)).toEqual({ kind: "terminal" });
   });
 });
 

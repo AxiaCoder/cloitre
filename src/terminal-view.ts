@@ -24,12 +24,15 @@ export function isUnicodeVersion(value: string): value is UnicodeVersion {
 
 /**
  * One xterm.js terminal filling its container. It refits itself whenever the
- * container changes size, and its renderer and width table can be switched live.
+ * container changes size while visible, and its renderer and width table can
+ * be switched live.
  */
 export class TerminalView {
   readonly terminal: Terminal;
   private readonly fitAddon = new FitAddon();
+  private readonly resizeObserver: ResizeObserver;
   private webglAddon: WebglAddon | undefined;
+  private visible = true;
 
   /**
    * Opens a terminal in `container`, drawn by the DOM renderer until
@@ -53,11 +56,12 @@ export class TerminalView {
     this.terminal.loadAddon(new UnicodeGraphemesAddon());
     this.terminal.unicode.activeVersion = "15-graphemes";
     this.terminal.open(container);
-    new ResizeObserver(() => {
+    this.resizeObserver = new ResizeObserver(() => {
       if (this.autoFit) {
         this.fit();
       }
-    }).observe(container);
+    });
+    this.resizeObserver.observe(container);
   }
 
   /**
@@ -66,9 +70,38 @@ export class TerminalView {
    */
   autoFit = true;
 
-  /** Resizes the terminal grid to fill its container. */
+  /**
+   * Resizes the terminal grid to fill its container. Does nothing while the
+   * view is hidden: the grid keeps its last size until shown again.
+   */
   fit(): void {
-    this.fitAddon.fit();
+    if (this.visible) {
+      this.fitAddon.fit();
+    }
+  }
+
+  /**
+   * Tells the view whether its container is shown. Hiding it drops WebGL for
+   * the DOM renderer, freeing its context; the caller picks the renderer again
+   * once shown. Showing it refits the grid, unless auto fit is off.
+   */
+  setVisible(visible: boolean): void {
+    this.visible = visible;
+    if (!visible) {
+      this.setRenderer("dom", () => undefined);
+    } else if (this.autoFit) {
+      this.fit();
+    }
+  }
+
+  /**
+   * Stops following the container, frees the WebGL context, if any, and
+   * disposes of the terminal. The view is unusable afterwards.
+   */
+  dispose(): void {
+    this.resizeObserver.disconnect();
+    this.setRenderer("dom", () => undefined);
+    this.terminal.dispose();
   }
 
   /**
@@ -141,13 +174,4 @@ export function showRenderer(
   if (picker.value !== wanted) {
     showStatus("WebGL is not available, DOM renderer kept");
   }
-}
-
-/** Starts `view` on the WebGL renderer, through {@link showRenderer} and its DOM fallback. */
-export function startRenderer(
-  view: TerminalView,
-  picker: RendererPicker,
-  showStatus: (message: string) => void,
-): void {
-  showRenderer(view, "webgl", picker, showStatus);
 }

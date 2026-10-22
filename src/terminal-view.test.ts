@@ -63,6 +63,10 @@ const xterm = vi.hoisted(() => {
     refresh(start: number, end: number): void {
       this.refreshed.push([start, end]);
     }
+    /** Records the disposal in the shared event log. */
+    dispose(): void {
+      state.events.push("dispose");
+    }
   }
 
   const state = {
@@ -79,9 +83,9 @@ vi.mock("@xterm/addon-fit", () => ({ FitAddon: xterm.FakeFitAddon }));
 vi.mock("@xterm/addon-unicode-graphemes", () => ({ UnicodeGraphemesAddon: xterm.FakeAddon }));
 vi.mock("@xterm/addon-webgl", () => ({ WebglAddon: xterm.FakeWebglAddon }));
 
-import { TerminalView, isRenderer, isUnicodeVersion, showRenderer, startRenderer } from "./terminal-view";
+import { TerminalView, isRenderer, isUnicodeVersion, showRenderer } from "./terminal-view";
 
-let observers: { callback: () => void; observed: unknown[] }[];
+let observers: { callback: () => void; observed: unknown[]; disconnected: boolean }[];
 
 beforeEach(() => {
   xterm.state.webglFails = false;
@@ -93,6 +97,7 @@ beforeEach(() => {
     "ResizeObserver",
     class {
       observed: unknown[] = [];
+      disconnected = false;
       /** Registers the observer so the test can fire it. */
       constructor(readonly callback: () => void) {
         observers.push(this);
@@ -100,6 +105,10 @@ beforeEach(() => {
       /** Records the observed element. */
       observe(target: unknown): void {
         this.observed.push(target);
+      }
+      /** Records that the observer stopped. */
+      disconnect(): void {
+        this.disconnected = true;
       }
     },
   );
@@ -172,6 +181,62 @@ describe("TerminalView resize", () => {
   });
 });
 
+describe("TerminalView visibility", () => {
+  it("does not fit while hidden, even when asked or resized", () => {
+    const { view, terminal } = openView();
+    const fit = fitAddonOf(terminal);
+    view.setVisible(false);
+    view.fit();
+    observers[0]?.callback();
+    view.clearAndFit();
+    expect(fit.fits).toBe(0);
+  });
+
+  it("refits once shown again", () => {
+    const { view, terminal } = openView();
+    const fit = fitAddonOf(terminal);
+    view.setVisible(false);
+    view.setVisible(true);
+    expect(fit.fits).toBe(1);
+  });
+
+  it("does not refit when shown while auto fit is off", () => {
+    const { view, terminal } = openView();
+    const fit = fitAddonOf(terminal);
+    view.autoFit = false;
+    view.setVisible(false);
+    view.setVisible(true);
+    expect(fit.fits).toBe(0);
+  });
+
+  it("drops WebGL for the DOM renderer when hidden", () => {
+    const { view } = openView();
+    view.setRenderer("webgl", vi.fn());
+    view.setVisible(false);
+    expect(xterm.state.webglAddons[0]?.disposed).toBe(1);
+    expect(view.setRenderer("webgl", vi.fn())).toBe("webgl");
+    expect(xterm.state.webglAddons).toHaveLength(2);
+  });
+});
+
+describe("TerminalView.dispose", () => {
+  it("stops observing its container, frees WebGL and disposes of the terminal", () => {
+    const { view } = openView();
+    view.setRenderer("webgl", vi.fn());
+    view.dispose();
+    expect(observers[0]?.disconnected).toBe(true);
+    expect(xterm.state.webglAddons[0]?.disposed).toBe(1);
+    expect(xterm.state.events).toEqual(["dispose"]);
+  });
+
+  it("disposes of a terminal that never used WebGL", () => {
+    const { view } = openView();
+    view.dispose();
+    expect(xterm.state.webglAddons).toHaveLength(0);
+    expect(xterm.state.events).toEqual(["dispose"]);
+  });
+});
+
 describe("TerminalView.setRenderer", () => {
   it("starts on the DOM renderer and loads WebGL on demand", () => {
     const { view, terminal } = openView();
@@ -220,12 +285,12 @@ describe("TerminalView.setRenderer", () => {
   });
 });
 
-describe("startRenderer", () => {
+describe("showRenderer, asking for WebGL", () => {
   it("asks for WebGL and shows it in the picker", () => {
     const { view, terminal } = openView();
     const picker = { value: "dom" };
     const showStatus = vi.fn();
-    startRenderer(view, picker, showStatus);
+    showRenderer(view, "webgl", picker, showStatus);
     expect(terminal.loaded).toContain(xterm.state.webglAddons[0]);
     expect(picker.value).toBe("webgl");
     expect(showStatus).not.toHaveBeenCalled();
@@ -236,7 +301,7 @@ describe("startRenderer", () => {
     xterm.state.webglFails = true;
     const picker = { value: "webgl" };
     const showStatus = vi.fn();
-    startRenderer(view, picker, showStatus);
+    showRenderer(view, "webgl", picker, showStatus);
     expect(picker.value).toBe("dom");
     expect(showStatus).toHaveBeenCalledWith("WebGL is not available, DOM renderer kept");
   });
@@ -245,7 +310,7 @@ describe("startRenderer", () => {
     const { view } = openView();
     const picker = { value: "dom" };
     const showStatus = vi.fn();
-    startRenderer(view, picker, showStatus);
+    showRenderer(view, "webgl", picker, showStatus);
     xterm.state.webglAddons[0]?.loseContext?.();
     expect(picker.value).toBe("dom");
     expect(showStatus).toHaveBeenCalledWith("WebGL context lost, back to the DOM renderer");
@@ -256,7 +321,7 @@ describe("showRenderer", () => {
   it("goes back to DOM when DOM is chosen", () => {
     const { view } = openView();
     const picker = { value: "webgl" };
-    startRenderer(view, picker, vi.fn());
+    showRenderer(view, "webgl", picker, vi.fn());
     const showStatus = vi.fn();
     showRenderer(view, "dom", picker, showStatus);
     expect(picker.value).toBe("dom");
