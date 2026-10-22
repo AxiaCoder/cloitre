@@ -50,7 +50,11 @@
         <button id="add-project" type="button">＋ Open a folder</button>
       </nav>
       <main class="work">
-        <div id="terminal"></div>
+        <div id="tab-bar" class="tab-bar" hidden>
+          <div id="tab-list" class="tab-list" role="tablist" aria-label="Sessions"></div>
+          <button id="new-tab" class="new-tab" type="button" title="New session" aria-label="New session">+</button>
+        </div>
+        <div id="terminals" class="terminals"></div>
         <section id="empty-state" class="state" hidden>
           <h1>No project open</h1>
           <p>Each folder you open becomes a project, with its own Claude Code sessions.</p>

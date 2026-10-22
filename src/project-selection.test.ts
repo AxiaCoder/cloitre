@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { chooseWorkArea, keepSelection, projectToStart } from "./project-selection";
+import { chooseWorkArea, clickAction, keepSelection } from "./project-selection";
 import type { Project } from "./projects";
 
 const alpha: Project = { id: 1, name: "alpha", path: "C:\\work\\alpha", exists: true };
@@ -37,22 +37,21 @@ describe("keepSelection", () => {
   });
 });
 
-describe("projectToStart", () => {
-  it("starts a clicked project whose folder exists", () => {
-    expect(projectToStart([alpha, gone], 1, undefined, false)).toBe(alpha);
-    expect(projectToStart([alpha, gone], 1, 2, true)).toBe(alpha);
+describe("clickAction", () => {
+  it("opens a tab in a project without tabs whose folder exists", () => {
+    expect(clickAction([alpha, gone], 1, false)).toEqual({ kind: "open", project: alpha });
   });
 
-  it("restarts the selected project once its session has ended", () => {
-    expect(projectToStart([alpha], 1, 1, false)).toBe(alpha);
+  it("shows the active tab of a project that has tabs", () => {
+    expect(clickAction([alpha], 1, true)).toEqual({ kind: "show" });
   });
 
-  it("leaves the selected project's running session alone", () => {
-    expect(projectToStart([alpha], 1, 1, true)).toBeUndefined();
+  it("shows the missing-folder state for a project whose folder is gone", () => {
+    expect(clickAction([alpha, gone], 2, false)).toEqual({ kind: "missing" });
+    expect(clickAction([alpha, gone], 2, true)).toEqual({ kind: "missing" });
   });
 
-  it("never starts a project whose folder is gone, nor an unknown one", () => {
-    expect(projectToStart([alpha, gone], 2, undefined, false)).toBeUndefined();
-    expect(projectToStart([alpha], 9, undefined, false)).toBeUndefined();
+  it("does nothing for an unknown project", () => {
+    expect(clickAction([alpha], 9, false)).toEqual({ kind: "none" });
   });
 });

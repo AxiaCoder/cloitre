@@ -32,20 +32,25 @@ export function chooseWorkArea(projects: readonly Project[], selectedId: number 
   return { kind: "terminal" };
 }
 
+/** What a click on a project does to its tabs. */
+export type ClickAction =
+  | { readonly kind: "none" }
+  | { readonly kind: "missing" }
+  | { readonly kind: "show" }
+  | { readonly kind: "open"; readonly project: Project };
+
 /**
- * Returns the project to start a session in after a click on project `clickedId`,
- * or `undefined` when none should start: an unknown project, a project whose
- * folder is gone, or the selected project while its session still runs.
+ * Chooses what a click on project `clickedId` does: nothing for an unknown
+ * project, the missing-folder state for a project whose folder is gone, its
+ * active tab when it has tabs (even one still starting), a new tab otherwise.
  */
-export function projectToStart(
-  projects: readonly Project[],
-  clickedId: number,
-  selectedId: number | undefined,
-  running: boolean,
-): Project | undefined {
+export function clickAction(projects: readonly Project[], clickedId: number, hasTabs: boolean): ClickAction {
   const clicked = findProject(projects, clickedId);
-  if (!clicked?.exists || (clickedId === selectedId && running)) {
-    return undefined;
+  if (!clicked) {
+    return { kind: "none" };
   }
-  return clicked;
+  if (!clicked.exists) {
+    return { kind: "missing" };
+  }
+  return hasTabs ? { kind: "show" } : { kind: "open", project: clicked };
 }
