@@ -138,7 +138,10 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let expected = folder.path().join(FAKE_NAME);
         fake_executable(&expected);
-        assert_eq!(find_claude(None, std::slice::from_ref(&expected)), Ok(expected));
+        assert_eq!(
+            find_claude(None, std::slice::from_ref(&expected)),
+            Ok(expected)
+        );
     }
 
     #[test]
