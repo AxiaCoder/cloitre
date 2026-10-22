@@ -598,9 +598,11 @@ mod tests {
         None
     }
 
+    /// Spawns in `registry` a session whose process starts a hidden `ping` in its
+    /// own console, then waits for it; returns the session id and a guard on that
+    /// `ping` process.
     #[cfg(windows)]
-    #[test]
-    fn kill_stops_a_process_the_session_started_in_its_own_console() {
+    fn spawn_session_with_detached_child(registry: &PtyRegistry) -> (u32, KillOnDrop) {
         let mut command = CommandBuilder::new("powershell.exe");
         command.args([
             "-NoProfile",
@@ -608,7 +610,6 @@ mod tests {
             "$p = Start-Process ping -ArgumentList '-n','60','127.0.0.1' -WindowStyle Hidden -PassThru; \
              Write-Output \"cloitre-child=$($p.Id)\"; Start-Sleep 60",
         ]);
-        let registry = PtyRegistry::default();
         let (output_tx, output_rx) = mpsc::channel();
         let id = registry
             .spawn(
@@ -621,21 +622,54 @@ mod tests {
                 |_| {},
             )
             .unwrap();
-        let child = wait_for_number(&registry, id, &output_rx, "cloitre-child")
+        let child = wait_for_number(registry, id, &output_rx, "cloitre-child")
             .expect("the session prints the id of the process it started");
-        let _guard = KillOnDrop(child);
+        let guard = KillOnDrop(child);
         assert!(process_is_alive(child), "child {child} never ran");
+        (id, guard)
+    }
+
+    /// Waits up to 5 seconds for process `pid` to end; tells whether it did.
+    #[cfg(windows)]
+    fn process_ends_soon(pid: u32) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while process_is_alive(pid) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(200));
+        }
+        !process_is_alive(pid)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn kill_stops_a_process_the_session_started_in_its_own_console() {
+        let registry = PtyRegistry::default();
+        let (id, child) = spawn_session_with_detached_child(&registry);
 
         assert_eq!(registry.kill(id), Ok(()));
 
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while process_is_alive(child) && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(200));
-        }
         assert!(
-            !process_is_alive(child),
-            "process {child}, started by the session, survived kill"
+            process_ends_soon(child.0),
+            "process {}, started by the session, survived kill",
+            child.0
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn kill_all_stops_the_processes_every_session_started() {
+        let registry = PtyRegistry::default();
+        let (_, first) = spawn_session_with_detached_child(&registry);
+        let (_, second) = spawn_session_with_detached_child(&registry);
+
+        registry.kill_all();
+
+        for child in [&first, &second] {
+            assert!(
+                process_ends_soon(child.0),
+                "process {}, started by a session, survived kill_all",
+                child.0
+            );
+        }
     }
 
     #[test]
