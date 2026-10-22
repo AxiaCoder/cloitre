@@ -89,6 +89,10 @@ mod tests {
                 .collect();
         assert_eq!(capability_files, ["default.json"]);
 
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert!(config["app"]["security"].get("capabilities").is_none());
+
         let capability: serde_json::Value =
             serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
         let mut keys: Vec<&str> = capability
