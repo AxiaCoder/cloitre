@@ -214,12 +214,13 @@ async function refreshProjects(): Promise<void> {
 }
 
 /**
- * Selects project `id` and starts a session in its folder, unless that
- * project's session already runs. Selecting a project whose folder is gone
- * stops the running session and shows the missing-folder state; so does a
- * session start that Rust refuses because the folder has just gone.
+ * Reloads the project list, then selects project `id` and starts a session in
+ * its folder, unless that project's session already runs. Selecting a project
+ * whose folder is gone stops the running session and shows the missing-folder
+ * state; so does a session start that Rust refuses because the folder has just gone.
  */
 async function selectProject(id: number): Promise<void> {
+  await refreshProjects();
   const toStart = projectToStart(projects, id, selectedId, slot.current !== undefined);
   selectedId = keepSelection(projects, id);
   renderProjects();
@@ -238,7 +239,6 @@ async function openFolder(): Promise<void> {
   if (project === null) {
     return;
   }
-  await refreshProjects();
   await selectProject(project.id);
 }
 
@@ -252,7 +252,6 @@ async function relocateSelected(): Promise<void> {
   if (moved === null) {
     return;
   }
-  await refreshProjects();
   await selectProject(moved.id);
 }
 
