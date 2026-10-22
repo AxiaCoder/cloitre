@@ -131,7 +131,13 @@ impl PtyRegistry {
         #[cfg(windows)]
         let job = child
             .process_id()
-            .and_then(|pid| windows_job::Job::assign(pid).ok());
+            .and_then(|pid| match windows_job::Job::assign(pid) {
+                Ok(job) => Some(job),
+                Err(error) => {
+                    eprintln!("session process {pid} left out of its job: {error}");
+                    None
+                }
+            });
         let master: SharedMaster = Arc::new(Mutex::new(Some(pair.master)));
 
         let (drained_tx, drained_rx) = mpsc::channel::<()>();
