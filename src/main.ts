@@ -138,7 +138,7 @@ let warningClosed = false;
 async function startSession(folder: string): Promise<boolean> {
   try {
     const running = await deck.claim(() =>
-      slot.start(folder, prepareScreen, {
+      slot.start(folder, 1, prepareScreen, {
         onOutput: (bytes) => {
           view.terminal.write(bytes);
         },

@@ -28,7 +28,8 @@ fn output_sink(
     }
 }
 
-/// Starts `claude` with no argument in `folder`, in a pseudo-terminal of `cols` x `rows`.
+/// Starts `claude` with no argument in `folder`, in a pseudo-terminal of `cols` x `rows`,
+/// with `CLOITRE_TAB_ID` set to `tab_id`.
 ///
 /// Raw output bytes are sent to `on_output`; the exit code is sent once to
 /// `on_exit`. The session is recorded to a new file of the recordings folder,
@@ -36,7 +37,8 @@ fn output_sink(
 ///
 /// # Errors
 /// A folder that is not absolute, missing, not a directory or not the folder of
-/// a project, or a project whose folder no longer exists; a zero size;
+/// a project, or a project whose folder no longer exists; a zero size; a zero
+/// tab id;
 /// `claude` found neither on the `PATH` nor at its install locations; a
 /// pseudo-terminal failure; a page reload at any point after the command is
 /// received.
@@ -49,13 +51,15 @@ pub fn pty_spawn(
     folder: String,
     cols: u16,
     rows: u16,
+    tab_id: u32,
     on_output: Channel<InvokeResponseBody>,
     on_exit: Channel<u32>,
 ) -> Result<u32, AppError> {
     let epoch = registry.epoch();
     let folder = projects.spawn_folder(&folder)?;
     let size = pty_size(cols, rows)?;
-    let command = claude_command(&resolve_claude()?, &folder);
+    let tab = crate::launch::tab_id(tab_id)?;
+    let command = claude_command(&resolve_claude()?, &folder, tab);
     let recording = recordings.create(cols, rows);
     let recorder = recording.as_ref().map(|new| Arc::clone(&new.recorder));
     let spawned = registry.spawn(

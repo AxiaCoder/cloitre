@@ -21,6 +21,8 @@ pub enum AppError {
     SpawnCancelled,
     /// A terminal size had zero columns or zero rows.
     InvalidSize,
+    /// A tab id was 0: tab ids start at 1.
+    InvalidTabId,
     /// No session is registered under this id.
     UnknownPty(u32),
     /// The pseudo-terminal layer failed; carries the underlying message.
@@ -69,6 +71,7 @@ impl fmt::Display for AppError {
                 "the session was stopped because the page reloaded while it was starting"
             ),
             Self::InvalidSize => write!(f, "the terminal size must be at least 1x1"),
+            Self::InvalidTabId => write!(f, "the tab id must be at least 1"),
             Self::UnknownPty(id) => write!(f, "no session with id {id}"),
             Self::Pty(message) => write!(f, "pseudo-terminal error: {message}"),
             Self::InvalidRecordingName => write!(f, "not a recording name"),
@@ -128,6 +131,14 @@ mod tests {
         assert_eq!(
             AppError::ClaudeNotFound(locations).to_string(),
             "claude was not found: looked on the PATH, then in first, second"
+        );
+    }
+
+    #[test]
+    fn invalid_tab_id_says_where_ids_start() {
+        assert_eq!(
+            AppError::InvalidTabId.to_string(),
+            "the tab id must be at least 1"
         );
     }
 

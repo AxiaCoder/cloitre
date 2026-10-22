@@ -38,7 +38,7 @@ export class SessionSlot {
 
   /**
    * Stops the current session, calls `prepare` and starts `claude` in `folder`
-   * with the size `prepare` returns. `handlers` only hear from this session; its
+   * for tab `tabId`, with the size `prepare` returns. `handlers` only hear from this session; its
    * exit releases it, after `onExit` ran, and output that arrives after the exit
    * notice still reaches `onOutput` until the next start or stop.
    *
@@ -46,7 +46,12 @@ export class SessionSlot {
    * stop came first: that session is then killed. Rejects with the Rust refusal
    * message, leaving no session running.
    */
-  async start(folder: string, prepare: () => TerminalSize, handlers: PtyHandlers): Promise<boolean> {
+  async start(
+    folder: string,
+    tabId: number,
+    prepare: () => TerminalSize,
+    handlers: PtyHandlers,
+  ): Promise<boolean> {
     const stopped = this.stop();
     const mine = this.generation;
     await stopped;
@@ -56,7 +61,7 @@ export class SessionSlot {
     const spawnedSize = prepare();
     this.size = spawnedSize;
     let exited = false;
-    const spawning = spawnPty(folder, spawnedSize.cols, spawnedSize.rows, {
+    const spawning = spawnPty(folder, tabId, spawnedSize.cols, spawnedSize.rows, {
       onOutput: (bytes) => {
         if (mine === this.generation) {
           handlers.onOutput(bytes);
