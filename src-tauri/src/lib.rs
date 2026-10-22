@@ -79,4 +79,59 @@ mod tests {
     fn page_load_finish_keeps_sessions() {
         assert!(!stops_sessions(PageLoadEvent::Finished));
     }
+
+    #[test]
+    fn main_window_gets_exactly_the_closed_list_of_permissions() {
+        let capability_files: Vec<String> =
+            std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/capabilities"))
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+        assert_eq!(capability_files, ["default.json"]);
+
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert!(config["app"]["security"].get("capabilities").is_none());
+
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        let mut keys: Vec<&str> = capability
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "$schema",
+                "description",
+                "identifier",
+                "permissions",
+                "windows"
+            ]
+        );
+        assert_eq!(capability["windows"], serde_json::json!(["main"]));
+        let mut granted: Vec<&str> = capability["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|permission| permission.as_str().unwrap())
+            .collect();
+        granted.sort_unstable();
+        let mut expected = vec![
+            "allow-pty-spawn",
+            "allow-pty-write",
+            "allow-pty-resize",
+            "allow-pty-kill",
+            "allow-recording-mark",
+            "allow-recording-current",
+            "allow-recording-list",
+            "allow-recording-read",
+            "dialog:allow-open",
+        ];
+        expected.sort_unstable();
+        assert_eq!(granted, expected);
+    }
 }

@@ -1,4 +1,5 @@
 use std::fmt;
+use std::path::PathBuf;
 
 use serde::{Serialize, Serializer};
 
@@ -13,8 +14,11 @@ pub enum AppError {
     FolderNotFound,
     /// The path exists but is not a directory.
     NotADirectory,
-    /// No `claude` executable was found on the `PATH`.
-    ClaudeNotFound,
+    /// No `claude` executable was found, neither on the `PATH` nor at the
+    /// install locations it carries, in the order they were tried.
+    ClaudeNotFound(Vec<PathBuf>),
+    /// The page reloaded while the session was starting: its process was stopped.
+    SpawnCancelled,
     /// A terminal size had zero columns or zero rows.
     InvalidSize,
     /// No session is registered under this id.
@@ -38,7 +42,18 @@ impl fmt::Display for AppError {
             Self::FolderNotAbsolute => write!(f, "the folder path must be absolute"),
             Self::FolderNotFound => write!(f, "the folder does not exist"),
             Self::NotADirectory => write!(f, "the path is not a folder"),
-            Self::ClaudeNotFound => write!(f, "claude was not found on the PATH"),
+            Self::ClaudeNotFound(locations) => {
+                write!(f, "claude was not found: looked on the PATH")?;
+                for (index, location) in locations.iter().enumerate() {
+                    let joiner = if index == 0 { ", then in " } else { ", " };
+                    write!(f, "{joiner}{}", location.display())?;
+                }
+                Ok(())
+            }
+            Self::SpawnCancelled => write!(
+                f,
+                "the session was stopped because the page reloaded while it was starting"
+            ),
             Self::InvalidSize => write!(f, "the terminal size must be at least 1x1"),
             Self::UnknownPty(id) => write!(f, "no session with id {id}"),
             Self::Pty(message) => write!(f, "pseudo-terminal error: {message}"),
@@ -67,6 +82,27 @@ mod tests {
     fn serializes_as_its_message() {
         let json = serde_json::to_string(&AppError::UnknownPty(7)).unwrap();
         assert_eq!(json, "\"no session with id 7\"");
+    }
+
+    #[test]
+    fn claude_not_found_lists_every_location_tried() {
+        assert_eq!(
+            AppError::ClaudeNotFound(vec![]).to_string(),
+            "claude was not found: looked on the PATH"
+        );
+        let locations = vec![PathBuf::from("first"), PathBuf::from("second")];
+        assert_eq!(
+            AppError::ClaudeNotFound(locations).to_string(),
+            "claude was not found: looked on the PATH, then in first, second"
+        );
+    }
+
+    #[test]
+    fn spawn_cancelled_says_the_page_reloaded() {
+        assert_eq!(
+            AppError::SpawnCancelled.to_string(),
+            "the session was stopped because the page reloaded while it was starting"
+        );
     }
 
     #[test]
