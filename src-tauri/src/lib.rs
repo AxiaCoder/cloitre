@@ -2,12 +2,14 @@ mod commands;
 mod error;
 mod folder;
 mod launch;
+mod projects;
 mod pty;
 mod recording;
 
 use tauri::webview::PageLoadEvent;
 use tauri::{Manager, RunEvent};
 
+use crate::projects::ProjectStore;
 use crate::pty::PtyRegistry;
 use crate::recording::RecordingRegistry;
 
@@ -21,8 +23,9 @@ fn stops_sessions(event: PageLoadEvent) -> bool {
 ///
 /// Every session is also stopped when the page starts loading, so a reload of
 /// the webview leaves no `claude` running that the new page cannot reach.
-/// Recordings are kept in the `recordings` folder of the app data folder, and
-/// closed whenever their sessions are stopped.
+/// The project list is kept in `projects.json` of the app data folder.
+/// Recordings are kept in its `recordings` folder, and closed whenever their
+/// sessions are stopped.
 ///
 /// # Panics
 /// When the Tauri runtime cannot start.
@@ -32,8 +35,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(PtyRegistry::default())
         .setup(|app| {
-            let dir = app.path().app_data_dir()?.join("recordings");
-            app.manage(RecordingRegistry::new(dir));
+            let data = app.path().app_data_dir()?;
+            app.manage(ProjectStore::open(data.join("projects.json")));
+            app.manage(RecordingRegistry::new(data.join("recordings")));
             Ok(())
         })
         .on_page_load(|webview, payload| {
@@ -52,7 +56,11 @@ pub fn run() {
             commands::recording_mark,
             commands::recording_current,
             commands::recording_list,
-            commands::recording_read
+            commands::recording_read,
+            commands::project_list,
+            commands::project_add,
+            commands::project_relocate,
+            commands::project_remove
         ])
         .build(tauri::generate_context!())
         .expect("error while building the app")
@@ -129,7 +137,10 @@ mod tests {
             "allow-recording-current",
             "allow-recording-list",
             "allow-recording-read",
-            "dialog:allow-open",
+            "allow-project-list",
+            "allow-project-add",
+            "allow-project-relocate",
+            "allow-project-remove",
         ];
         expected.sort_unstable();
         assert_eq!(granted, expected);

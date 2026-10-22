@@ -34,10 +34,150 @@ body {
   opacity: 0.8;
 }
 
+.warning {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px;
+  background: #5a4500;
+  color: #fff;
+}
+
+.warning[hidden] {
+  display: none;
+}
+
+#warning-text {
+  flex: 1;
+}
+
+.workspace {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  width: 220px;
+  flex-shrink: 0;
+  background: #181818;
+  border-right: 1px solid #333;
+}
+
+.rail h2 {
+  margin: 10px 10px 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+#project-list {
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.project {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.project:hover {
+  background: #252525;
+}
+
+.project.active {
+  background: #2d3b55;
+}
+
+.project-name,
+.project-path {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-path {
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+.project.missing .project-name::after {
+  content: " ⚠";
+  color: #e5a50a;
+}
+
+#add-project {
+  margin: 8px;
+}
+
+.work {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: #111;
+  text-align: center;
+}
+
+.state[hidden] {
+  display: none;
+}
+
+.state h1 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.state p {
+  margin: 0;
+  opacity: 0.8;
+}
+
+.state .path {
+  font-family: monospace;
+}
+
+.state .actions {
+  display: flex;
+  gap: 8px;
+}
+
+.primary {
+  background: #3b6fd4;
+  color: #fff;
+  border: 0;
+  padding: 6px 14px;
+}
+
 #terminal {
   flex: 1;
   min-height: 0;
   padding: 4px;
   overflow: hidden;
   background: #000;
+  isolation: isolate;
 }

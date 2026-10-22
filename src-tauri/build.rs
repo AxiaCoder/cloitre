@@ -14,6 +14,10 @@ fn main() {
             "recording_current",
             "recording_list",
             "recording_read",
+            "project_list",
+            "project_add",
+            "project_relocate",
+            "project_remove",
         ]),
     ))
     .expect("failed to run the Tauri build script");

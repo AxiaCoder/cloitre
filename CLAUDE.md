@@ -10,7 +10,7 @@ Early stage. The work is tracked in GitHub issues, milestone POC. Start with iss
 
 ## Architecture rules
 
-- **Rust stays thin.** It spawns `claude` in a folder, reads, writes, resizes and stops the session (plus the raw-byte recording during the spike). Everything else is TypeScript in the webview.
+- **Rust stays thin.** It spawns `claude` in a folder, reads, writes, resizes and stops the session (plus the raw-byte recording during the spike). It also owns the project list and opens the folder picker itself, so the folders `claude` may run in never come from the webview. Everything else is TypeScript in the webview.
 - **The webview can run nothing but `claude`, in a validated project folder.**
   - Rust builds the command line itself from a closed choice: New session, or Resume with a session id. The webview never passes raw arguments, otherwise `--dangerously-skip-permissions`, `--mcp-config` or `-p` would get through.
   - Rust validates the folder: canonical path, compared with the registered projects. A check made by the webview protects nothing.

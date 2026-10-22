@@ -8,8 +8,11 @@
   </head>
 
   <body>
+    <div id="warning" class="warning" role="alert" hidden>
+      <span id="warning-text"></span>
+      <button id="warning-close" type="button" aria-label="Close the warning">×</button>
+    </div>
     <header class="controls">
-      <button id="pick-folder" type="button">Choose a folder</button>
       <label>
         Renderer
         <select id="renderer">
@@ -38,8 +41,31 @@
       <button id="replay" type="button">Replay</button>
       <button id="next-mark" type="button">Next mark</button>
       <button id="stop-replay" type="button">Stop replay</button>
-      <span id="status">No folder chosen</span>
+      <span id="status">No session</span>
     </header>
-    <div id="terminal"></div>
+    <div class="workspace">
+      <nav class="rail" aria-label="Projects">
+        <h2>Projects</h2>
+        <ul id="project-list"></ul>
+        <button id="add-project" type="button">＋ Open a folder</button>
+      </nav>
+      <main class="work">
+        <div id="terminal"></div>
+        <section id="empty-state" class="state" hidden>
+          <h1>No project open</h1>
+          <p>Each folder you open becomes a project, with its own Claude Code sessions.</p>
+          <button id="empty-open" class="primary" type="button">Open a folder</button>
+        </section>
+        <section id="missing-state" class="state" hidden>
+          <h1>The project folder cannot be found</h1>
+          <p id="missing-path" class="path"></p>
+          <p>It may have been moved or renamed.</p>
+          <div class="actions">
+            <button id="relocate" class="primary" type="button">Choose another folder</button>
+            <button id="remove" type="button">Remove the project</button>
+          </div>
+        </section>
+      </main>
+    </div>
   </body>
 </html>
