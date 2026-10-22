@@ -476,6 +476,69 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn two_letter_cases_of_one_folder_make_one_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let alpha = folder(dir.path(), "alpha");
+        let shouted = PathBuf::from(alpha.to_str().unwrap().to_uppercase());
+        let store = store_in(dir.path());
+        let first = store.add(&alpha).unwrap();
+        assert_eq!(store.add(&shouted).unwrap(), first);
+        assert_eq!(store.list().projects.len(), 1);
+        assert_eq!(store.spawn_folder(shouted.to_str().unwrap()), Ok(alpha));
+    }
+
+    #[test]
+    fn adding_a_folder_that_does_not_exist_saves_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        assert_eq!(
+            store.add(&dir.path().join("nowhere")),
+            Err(AppError::FolderNotFound)
+        );
+        assert!(store.list().projects.is_empty());
+        assert!(!dir.path().join("projects.json").exists());
+    }
+
+    #[test]
+    fn relocating_onto_its_own_folder_under_another_spelling_keeps_the_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let alpha = folder(dir.path(), "alpha");
+        let store = store_in(dir.path());
+        let a = store.add(&alpha).unwrap();
+        assert_eq!(store.relocate(a.id, &alpha.join("..").join("alpha")), Ok(a));
+    }
+
+    #[test]
+    fn relocating_a_project_whose_folder_is_gone_lets_it_start_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let alpha = folder(dir.path(), "alpha");
+        let store = store_in(dir.path());
+        let a = store.add(&alpha).unwrap();
+        fs::remove_dir(&alpha).unwrap();
+        let moved_to = folder(dir.path(), "alpha-moved");
+
+        let moved = store.relocate(a.id, &moved_to).unwrap();
+        assert!(moved.exists);
+        assert_eq!(store.spawn_folder(&moved.path), Ok(moved_to));
+        assert_eq!(store.spawn_folder(&a.path), Err(AppError::FolderNotFound));
+        assert_eq!(store_in(dir.path()).list(), store.list());
+    }
+
+    #[test]
+    fn relocating_refuses_a_folder_that_does_not_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let alpha = folder(dir.path(), "alpha");
+        let store = store_in(dir.path());
+        let a = store.add(&alpha).unwrap();
+        assert_eq!(
+            store.relocate(a.id, &dir.path().join("nowhere")),
+            Err(AppError::FolderNotFound)
+        );
+        assert_eq!(store.list().projects, [a]);
+    }
+
     #[test]
     fn relocating_renames_the_project_after_its_folder() {
         let dir = tempfile::tempdir().unwrap();
@@ -575,6 +638,63 @@ mod tests {
     }
 
     #[test]
+    fn a_file_without_a_version_is_copied_aside_and_the_list_starts_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let unversioned = r#"{ "projects": [] }"#;
+        fs::write(dir.path().join("projects.json"), unversioned).unwrap();
+        let list = store_in(dir.path()).list();
+        assert!(list.projects.is_empty());
+        let warning = list.warning.unwrap();
+        assert!(warning.contains("no format version"), "{warning}");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("projects.json.unreadable")).unwrap(),
+            unversioned
+        );
+    }
+
+    #[test]
+    fn a_file_whose_content_is_not_a_project_list_is_copied_aside() {
+        let dir = tempfile::tempdir().unwrap();
+        let malformed = r#"{ "version": 1, "projects": "alpha" }"#;
+        fs::write(dir.path().join("projects.json"), malformed).unwrap();
+        let list = store_in(dir.path()).list();
+        assert!(list.projects.is_empty());
+        let warning = list.warning.unwrap();
+        assert!(warning.contains("not a project list"), "{warning}");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("projects.json.unreadable")).unwrap(),
+            malformed
+        );
+    }
+
+    #[test]
+    fn a_failed_save_leaves_the_previous_file_readable() {
+        let dir = tempfile::tempdir().unwrap();
+        let alpha = folder(dir.path(), "alpha");
+        let beta = folder(dir.path(), "beta");
+        let store = store_in(dir.path());
+        store.add(&alpha).unwrap();
+        let before = fs::read_to_string(dir.path().join("projects.json")).unwrap();
+        let temp = dir
+            .path()
+            .join(format!("projects.json.{}.tmp", std::process::id()));
+        fs::create_dir(&temp).unwrap();
+
+        assert!(matches!(
+            store.add(&beta),
+            Err(AppError::ProjectsNotSaved(_))
+        ));
+        assert_eq!(
+            fs::read_to_string(dir.path().join("projects.json")).unwrap(),
+            before
+        );
+        assert_eq!(store.list().projects.len(), 1);
+        let reopened = store_in(dir.path()).list();
+        assert_eq!(reopened.warning, None);
+        assert_eq!(reopened.projects, store.list().projects);
+    }
+
+    #[test]
     fn a_file_that_cannot_be_copied_aside_is_never_overwritten() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("projects.json");
@@ -633,7 +753,13 @@ mod tests {
         store.add(&folder(dir.path(), "a")).unwrap();
         store.add(&folder(dir.path(), "b")).unwrap();
         store.remove(2).unwrap();
-        assert_eq!(store_in(dir.path()).add(&folder(dir.path(), "c")).unwrap().id, 3);
+        assert_eq!(
+            store_in(dir.path())
+                .add(&folder(dir.path(), "c"))
+                .unwrap()
+                .id,
+            3
+        );
     }
 
     #[test]

@@ -178,4 +178,20 @@ mod tests {
             "the folder is already the folder of project beta"
         );
     }
+
+    #[test]
+    fn project_list_errors_say_why_nothing_was_saved() {
+        assert_eq!(
+            AppError::UnsupportedFolderPath.to_string(),
+            "the folder path has characters the project list cannot store"
+        );
+        assert_eq!(
+            AppError::ProjectsNotSaved("disk full".into()).to_string(),
+            "the project list could not be saved: disk full"
+        );
+        assert_eq!(
+            AppError::ProjectsReadOnly.to_string(),
+            "the project list is read-only until the app restarts: its file could not be loaded nor copied aside"
+        );
+    }
 }
