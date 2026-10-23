@@ -1316,6 +1316,41 @@ mod tests {
     }
 
     #[test]
+    fn a_saved_selection_of_a_gone_project_selects_the_first_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let saved = r#"{ "version": 1, "selected": 9, "projects": [{ "id": 4, "name": "a", "path": "nowhere", "tabs": [] }, { "id": 7, "name": "b", "path": "elsewhere", "tabs": [] }] }"#;
+        fs::write(dir.path().join("projects.json"), saved).unwrap();
+        assert_eq!(store_in(dir.path()).list().selected, Some(4));
+    }
+
+    #[test]
+    fn removing_the_selected_first_project_selects_the_next_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let b = store.add(&folder(dir.path(), "b")).unwrap();
+        store.add(&folder(dir.path(), "c")).unwrap();
+        store.select(a.id).unwrap();
+        store.remove(a.id).unwrap();
+        assert_eq!(saved_selection(dir.path()), b.id);
+    }
+
+    #[test]
+    fn selecting_an_unknown_project_on_a_read_only_store_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("projects.json")).unwrap();
+        let store = store_in(dir.path());
+        lock(&store.state).file.projects = vec![Project {
+            id: 1,
+            name: "a".to_owned(),
+            path: "nowhere".to_owned(),
+            tabs: Vec::new(),
+        }];
+        assert_eq!(store.select(5), Err(AppError::UnknownProject(5)));
+        assert_eq!(store.list().selected, Some(1));
+    }
+
+    #[test]
     fn setting_a_session_of_an_unknown_tab_does_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let store = store_in(dir.path());
