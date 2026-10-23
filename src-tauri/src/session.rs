@@ -272,10 +272,11 @@ impl PendingSessions {
                 (Some(tab), Some(id)) => save(tab.get(), id),
                 _ => Ok(()),
             };
-            if saved.is_err() && fs::hard_link(&claimed, &path).is_err() && !path.exists() {
-                continue;
+            if saved.is_err() {
+                put_back(&claimed, &path, |from, to| fs::hard_link(from, to));
+            } else {
+                let _ = fs::remove_file(&claimed);
             }
-            let _ = fs::remove_file(&claimed);
         }
     }
 
@@ -283,6 +284,20 @@ impl PendingSessions {
     pub fn discard(&self, tab: u32) {
         let _ = fs::remove_file(self.dir.join(tab.to_string()));
     }
+}
+
+/// Moves the claimed file `claimed` back to `path`, unless the hook wrote a
+/// newer file there, in which case `claimed` is deleted.
+///
+/// `link` is tried first, so a file the hook writes meanwhile is not
+/// replaced; when it fails and `path` is still free, `claimed` is renamed
+/// instead. `claimed` stays in place only if that rename fails too.
+fn put_back(claimed: &Path, path: &Path, link: impl FnOnce(&Path, &Path) -> std::io::Result<()>) {
+    if link(claimed, path).is_err() && !path.exists() {
+        let _ = fs::rename(claimed, path);
+        return;
+    }
+    let _ = fs::remove_file(claimed);
 }
 
 #[cfg(test)]
@@ -597,6 +612,19 @@ mod tests {
         });
         assert_eq!(fs::read_to_string(sessions.join("3")).unwrap(), NEWER);
         assert_eq!(file_names(&sessions), ["3"]);
+    }
+
+    #[test]
+    fn an_unsaved_id_goes_back_under_its_name_without_hard_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let claimed = dir.path().join("3.applying");
+        let path = dir.path().join("3");
+        fs::write(&claimed, SAMPLE).unwrap();
+        put_back(&claimed, &path, |_, _| {
+            Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+        });
+        assert_eq!(fs::read_to_string(&path).unwrap(), SAMPLE);
+        assert_eq!(file_names(dir.path()), ["3"]);
     }
 
     #[test]
