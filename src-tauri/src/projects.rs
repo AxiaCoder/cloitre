@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::AppError;
 use crate::folder::validate_folder;
 use crate::pty::lock;
+use crate::session::{LaunchMode, SessionId};
 
 /// The format version this app reads and writes in `projects.json`.
 pub const FORMAT_VERSION: u64 = 1;
@@ -21,9 +22,26 @@ pub struct Project {
     pub name: String,
     /// The canonical path of the project folder, as it was when last chosen.
     pub path: String,
-    /// The project's tabs; their shape belongs to the tab issues.
+    /// The project's tabs, in the order they were opened.
     #[serde(default)]
-    pub tabs: Vec<serde_json::Value>,
+    pub tabs: Vec<Tab>,
+}
+
+/// One tab as stored in the file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Tab {
+    /// At least 1, unique across every project of the file, never reused while
+    /// the file lives.
+    pub id: u32,
+    /// The Claude Code session id the tab resumes.
+    pub session_id: SessionId,
+}
+
+/// One tab as the webview receives it: its session id stays in Rust.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TabView {
+    /// The tab id.
+    pub id: u32,
 }
 
 /// The whole content of `projects.json`.
@@ -37,6 +55,10 @@ pub struct ProjectsFile {
     /// then reads as 0 and the largest id plus one applies.
     #[serde(default)]
     pub next_id: u32,
+    /// The smallest id a new tab may take, across every project. Absent from
+    /// older files: it then reads as 0 and the largest tab id plus one applies.
+    #[serde(default)]
+    pub next_tab_id: u32,
 }
 
 impl Default for ProjectsFile {
@@ -46,6 +68,7 @@ impl Default for ProjectsFile {
             version: FORMAT_VERSION,
             projects: Vec::new(),
             next_id: 1,
+            next_tab_id: 1,
         }
     }
 }
@@ -61,6 +84,8 @@ pub struct ProjectView {
     pub path: String,
     /// Whether that path still names a folder.
     pub exists: bool,
+    /// The project's tabs, in the order they were opened.
+    pub tabs: Vec<TabView>,
 }
 
 /// What `project_list` returns: the projects and the load warning, if any.
@@ -186,7 +211,7 @@ impl ProjectStore {
         Ok(view(&state.file.projects[index]))
     }
 
-    /// Removes project `id`.
+    /// Removes project `id`, with its tabs.
     ///
     /// # Errors
     /// An unknown id; a read-only store; a failed save.
@@ -198,27 +223,81 @@ impl ProjectStore {
         self.commit(&mut state, next)
     }
 
-    /// Validates `raw`, a folder path sent by the webview, and returns its
-    /// canonical form, only when it is the folder of a project.
+    /// Opens a new tab in project `project`, with a new session id, and returns it.
     ///
     /// # Errors
-    /// [`AppError::ProjectFolderMissing`] when `raw` is the stored path of a
-    /// project whose folder no longer exists; the errors of
-    /// [`validate_folder`]; [`AppError::FolderNotRegistered`] when the folder
-    /// is no project's.
-    pub fn spawn_folder(&self, raw: &str) -> Result<PathBuf, AppError> {
-        let state = lock(&self.state);
-        if let Some(project) = state.file.projects.iter().find(|p| p.path == raw)
-            && !Path::new(&project.path).is_dir()
-        {
-            return Err(AppError::ProjectFolderMissing(project.name.clone()));
+    /// An unknown project id; a read-only store; a failed save.
+    pub fn open_tab(&self, project: u32) -> Result<TabView, AppError> {
+        let mut state = lock(&self.state);
+        let index = position(&state.file, project)?;
+        let mut next = state.file.clone();
+        let id = new_tab_id(&next);
+        next.next_tab_id = id + 1;
+        next.projects[index].tabs.push(Tab {
+            id,
+            session_id: SessionId::generate(),
+        });
+        self.commit(&mut state, next)?;
+        Ok(TabView { id })
+    }
+
+    /// Closes tab `tab`: it is removed from its project.
+    ///
+    /// # Errors
+    /// [`AppError::UnknownTab`]; a read-only store; a failed save.
+    pub fn close_tab(&self, tab: u32) -> Result<(), AppError> {
+        let mut state = lock(&self.state);
+        let (project, index) = tab_position(&state.file, tab)?;
+        let mut next = state.file.clone();
+        next.projects[project].tabs.remove(index);
+        self.commit(&mut state, next)
+    }
+
+    /// Returns the canonical folder and the session id to start tab `tab` with.
+    ///
+    /// For [`LaunchMode::New`] a new session id is generated and saved before it
+    /// is returned; for [`LaunchMode::Resume`] the stored one is returned.
+    ///
+    /// # Errors
+    /// [`AppError::UnknownTab`]; [`AppError::ProjectFolderMissing`] when the
+    /// project's folder no longer exists; the errors of [`validate_folder`];
+    /// [`AppError::FolderNotRegistered`] when the folder no longer resolves to
+    /// this project; for a new session, a read-only store or a failed save.
+    pub fn launch(&self, tab: u32, mode: LaunchMode) -> Result<(PathBuf, SessionId), AppError> {
+        let mut state = lock(&self.state);
+        let (project, index) = tab_position(&state.file, tab)?;
+        let folder = spawn_folder(&state.file, &state.file.projects[project].path)?;
+        match mode {
+            LaunchMode::Resume => Ok((
+                folder,
+                state.file.projects[project].tabs[index].session_id.clone(),
+            )),
+            LaunchMode::New => {
+                let session_id = SessionId::generate();
+                let mut next = state.file.clone();
+                next.projects[project].tabs[index].session_id = session_id.clone();
+                self.commit(&mut state, next)?;
+                Ok((folder, session_id))
+            }
         }
-        let canonical = validate_folder(raw)?;
-        if find_by_folder(&state.file, &canonical).is_some() {
-            Ok(canonical)
-        } else {
-            Err(AppError::FolderNotRegistered)
+    }
+
+    /// Makes `session_id` the session id of tab `tab`. Does nothing when no
+    /// tab has that id or when it already has that session id.
+    ///
+    /// # Errors
+    /// A read-only store; a failed save.
+    pub fn set_session(&self, tab: u32, session_id: SessionId) -> Result<(), AppError> {
+        let mut state = lock(&self.state);
+        let Ok((project, index)) = tab_position(&state.file, tab) else {
+            return Ok(());
+        };
+        if state.file.projects[project].tabs[index].session_id == session_id {
+            return Ok(());
         }
+        let mut next = state.file.clone();
+        next.projects[project].tabs[index].session_id = session_id;
+        self.commit(&mut state, next)
     }
 
     /// Saves `next` to the file, then makes it the current list.
@@ -257,10 +336,27 @@ fn load(file: &Path) -> Loaded {
         }
         None => return Loaded::Unreadable("it has no format version".to_owned()),
     }
-    match serde_json::from_value(value) {
-        Ok(content) => Loaded::Ready(content),
-        Err(error) => Loaded::Unreadable(format!("its content is not a project list: {error}")),
+    let content: ProjectsFile = match serde_json::from_value(value) {
+        Ok(content) => content,
+        Err(error) => {
+            return Loaded::Unreadable(format!("its content is not a project list: {error}"));
+        }
+    };
+    match invalid_tab(&content) {
+        Some(id) => Loaded::Unreadable(format!("it has a tab id of 0 or used twice: {id}")),
+        None => Loaded::Ready(content),
     }
+}
+
+/// Returns the first tab id of `file` that is 0 or already used by an earlier
+/// tab of any project, or `None` when every tab id is valid.
+fn invalid_tab(file: &ProjectsFile) -> Option<u32> {
+    let mut seen = std::collections::HashSet::new();
+    file.projects
+        .iter()
+        .flat_map(|project| &project.tabs)
+        .map(|tab| tab.id)
+        .find(|&id| id == 0 || !seen.insert(id))
 }
 
 /// Copies the unreadable `file` aside and returns the empty state to start
@@ -303,12 +399,23 @@ pub fn unreadable_copy_path(file: &Path) -> PathBuf {
     candidate
 }
 
-/// Writes `content` to `file` through a temporary file of the same folder,
-/// renamed over `file` once flushed to disk. The folder is created if needed.
+/// Writes `content` as indented JSON to `file`, with [`write_file_atomically`].
+///
+/// # Errors
+/// Any I/O failure; `file` is then untouched.
+fn write_atomically(file: &Path, content: &ProjectsFile) -> io::Result<()> {
+    let mut bytes = serde_json::to_vec_pretty(content)?;
+    bytes.push(b'\n');
+    write_file_atomically(file, &bytes)
+}
+
+/// Writes `bytes` to `file` through the temporary file
+/// `<name>.<process id>.tmp` of the same folder, renamed over `file` once
+/// flushed to disk. The folder is created if needed.
 ///
 /// # Errors
 /// Any I/O failure; the temporary file is then removed and `file` is untouched.
-fn write_atomically(file: &Path, content: &ProjectsFile) -> io::Result<()> {
+pub(crate) fn write_file_atomically(file: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(parent) = file.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -319,8 +426,7 @@ fn write_atomically(file: &Path, content: &ProjectsFile) -> io::Result<()> {
     ));
     let written = (|| {
         let mut out = fs::File::create(&temp)?;
-        serde_json::to_writer_pretty(&mut out, content)?;
-        out.write_all(b"\n")?;
+        out.write_all(bytes)?;
         out.sync_all()?;
         drop(out);
         fs::rename(&temp, file)
@@ -374,6 +480,58 @@ fn new_id(file: &ProjectsFile) -> u32 {
     file.next_id.max(after_largest)
 }
 
+/// Returns the id a new tab takes in `file`: `next_tab_id`, or the largest
+/// tab id of any project plus one when that is higher.
+fn new_tab_id(file: &ProjectsFile) -> u32 {
+    let after_largest = file
+        .projects
+        .iter()
+        .flat_map(|project| &project.tabs)
+        .map(|tab| tab.id)
+        .max()
+        .unwrap_or(0)
+        + 1;
+    file.next_tab_id.max(after_largest)
+}
+
+/// Returns the index of the project holding tab `tab`, and the tab's index in it.
+///
+/// # Errors
+/// [`AppError::UnknownTab`].
+fn tab_position(file: &ProjectsFile, tab: u32) -> Result<(usize, usize), AppError> {
+    file.projects
+        .iter()
+        .enumerate()
+        .find_map(|(project, p)| {
+            p.tabs
+                .iter()
+                .position(|t| t.id == tab)
+                .map(|index| (project, index))
+        })
+        .ok_or(AppError::UnknownTab(tab))
+}
+
+/// Validates `raw`, the stored folder path of a project of `file`, and returns
+/// its canonical form, only when it is still the folder of a project.
+///
+/// # Errors
+/// [`AppError::ProjectFolderMissing`] when `raw` is the stored path of a
+/// project whose folder no longer exists; the errors of [`validate_folder`];
+/// [`AppError::FolderNotRegistered`] when the folder is no project's.
+fn spawn_folder(file: &ProjectsFile, raw: &str) -> Result<PathBuf, AppError> {
+    if let Some(project) = file.projects.iter().find(|p| p.path == raw)
+        && !Path::new(&project.path).is_dir()
+    {
+        return Err(AppError::ProjectFolderMissing(project.name.clone()));
+    }
+    let canonical = validate_folder(raw)?;
+    if find_by_folder(file, &canonical).is_some() {
+        Ok(canonical)
+    } else {
+        Err(AppError::FolderNotRegistered)
+    }
+}
+
 /// Returns the index of project `id`.
 ///
 /// # Errors
@@ -392,12 +550,22 @@ fn view(project: &Project) -> ProjectView {
         name: project.name.clone(),
         path: project.path.clone(),
         exists: Path::new(&project.path).is_dir(),
+        tabs: project
+            .tabs
+            .iter()
+            .map(|tab| TabView { id: tab.id })
+            .collect(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Checks `raw` against the project list of `store`, as a launch does.
+    fn spawn_folder_of(store: &ProjectStore, raw: &str) -> Result<PathBuf, AppError> {
+        spawn_folder(&lock(&store.state).file, raw)
+    }
 
     /// Opens a store on `projects.json` in `dir`.
     fn store_in(dir: &Path) -> ProjectStore {
@@ -486,7 +654,10 @@ mod tests {
         let first = store.add(&alpha).unwrap();
         assert_eq!(store.add(&shouted).unwrap(), first);
         assert_eq!(store.list().projects.len(), 1);
-        assert_eq!(store.spawn_folder(shouted.to_str().unwrap()), Ok(alpha));
+        assert_eq!(
+            spawn_folder_of(&store, shouted.to_str().unwrap()),
+            Ok(alpha)
+        );
     }
 
     #[test]
@@ -521,8 +692,11 @@ mod tests {
 
         let moved = store.relocate(a.id, &moved_to).unwrap();
         assert!(moved.exists);
-        assert_eq!(store.spawn_folder(&moved.path), Ok(moved_to));
-        assert_eq!(store.spawn_folder(&a.path), Err(AppError::FolderNotFound));
+        assert_eq!(spawn_folder_of(&store, &moved.path), Ok(moved_to));
+        assert_eq!(
+            spawn_folder_of(&store, &a.path),
+            Err(AppError::FolderNotFound)
+        );
         assert_eq!(store_in(dir.path()).list(), store.list());
     }
 
@@ -576,11 +750,14 @@ mod tests {
         let store = store_in(dir.path());
         store.add(&alpha).unwrap();
         assert_eq!(
-            store.spawn_folder(other.to_str().unwrap()),
+            spawn_folder_of(&store, other.to_str().unwrap()),
             Err(AppError::FolderNotRegistered)
         );
         let roundabout = alpha.join("..").join("alpha");
-        assert_eq!(store.spawn_folder(roundabout.to_str().unwrap()), Ok(alpha));
+        assert_eq!(
+            spawn_folder_of(&store, roundabout.to_str().unwrap()),
+            Ok(alpha)
+        );
     }
 
     #[test]
@@ -592,7 +769,7 @@ mod tests {
         fs::remove_dir(&alpha).unwrap();
         assert!(!store.list().projects[0].exists);
         assert_eq!(
-            store.spawn_folder(&a.path),
+            spawn_folder_of(&store, &a.path),
             Err(AppError::ProjectFolderMissing("alpha".to_owned()))
         );
     }
@@ -775,5 +952,201 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(value["version"], 1);
         assert_eq!(value["next_id"], 6);
+    }
+
+    /// The session id stored for tab `tab` of `store`.
+    fn session_of(store: &ProjectStore, tab: u32) -> SessionId {
+        let state = lock(&store.state);
+        let (project, index) = tab_position(&state.file, tab).unwrap();
+        state.file.projects[project].tabs[index].session_id.clone()
+    }
+
+    #[test]
+    fn tab_ids_are_global_and_never_reused() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let b = store.add(&folder(dir.path(), "b")).unwrap();
+        assert_eq!(store.open_tab(a.id).unwrap().id, 1);
+        assert_eq!(store.open_tab(b.id).unwrap().id, 2);
+        assert_eq!(store.open_tab(a.id).unwrap().id, 3);
+        store.close_tab(3).unwrap();
+        assert_eq!(store.open_tab(a.id).unwrap().id, 4);
+        store.remove(b.id).unwrap();
+        let reopened = store_in(dir.path());
+        assert_eq!(reopened.open_tab(a.id).unwrap().id, 5);
+        let tabs: Vec<u32> = reopened.list().projects[0]
+            .tabs
+            .iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(tabs, [1, 4, 5]);
+        assert_eq!(store.open_tab(99), Err(AppError::UnknownProject(99)));
+    }
+
+    #[test]
+    fn tabs_survive_a_reopen_with_their_session_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let tab = store.open_tab(a.id).unwrap();
+        let reopened = store_in(dir.path());
+        assert_eq!(session_of(&reopened, tab.id), session_of(&store, tab.id));
+        let text = fs::read_to_string(dir.path().join("projects.json")).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["next_tab_id"], 2);
+        assert_eq!(value["projects"][0]["tabs"][0]["id"], 1);
+        assert_eq!(
+            value["projects"][0]["tabs"][0]["session_id"],
+            session_of(&store, tab.id).as_str()
+        );
+    }
+
+    #[test]
+    fn the_webview_never_sees_a_session_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let tab = store.open_tab(a.id).unwrap();
+        assert_eq!(
+            serde_json::to_value(&tab).unwrap(),
+            serde_json::json!({ "id": 1 })
+        );
+        let listed = serde_json::to_value(store.list()).unwrap();
+        assert_eq!(
+            listed["projects"][0]["tabs"],
+            serde_json::json!([{ "id": 1 }])
+        );
+    }
+
+    #[test]
+    fn a_file_without_next_tab_id_takes_the_largest_tab_id_plus_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let alpha = folder(dir.path(), "alpha");
+        let file = dir.path().join("projects.json");
+        let older = serde_json::json!({
+            "version": 1,
+            "projects": [
+                { "id": 1, "name": "alpha", "path": alpha.to_str().unwrap(), "tabs": [] },
+                { "id": 2, "name": "gone", "path": "nowhere",
+                  "tabs": [{ "id": 4, "session_id": "0f8e5c1a-3b2d-4c6e-9a7f-1d2c3b4a5e6f" }] }
+            ]
+        });
+        fs::write(&file, older.to_string()).unwrap();
+        let store = store_in(dir.path());
+        assert_eq!(store.list().warning, None);
+        assert_eq!(store.open_tab(1).unwrap().id, 5);
+        let value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(value["next_tab_id"], 6);
+    }
+
+    #[test]
+    fn an_invalid_tab_makes_the_file_unreadable() {
+        let session = "0f8e5c1a-3b2d-4c6e-9a7f-1d2c3b4a5e6f";
+        for tabs in [
+            serde_json::json!([{ "id": 0, "session_id": session }]),
+            serde_json::json!([{ "id": 3, "session_id": session }, { "id": 3, "session_id": session }]),
+            serde_json::json!([{ "id": 3, "session_id": "-x" }]),
+            serde_json::json!([{ "id": 3 }]),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let content = serde_json::json!({
+                "version": 1,
+                "projects": [{ "id": 1, "name": "a", "path": "nowhere", "tabs": tabs }]
+            })
+            .to_string();
+            fs::write(dir.path().join("projects.json"), &content).unwrap();
+            let list = store_in(dir.path()).list();
+            assert!(list.projects.is_empty(), "{content}");
+            assert!(list.warning.is_some(), "{content}");
+            assert_eq!(
+                fs::read_to_string(dir.path().join("projects.json.unreadable")).unwrap(),
+                content
+            );
+        }
+    }
+
+    #[test]
+    fn a_tab_id_used_by_two_projects_makes_the_file_unreadable() {
+        let session = "0f8e5c1a-3b2d-4c6e-9a7f-1d2c3b4a5e6f";
+        let dir = tempfile::tempdir().unwrap();
+        let content = serde_json::json!({
+            "version": 1,
+            "projects": [
+                { "id": 1, "name": "a", "path": "nowhere", "tabs": [{ "id": 2, "session_id": session }] },
+                { "id": 2, "name": "b", "path": "elsewhere", "tabs": [{ "id": 2, "session_id": session }] }
+            ]
+        })
+        .to_string();
+        fs::write(dir.path().join("projects.json"), &content).unwrap();
+        let warning = store_in(dir.path()).list().warning.unwrap();
+        assert!(
+            warning.contains("tab id of 0 or used twice: 2"),
+            "{warning}"
+        );
+    }
+
+    #[test]
+    fn a_new_launch_saves_a_new_session_id_and_resume_keeps_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let alpha = folder(dir.path(), "alpha");
+        let store = store_in(dir.path());
+        let a = store.add(&alpha).unwrap();
+        let tab = store.open_tab(a.id).unwrap().id;
+        let opened_with = session_of(&store, tab);
+
+        let (folder_new, new) = store.launch(tab, LaunchMode::New).unwrap();
+        assert_eq!(folder_new, alpha);
+        assert_ne!(new, opened_with);
+        assert_eq!(session_of(&store_in(dir.path()), tab), new);
+
+        let (folder_resumed, resumed) = store.launch(tab, LaunchMode::Resume).unwrap();
+        assert_eq!(folder_resumed, alpha);
+        assert_eq!(resumed, new);
+    }
+
+    #[test]
+    fn launching_refuses_an_unknown_tab_or_a_missing_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let alpha = folder(dir.path(), "alpha");
+        let store = store_in(dir.path());
+        let a = store.add(&alpha).unwrap();
+        let tab = store.open_tab(a.id).unwrap().id;
+        assert_eq!(
+            store.launch(7, LaunchMode::Resume),
+            Err(AppError::UnknownTab(7))
+        );
+        fs::remove_dir(&alpha).unwrap();
+        let before = session_of(&store, tab);
+        assert_eq!(
+            store.launch(tab, LaunchMode::New),
+            Err(AppError::ProjectFolderMissing("alpha".to_owned()))
+        );
+        assert_eq!(session_of(&store, tab), before);
+    }
+
+    #[test]
+    fn closing_a_tab_or_removing_its_project_forgets_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let first = store.open_tab(a.id).unwrap().id;
+        let second = store.open_tab(a.id).unwrap().id;
+        store.close_tab(first).unwrap();
+        assert_eq!(store.close_tab(first), Err(AppError::UnknownTab(first)));
+        store.remove(a.id).unwrap();
+        assert_eq!(
+            store.launch(second, LaunchMode::Resume),
+            Err(AppError::UnknownTab(second))
+        );
+    }
+
+    #[test]
+    fn setting_a_session_of_an_unknown_tab_does_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        assert_eq!(store.set_session(3, SessionId::generate()), Ok(()));
+        assert!(!dir.path().join("projects.json").exists());
     }
 }

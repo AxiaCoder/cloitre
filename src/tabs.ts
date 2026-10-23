@@ -1,10 +1,13 @@
-/** Where a session tab's `claude` session stands. */
-export type TabState = "starting" | "running" | "exited";
+/**
+ * Where a session tab's `claude` session stands. `"restored"` is a tab reopened
+ * from a previous run, waiting for the user to resume or start a session.
+ */
+export type TabState = "restored" | "starting" | "running" | "exited";
 
 /** One tab of a project running a `claude` session in its terminal. */
 export interface SessionTab {
   readonly kind: "session";
-  /** Unique across every project, starting at 1, never reused. */
+  /** The tab id Rust gave it: unique across every project, from 1, never reused. */
   readonly id: number;
   readonly projectId: number;
   /** "Session N", numbered within its project. */
@@ -15,7 +18,7 @@ export interface SessionTab {
 /** One tab of a project replaying a recording, with no session behind it. */
 export interface ReplayTab {
   readonly kind: "replay";
-  /** Unique across every project, starting at 1, never reused. */
+  /** Negative, so it never meets a session tab id; never reused. */
   readonly id: number;
   readonly projectId: number;
   /** "Replay <recording>". */
@@ -48,26 +51,31 @@ export class TabModel {
   private readonly tabs: StoredTab[] = [];
   private readonly activeIds = new Map<number, number>();
   private readonly lastNumbers = new Map<number, number>();
-  private nextId = 1;
+  private nextReplayId = -1;
 
   /**
-   * Opens a session tab for project `projectId`, in the `"starting"` state, and
-   * makes it the project's active tab. Its label number follows the highest one
-   * the project has used, even after closes; replay tabs do not count.
+   * Opens session tab `id` (the id Rust gave it) for project `projectId`, in the
+   * `"starting"` state, and makes it the project's active tab. Its label number
+   * follows the highest one the project has used, even after closes; replay
+   * tabs do not count.
    */
-  open(projectId: number): SessionTab {
-    const number = (this.lastNumbers.get(projectId) ?? 0) + 1;
-    this.lastNumbers.set(projectId, number);
-    const tab: StoredTab = {
-      kind: "session",
-      id: this.takeId(),
-      projectId,
-      label: `Session ${String(number)}`,
-      state: "starting",
-    };
-    this.tabs.push(tab);
+  open(projectId: number, id: number): SessionTab {
+    const tab = this.addSession(projectId, id, "starting");
     this.activeIds.set(projectId, tab.id);
     return tab;
+  }
+
+  /**
+   * Reopens the session tabs `ids` of project `projectId`, from a previous run,
+   * in that order and in the `"restored"` state, labelled as {@link open} does.
+   * The first one becomes the project's active tab when the project has none.
+   */
+  restore(projectId: number, ids: readonly number[]): SessionTab[] {
+    const restored = ids.map((id) => this.addSession(projectId, id, "restored"));
+    if (restored.length > 0 && !this.activeIds.has(projectId)) {
+      this.activeIds.set(projectId, restored[0].id);
+    }
+    return restored;
   }
 
   /**
@@ -84,7 +92,8 @@ export class TabModel {
       this.activeIds.set(projectId, existing.id);
       return existing;
     }
-    const tab: StoredTab = { kind: "replay", id: this.takeId(), projectId, label, recording };
+    const tab: StoredTab = { kind: "replay", id: this.nextReplayId, projectId, label, recording };
+    this.nextReplayId -= 1;
     this.tabs.push(tab);
     this.activeIds.set(projectId, tab.id);
     return tab;
@@ -152,10 +161,12 @@ export class TabModel {
     return id === undefined ? undefined : this.find(id);
   }
 
-  /** Returns the next unused tab id. */
-  private takeId(): number {
-    const id = this.nextId;
-    this.nextId += 1;
-    return id;
+  /** Appends session tab `id` of project `projectId` in `state`, labelled with the project's next number. */
+  private addSession(projectId: number, id: number, state: TabState): SessionTab {
+    const number = (this.lastNumbers.get(projectId) ?? 0) + 1;
+    this.lastNumbers.set(projectId, number);
+    const tab: StoredTab = { kind: "session", id, projectId, label: `Session ${String(number)}`, state };
+    this.tabs.push(tab);
+    return tab;
   }
 }

@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use portable_pty::CommandBuilder;
 
 use crate::error::AppError;
+use crate::session::{LaunchMode, SessionId};
 
 /// Environment variables set on every `claude` session, on top of the inherited ones.
 pub const SESSION_ENV: [(&str, &str); 2] = [("TERM", "xterm-256color"), ("COLORTERM", "truecolor")];
@@ -78,14 +79,33 @@ pub fn resolve_claude() -> Result<PathBuf, AppError> {
     find_claude(env::var_os("PATH").as_deref(), &install_locations())
 }
 
-/// Builds the command line of a new `claude` session in `folder`, for tab `tab`.
+/// Builds the command line of a `claude` session in `folder`, for tab `tab`.
 ///
-/// The command is `program` with no argument at all: nothing coming from the
-/// webview reaches the argument list. On top of the inherited environment it
-/// sets [`SESSION_ENV`] and [`TAB_ID_VAR`] to `tab` in decimal. The caller must
-/// pass a folder already checked by [`crate::folder::validate_folder`].
-pub fn claude_command(program: &Path, folder: &Path, tab: NonZeroU32) -> CommandBuilder {
+/// The arguments are `--session-id <session>` for [`LaunchMode::New`] or
+/// `--resume <session>` for [`LaunchMode::Resume`], then `--settings
+/// <settings>` when `settings` is given, and nothing else. On top of the
+/// inherited environment it sets [`SESSION_ENV`] and [`TAB_ID_VAR`] to `tab`
+/// in decimal. The caller must pass a folder already checked by
+/// [`crate::folder::validate_folder`], and a settings path free of any
+/// character a shell interprets.
+pub fn claude_command(
+    program: &Path,
+    folder: &Path,
+    tab: NonZeroU32,
+    mode: LaunchMode,
+    session: &SessionId,
+    settings: Option<&Path>,
+) -> CommandBuilder {
     let mut command = CommandBuilder::new(program);
+    let session_flag = match mode {
+        LaunchMode::New => "--session-id",
+        LaunchMode::Resume => "--resume",
+    };
+    command.args([session_flag, session.as_str()]);
+    if let Some(settings) = settings {
+        command.arg("--settings");
+        command.arg(settings);
+    }
     command.cwd(folder);
     for (key, value) in SESSION_ENV {
         command.env(key, value);
@@ -187,20 +207,73 @@ mod tests {
         assert_eq!(found, expected);
     }
 
-    /// Builds a command for a fixed program and folder that need not exist.
-    fn sample_command() -> CommandBuilder {
+    /// The session id the sample commands start.
+    const SESSION: &str = "0f8e5c1a-3b2d-4c6e-9a7f-1d2c3b4a5e6f";
+
+    /// Builds a command in `mode`, with `settings`, for a fixed program and
+    /// folder that need not exist.
+    fn command_in(mode: LaunchMode, settings: Option<&Path>) -> CommandBuilder {
         claude_command(
             Path::new("/opt/tools/claude"),
             Path::new("/projects/example"),
             NonZeroU32::new(42).unwrap(),
+            mode,
+            &SessionId::parse(SESSION).unwrap(),
+            settings,
         )
     }
 
+    /// Builds a new-session command with a settings file.
+    fn sample_command() -> CommandBuilder {
+        command_in(LaunchMode::New, Some(Path::new("/data/hooks.json")))
+    }
+
+    /// Returns the argument list of `command`, program included, as text.
+    fn argv(command: &CommandBuilder) -> Vec<&str> {
+        command
+            .get_argv()
+            .iter()
+            .map(|arg| arg.to_str().unwrap())
+            .collect()
+    }
+
     #[test]
-    fn has_no_argument() {
-        let command = sample_command();
-        assert_eq!(command.get_argv().len(), 1);
-        assert_eq!(command.get_argv()[0], OsStr::new("/opt/tools/claude"));
+    fn a_new_session_gets_exactly_its_id_and_the_settings() {
+        assert_eq!(
+            argv(&sample_command()),
+            [
+                "/opt/tools/claude",
+                "--session-id",
+                SESSION,
+                "--settings",
+                "/data/hooks.json"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_resumed_session_gets_exactly_its_id_and_the_settings() {
+        assert_eq!(
+            argv(&command_in(
+                LaunchMode::Resume,
+                Some(Path::new("/data/hooks.json"))
+            )),
+            [
+                "/opt/tools/claude",
+                "--resume",
+                SESSION,
+                "--settings",
+                "/data/hooks.json"
+            ]
+        );
+    }
+
+    #[test]
+    fn without_settings_only_the_session_is_passed() {
+        assert_eq!(
+            argv(&command_in(LaunchMode::Resume, None)),
+            ["/opt/tools/claude", "--resume", SESSION]
+        );
     }
 
     #[test]

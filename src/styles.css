@@ -204,6 +204,7 @@ body {
   box-shadow: inset 0 2px 0 #3b6fd4;
 }
 
+.tab.restored .tab-label,
 .tab.starting .tab-label,
 .tab.exited .tab-label {
   opacity: 0.6;
@@ -269,7 +270,8 @@ body {
   display: none;
 }
 
-.end-notice {
+.end-notice,
+.start-notice {
   position: absolute;
   right: 12px;
   bottom: 12px;
@@ -283,10 +285,12 @@ body {
   border: 1px solid #444;
 }
 
-.end-notice[hidden] {
+.end-notice[hidden],
+.start-notice[hidden] {
   display: none;
 }
 
-.end-notice span {
+.end-notice span,
+.start-notice span {
   flex: 1;
 }
