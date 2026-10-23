@@ -39,14 +39,34 @@ interface Rule {
   body: string;
 }
 
-/** Splits CSS `text` into its innermost rules, comments removed; at-rule wrappers drop out. */
+/**
+ * Splits CSS `text` into its rules in document order, comments removed. Every block is a rule,
+ * nested ones and at-rule wrappers included; its body holds only its own declarations, never those
+ * of the blocks nested in it.
+ */
 function cssRules(file: string, text: string): Rule[] {
   const css = text.replace(/\/\*[\s\S]*?\*\//gu, "");
-  return [...css.matchAll(/([^{}]*)\{([^{}]*)\}/gu)].map((match) => ({
-    file,
-    selector: match[1].trim().replace(/\s+/gu, " "),
-    body: match[2],
-  }));
+  const rules: Rule[] = [];
+  const open: Rule[] = [];
+  let pending = "";
+  for (const char of css) {
+    if (char === "{") {
+      const split = pending.lastIndexOf(";") + 1;
+      const parent = open[open.length - 1] as Rule | undefined;
+      if (parent) parent.body += pending.slice(0, split);
+      const rule = { file, selector: pending.slice(split).trim().replace(/\s+/gu, " "), body: "" };
+      rules.push(rule);
+      open.push(rule);
+      pending = "";
+    } else if (char === "}") {
+      const rule = open.pop();
+      if (rule) rule.body += pending;
+      pending = "";
+    } else {
+      pending += char;
+    }
+  }
+  return rules;
 }
 
 /** The rules of an HTML page: its `<style>` blocks and every `style` attribute. */
@@ -72,17 +92,38 @@ function cssColorLiterals(body: string): string[] {
   const unquoted = body.replace(/"[^"]*"|'[^']*'/gu, "");
   const hex = unquoted.match(/#[0-9a-f]{3,8}\b/giu) ?? [];
   const functions = unquoted.match(/\b(rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(/giu) ?? [];
-  const named = (unquoted.match(/(?<![\w-])[a-z]+(?![\w-])/giu) ?? []).filter((word) =>
-    NAMED_COLORS.has(word.toLowerCase()),
-  );
-  return [...hex, ...functions, ...named];
+  return [...hex, ...functions, ...namedColors(unquoted)];
 }
 
-/** The color literals in TypeScript `source`: quoted hex colors and color functions. */
+/** The CSS named colors written in `text`, as whole words; custom property names do not count. */
+function namedColors(text: string): string[] {
+  return (text.match(/(?<![\w-])[a-z]+(?![\w-])/giu) ?? []).filter((word) => NAMED_COLORS.has(word.toLowerCase()));
+}
+
+/** The contents of the string literals of TypeScript `source`, quotes removed; comments are skipped. */
+function tsStrings(source: string): string[] {
+  const tokens = source.matchAll(
+    /\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\.|[^`\\])*`/gu,
+  );
+  return [...tokens].map(([token]) => token).filter((token) => !token.startsWith("/")).map((token) => token.slice(1, -1));
+}
+
+/** The values TypeScript `source` gives to a style property: `.style.x = "…"` and `setProperty(…, "…")`. */
+function tsStyleValues(source: string): string[] {
+  const assigned = [...source.matchAll(/\.style\.\w+\s*=\s*(["'`])(.*?)\1/gu)].map((match) => match[2]);
+  const set = [...source.matchAll(/\.setProperty\(\s*(["'`]).*?\1\s*,\s*(["'`])(.*?)\2/gu)].map((match) => match[3]);
+  return [...assigned, ...set];
+}
+
+/**
+ * The color literals in TypeScript `source`: hex colors anywhere inside a string literal, color
+ * functions anywhere, and named colors in a value given to a style property.
+ */
 function tsColorLiterals(source: string): string[] {
-  const hex = source.match(/["'`]#[0-9a-f]{3,8}["'`]/giu) ?? [];
+  const hex = tsStrings(source).flatMap((content) => content.match(/#[0-9a-f]{3,8}\b/giu) ?? []);
   const functions = source.match(/\b(rgba?|hsla?|hwb|oklab|oklch)\(/giu) ?? [];
-  return [...hex, ...functions];
+  const named = tsStyleValues(source).flatMap(namedColors);
+  return [...hex, ...functions, ...named];
 }
 
 /** Every file under `dir` whose name ends with `suffix`, as paths relative to the repository root. */
@@ -154,11 +195,39 @@ describe("the guard itself", () => {
     ).toEqual([]);
   });
 
-  it("catches quoted hex colors and color functions in TypeScript", () => {
+  it("inspects the declarations of a rule that has nested rules", () => {
+    const rules = cssRules("sample.css", ".a { color: #123456; &:hover { opacity: 1; } border: 0 solid red; }");
+    expect(strayCssColors(rules)).toEqual(["sample.css: .a: #123456", "sample.css: .a: red"]);
+    expect(amberMisuses(cssRules("sample.css", ".tab .waiting-dot { &:hover { color: var(--accent); } }"))).toEqual([
+      "sample.css: &:hover",
+    ]);
+  });
+
+  it("catches hex colors and color functions in TypeScript", () => {
     expect(tsColorLiterals('const a = "#000000"; const b = `rgb(1, 2, 3)`; const c = `#${id}`;')).toEqual([
-      '"#000000"',
+      "#000000",
       "rgb(",
     ]);
+  });
+
+  it("catches a hex color anywhere inside a TypeScript string", () => {
+    expect(tsColorLiterals("const a = \"1px solid #ff0000\"; const b = '#000000 '; const c = `x ${y} #abc`;")).toEqual(
+      ["#ff0000", "#000000", "#abc"],
+    );
+  });
+
+  it("catches a named color given to a style property in TypeScript", () => {
+    expect(
+      tsColorLiterals('el.style.color = "red"; el.style.setProperty("--x", "1px solid White");'),
+    ).toEqual(["red", "White"]);
+  });
+
+  it("leaves TypeScript comments and prose strings alone", () => {
+    expect(
+      tsColorLiterals(
+        '// see #20 and #abc\n/* #123456 */\nconst a = "A tan coat on a white wall"; el.style.width = "var(--tan)";',
+      ),
+    ).toEqual([]);
   });
 });
 

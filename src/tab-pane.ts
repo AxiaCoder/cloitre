@@ -55,7 +55,7 @@ export interface TabPaneHandlers {
   onError(error: unknown): void;
   /** The user pressed the marker key in this terminal. */
   onMarkKey(): void;
-  /** The user asked, from the end notice or the start notice, for a new session in this tab. */
+  /** The user asked, from the end notice, the start notice or the start failure card, for a new session in this tab. */
   onRestart(): void;
   /** The user asked, from the start notice, to resume this tab's previous conversation. */
   onResume(): void;
