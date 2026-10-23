@@ -18,6 +18,8 @@ fn main() {
             "project_add",
             "project_relocate",
             "project_remove",
+            "tab_open",
+            "tab_close",
         ]),
     ))
     .expect("failed to run the Tauri build script");

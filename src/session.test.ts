@@ -13,7 +13,7 @@ vi.mock("@tauri-apps/api/core", () => ({ Channel: tauri.FakeChannel, invoke: tau
 import { SessionSlot } from "./session";
 
 interface SpawnArgs {
-  folder: string;
+  mode: string;
   tabId: number;
   cols: number;
   rows: number;
@@ -59,14 +59,14 @@ beforeEach(() => {
 });
 
 describe("SessionSlot.start", () => {
-  it("spawns claude in the folder with the size prepare returns, after stopping the previous session", async () => {
+  it("spawns claude for the tab in the mode, with the size prepare returns, after stopping the previous session", async () => {
     const slot = new SessionSlot();
     const order: string[] = [];
-    await slot.start("/projects/a", 1, size, recorder().handlers);
+    await slot.start(1, "new", size, recorder().handlers);
     tauri.invoke.mockClear();
     await slot.start(
-      "/projects/b",
       7,
+      "resume",
       () => {
         order.push(`prepare after ${String(calls("pty_kill").length)} kill`);
         return { cols: 120, rows: 40 };
@@ -75,14 +75,14 @@ describe("SessionSlot.start", () => {
     );
     expect(calls("pty_kill")).toEqual([{ id: 1 }]);
     expect(order).toEqual(["prepare after 1 kill"]);
-    expect(spawns[1]).toMatchObject({ folder: "/projects/b", tabId: 7, cols: 120, rows: 40 });
+    expect(spawns[1]).toMatchObject({ tabId: 7, mode: "resume", cols: 120, rows: 40 });
     expect(slot.current).toEqual({ id: 2 });
   });
 
   it("forwards output as bytes, from raw and from JSON payloads", async () => {
     const slot = new SessionSlot();
     const seen = recorder();
-    await slot.start("/projects/a", 1, size, seen.handlers);
+    await slot.start(1, "new", size, seen.handlers);
     spawns[0]?.onOutput.onmessage(new Uint8Array([104, 105]).buffer);
     spawns[0]?.onOutput.onmessage([33]);
     expect(seen.output).toEqual([[104, 105], [33]]);
@@ -92,8 +92,8 @@ describe("SessionSlot.start", () => {
     const slot = new SessionSlot();
     const first = recorder();
     const second = recorder();
-    await slot.start("/projects/a", 1, size, first.handlers);
-    await slot.start("/projects/b", 1, size, second.handlers);
+    await slot.start(1, "new", size, first.handlers);
+    await slot.start(1, "new", size, second.handlers);
     spawns[0]?.onOutput.onmessage([1]);
     spawns[0]?.onExit.onmessage(0);
     spawns[1]?.onOutput.onmessage([2]);
@@ -106,7 +106,7 @@ describe("SessionSlot.start", () => {
   it("drops output of a stopped session", async () => {
     const slot = new SessionSlot();
     const seen = recorder();
-    await slot.start("/projects/a", 1, size, seen.handlers);
+    await slot.start(1, "new", size, seen.handlers);
     await slot.stop();
     spawns[0]?.onOutput.onmessage([1]);
     expect(seen.output).toEqual([]);
@@ -115,7 +115,7 @@ describe("SessionSlot.start", () => {
   it("reports the exit code once, then releases the session", async () => {
     const slot = new SessionSlot();
     const seen = recorder();
-    await slot.start("/projects/a", 1, size, seen.handlers);
+    await slot.start(1, "new", size, seen.handlers);
     spawns[0]?.onExit.onmessage(3);
     spawns[0]?.onExit.onmessage(3);
     await vi.waitFor(() => {
@@ -128,7 +128,7 @@ describe("SessionSlot.start", () => {
   it("still forwards output that arrives after the exit notice", async () => {
     const slot = new SessionSlot();
     const seen = recorder();
-    await slot.start("/projects/a", 1, size, seen.handlers);
+    await slot.start(1, "new", size, seen.handlers);
     spawns[0]?.onExit.onmessage(0);
     spawns[0]?.onOutput.onmessage([1]);
     expect(seen.output).toEqual([[1]]);
@@ -139,7 +139,7 @@ describe("SessionSlot.start", () => {
     tauri.invoke.mockImplementation((command) =>
       command === "pty_spawn" ? Promise.reject(new Error("folder not found")) : Promise.resolve(),
     );
-    await expect(slot.start("/missing", 1, size, recorder().handlers)).rejects.toThrow(
+    await expect(slot.start(1, "new", size, recorder().handlers)).rejects.toThrow(
       "folder not found",
     );
     expect(slot.current).toBeUndefined();
@@ -163,11 +163,11 @@ describe("SessionSlot.start, overlapping", () => {
   it("kills the first session when its spawn resolves after a second start", async () => {
     const slot = new SessionSlot();
     const pending = deferSpawns();
-    const first = slot.start("/projects/a", 1, size, recorder().handlers);
+    const first = slot.start(1, "new", size, recorder().handlers);
     await vi.waitFor(() => {
       expect(pending).toHaveLength(1);
     });
-    const second = slot.start("/projects/b", 1, size, recorder().handlers);
+    const second = slot.start(1, "new", size, recorder().handlers);
     await vi.waitFor(() => {
       expect(pending).toHaveLength(2);
     });
@@ -182,11 +182,11 @@ describe("SessionSlot.start, overlapping", () => {
   it("keeps the second session when the first spawn resolves last", async () => {
     const slot = new SessionSlot();
     const pending = deferSpawns();
-    const first = slot.start("/projects/a", 1, size, recorder().handlers);
+    const first = slot.start(1, "new", size, recorder().handlers);
     await vi.waitFor(() => {
       expect(pending).toHaveLength(1);
     });
-    const second = slot.start("/projects/b", 1, size, recorder().handlers);
+    const second = slot.start(1, "new", size, recorder().handlers);
     await vi.waitFor(() => {
       expect(pending).toHaveLength(2);
     });
@@ -201,7 +201,7 @@ describe("SessionSlot.start, overlapping", () => {
   it("resends a size that changed while the session was starting", async () => {
     const slot = new SessionSlot();
     const pending = deferSpawns();
-    const started = slot.start("/projects/a", 1, size, recorder().handlers);
+    const started = slot.start(1, "new", size, recorder().handlers);
     await vi.waitFor(() => {
       expect(pending).toHaveLength(1);
     });
@@ -213,7 +213,7 @@ describe("SessionSlot.start, overlapping", () => {
   it("sends a resize made right after the start behind the size it resends", async () => {
     const slot = new SessionSlot();
     const pending = deferSpawns();
-    const started = slot.start("/projects/a", 1, size, recorder().handlers);
+    const started = slot.start(1, "new", size, recorder().handlers);
     await vi.waitFor(() => {
       expect(pending).toHaveLength(1);
     });
@@ -244,15 +244,15 @@ describe("SessionSlot.start, overlapping", () => {
   it("does not spawn a session started just before another one", async () => {
     const slot = new SessionSlot();
     const pending = deferSpawns();
-    const first = slot.start("/projects/a", 1, size, recorder().handlers);
-    const second = slot.start("/projects/b", 1, size, recorder().handlers);
+    const first = slot.start(1, "new", size, recorder().handlers);
+    const second = slot.start(2, "new", size, recorder().handlers);
     await expect(first).resolves.toBe(false);
     await vi.waitFor(() => {
       expect(pending).toHaveLength(1);
     });
     pending[0]?.(1);
     await expect(second).resolves.toBe(true);
-    expect(spawns.map(({ folder }) => folder)).toEqual(["/projects/b"]);
+    expect(spawns.map(({ tabId }) => tabId)).toEqual([2]);
     expect(slot.current).toEqual({ id: 1 });
   });
 });
@@ -265,7 +265,7 @@ describe("SessionSlot.stop", () => {
 
   it("ignores a failed kill and still releases the session", async () => {
     const slot = new SessionSlot();
-    await slot.start("/projects/a", 1, size, recorder().handlers);
+    await slot.start(1, "new", size, recorder().handlers);
     tauri.invoke.mockRejectedValue(new Error("unknown session 1"));
     await expect(slot.stop()).resolves.toBeUndefined();
     expect(slot.current).toBeUndefined();
@@ -282,7 +282,7 @@ describe("SessionSlot.write and resize", () => {
 
   it("reach the current session", async () => {
     const slot = new SessionSlot();
-    await slot.start("/projects/a", 1, size, recorder().handlers);
+    await slot.start(1, "new", size, recorder().handlers);
     await slot.write("hi");
     await slot.resize({ cols: 100, rows: 30 });
     expect(calls("pty_write")).toEqual([{ id: 1, data: "hi" }]);
@@ -291,7 +291,7 @@ describe("SessionSlot.write and resize", () => {
 
   it("sends writes in order when an earlier one is slow", async () => {
     const slot = new SessionSlot();
-    await slot.start("/projects/a", 1, size, recorder().handlers);
+    await slot.start(1, "new", size, recorder().handlers);
     let finishFirst: () => void = () => undefined;
     tauri.invoke.mockImplementationOnce(
       () =>
@@ -315,7 +315,7 @@ describe("SessionSlot.write and resize", () => {
 
   it("pass a rejected write to its caller and still send the next one", async () => {
     const slot = new SessionSlot();
-    await slot.start("/projects/a", 1, size, recorder().handlers);
+    await slot.start(1, "new", size, recorder().handlers);
     tauri.invoke.mockRejectedValueOnce(new Error("write failed"));
     const first = slot.write("a");
     const second = slot.write("b");
@@ -329,7 +329,7 @@ describe("SessionSlot.write and resize", () => {
 
   it("sends resizes in order when an earlier one is slow", async () => {
     const slot = new SessionSlot();
-    await slot.start("/projects/a", 1, size, recorder().handlers);
+    await slot.start(1, "new", size, recorder().handlers);
     let finishFirst: () => void = () => undefined;
     tauri.invoke.mockImplementationOnce(
       () =>
@@ -352,7 +352,7 @@ describe("SessionSlot.write and resize", () => {
 
   it("pass a rejected resize to its caller and still send the next one", async () => {
     const slot = new SessionSlot();
-    await slot.start("/projects/a", 1, size, recorder().handlers);
+    await slot.start(1, "new", size, recorder().handlers);
     tauri.invoke.mockRejectedValueOnce(new Error("resize failed"));
     const first = slot.resize({ cols: 100, rows: 30 });
     const second = slot.resize({ cols: 120, rows: 40 });
@@ -366,7 +366,7 @@ describe("SessionSlot.write and resize", () => {
 
   it("pass a Rust refusal on to the caller", async () => {
     const slot = new SessionSlot();
-    await slot.start("/projects/a", 1, size, recorder().handlers);
+    await slot.start(1, "new", size, recorder().handlers);
     tauri.invoke.mockRejectedValue(new Error("invalid size"));
     await expect(slot.resize({ cols: 0, rows: 30 })).rejects.toThrow("invalid size");
   });

@@ -37,6 +37,8 @@ pub enum AppError {
     Recording(String),
     /// No project is registered under this id.
     UnknownProject(u32),
+    /// No tab is registered under this id.
+    UnknownTab(u32),
     /// The folder is not the folder of any project.
     FolderNotRegistered,
     /// The folder of this project, named here, no longer exists.
@@ -79,6 +81,7 @@ impl fmt::Display for AppError {
             Self::NoRecording(id) => write!(f, "session {id} is not being recorded"),
             Self::Recording(message) => write!(f, "recording error: {message}"),
             Self::UnknownProject(id) => write!(f, "no project with id {id}"),
+            Self::UnknownTab(id) => write!(f, "no tab with id {id}"),
             Self::FolderNotRegistered => write!(f, "the folder is not in the project list"),
             Self::ProjectFolderMissing(name) => write!(
                 f,
@@ -176,6 +179,7 @@ mod tests {
             AppError::UnknownProject(4).to_string(),
             "no project with id 4"
         );
+        assert_eq!(AppError::UnknownTab(5).to_string(), "no tab with id 5");
         assert_eq!(
             AppError::FolderNotRegistered.to_string(),
             "the folder is not in the project list"

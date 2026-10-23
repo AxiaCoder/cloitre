@@ -7,9 +7,10 @@ use tauri_plugin_dialog::DialogExt;
 
 use crate::error::AppError;
 use crate::launch::{claude_command, resolve_claude};
-use crate::projects::{ProjectList, ProjectStore, ProjectView};
+use crate::projects::{ProjectList, ProjectStore, ProjectView, TabView};
 use crate::pty::{PtyRegistry, lock, pty_size};
 use crate::recording::{RecordingInfo, RecordingRegistry, SharedRecorder};
+use crate::session::{HookSettings, LaunchMode, PendingSessions};
 
 /// Returns the function every output chunk of a session goes through.
 ///
@@ -28,38 +29,54 @@ fn output_sink(
     }
 }
 
-/// Starts `claude` with no argument in `folder`, in a pseudo-terminal of `cols` x `rows`,
-/// with `CLOITRE_TAB_ID` set to `tab_id`.
+/// Starts `claude` for tab `tab_id` in its project's folder, in a
+/// pseudo-terminal of `cols` x `rows`, with `CLOITRE_TAB_ID` set to `tab_id`.
 ///
-/// Raw output bytes are sent to `on_output`; the exit code is sent once to
-/// `on_exit`. The session is recorded to a new file of the recordings folder,
-/// unless that file cannot be created. Returns the session id.
+/// `mode` [`LaunchMode::New`] gives the tab a new session id, saved before
+/// `claude` starts with `--session-id`; [`LaunchMode::Resume`] first applies
+/// the session ids the hook left, then starts `claude` with `--resume` and the
+/// tab's session id. The hook settings file is passed with `--settings` when
+/// it was written. Raw output bytes are sent to `on_output`; the exit code is
+/// sent once to `on_exit`. The session is recorded to a new file of the
+/// recordings folder, unless that file cannot be created. Returns the session id.
 ///
 /// # Errors
-/// A folder that is not absolute, missing, not a directory or not the folder of
-/// a project, or a project whose folder no longer exists; a zero size; a zero
-/// tab id;
-/// `claude` found neither on the `PATH` nor at its install locations; a
-/// pseudo-terminal failure; a page reload at any point after the command is
-/// received.
+/// A zero size; a zero or unknown tab id; a project folder that no longer
+/// exists or no longer resolves to the project; for a new session, a
+/// read-only project list or a failed save; `claude` found neither on the
+/// `PATH` nor at its install locations; a pseudo-terminal failure; a page
+/// reload at any point after the command is received.
 #[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
 pub fn pty_spawn(
     registry: State<'_, PtyRegistry>,
     recordings: State<'_, RecordingRegistry>,
     projects: State<'_, ProjectStore>,
-    folder: String,
+    pending: State<'_, PendingSessions>,
+    hook: State<'_, HookSettings>,
+    tab_id: u32,
+    mode: LaunchMode,
     cols: u16,
     rows: u16,
-    tab_id: u32,
     on_output: Channel<InvokeResponseBody>,
     on_exit: Channel<u32>,
 ) -> Result<u32, AppError> {
     let epoch = registry.epoch();
-    let folder = projects.spawn_folder(&folder)?;
     let size = pty_size(cols, rows)?;
     let tab = crate::launch::tab_id(tab_id)?;
-    let command = claude_command(&resolve_claude()?, &folder, tab);
+    match mode {
+        LaunchMode::Resume => pending.apply(&projects),
+        LaunchMode::New => pending.discard(tab.get()),
+    }
+    let (folder, session) = projects.launch(tab.get(), mode)?;
+    let command = claude_command(
+        &resolve_claude()?,
+        &folder,
+        tab,
+        mode,
+        &session,
+        hook.0.as_deref(),
+    );
     let recording = recordings.create(cols, rows);
     let recorder = recording.as_ref().map(|new| Arc::clone(&new.recorder));
     let spawned = registry.spawn(
@@ -241,7 +258,32 @@ pub fn project_relocate(
         .transpose()
 }
 
-/// Removes project `id` from the list. Its folder is not touched.
+/// Opens a new tab in project `project_id`, with a new session id kept by Rust.
+///
+/// # Errors
+/// An unknown project id; a read-only project list; a failed save.
+#[tauri::command(async)]
+pub fn tab_open(projects: State<'_, ProjectStore>, project_id: u32) -> Result<TabView, AppError> {
+    projects.open_tab(project_id)
+}
+
+/// Closes tab `tab_id`: it is removed from its project, with the session id
+/// the hook left for it. A running session of that tab is not stopped.
+///
+/// # Errors
+/// An unknown tab id; a read-only project list; a failed save.
+#[tauri::command(async)]
+pub fn tab_close(
+    projects: State<'_, ProjectStore>,
+    pending: State<'_, PendingSessions>,
+    tab_id: u32,
+) -> Result<(), AppError> {
+    projects.close_tab(tab_id)?;
+    pending.discard(tab_id);
+    Ok(())
+}
+
+/// Removes project `id` from the list, with its tabs. Its folder is not touched.
 ///
 /// # Errors
 /// An unknown id; a read-only project list; a failed save.

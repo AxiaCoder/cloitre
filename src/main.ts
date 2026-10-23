@@ -11,7 +11,16 @@ import {
 } from "./recording";
 import { CloseGuard } from "./close-guard";
 import { chooseWorkArea, clickAction, findProject, keepSelection } from "./project-selection";
-import { addProject, listProjects, relocateProject, removeProject, type Project } from "./projects";
+import {
+  addProject,
+  closeTab as forgetTab,
+  listProjects,
+  openTab as saveNewTab,
+  relocateProject,
+  removeProject,
+  type Project,
+} from "./projects";
+import type { SpawnMode } from "./pty";
 import { ReplayDeck, type LoadedReplay } from "./replay-deck";
 import { ReplayPane, TabPane } from "./tab-pane";
 import { TabModel, type Tab } from "./tabs";
@@ -72,6 +81,8 @@ let warningClosed = false;
 let replayPane: ReplayPane | undefined;
 /** Keeps a double click on a close button from closing the next tab too. */
 const closeGuard = new CloseGuard();
+/** The ids of the projects whose new tab Rust is still creating. */
+const opening = new Set<number>();
 
 /** Returns the active tab of the selected project, if any. */
 function activeTab(): Tab | undefined {
@@ -179,7 +190,7 @@ function tabElement(tab: Tab, active: boolean): HTMLDivElement {
   close.setAttribute("aria-label", `Close ${tab.label}`);
   close.addEventListener("click", () => {
     if (closeGuard.accept(performance.now())) {
-      report(() => closeTab(tab.id));
+      report(() => closeTab(tab.id, true));
     }
   });
   item.append(label, close);
@@ -254,10 +265,13 @@ function createPane(tabId: number): TabPane {
       report(mark);
     },
     onRestart: () => {
-      report(() => restartTab(tabId));
+      report(() => restartTab(tabId, "new"));
+    },
+    onResume: () => {
+      report(() => restartTab(tabId, "resume"));
     },
     onClose: () => {
-      report(() => closeTab(tabId));
+      report(() => closeTab(tabId, true));
     },
   });
   registerPane(pane);
@@ -265,16 +279,17 @@ function createPane(tabId: number): TabPane {
 }
 
 /**
- * Starts `claude` in `folder` for session tab `tabId`. Resolves with whether
- * the session started; a failure is shown in the control bar.
+ * Starts `claude` in `mode` for session tab `tabId`, whose project folder is
+ * `folder`. Resolves with whether the session started; a failure is shown in
+ * the control bar.
  */
-async function startTab(tabId: number, folder: string): Promise<boolean> {
+async function startTab(tabId: number, mode: SpawnMode, folder: string): Promise<boolean> {
   const pane = panes.get(tabId);
   if (!(pane instanceof TabPane)) {
     return false;
   }
   try {
-    const running = await pane.start(folder);
+    const running = await pane.start(mode);
     const session = pane.slot.current;
     if (running && session) {
       const tab = tabs.find(tabId);
@@ -303,40 +318,68 @@ async function startTab(tabId: number, folder: string): Promise<boolean> {
 }
 
 /**
- * Opens a tab in `project` and starts its session. A start Rust refuses closes
- * the tab and reloads the projects: the no-session state shows, or the
- * missing-folder state when the folder is gone.
+ * Opens a tab in `project`, saved by Rust, and starts a new session in it. A
+ * start Rust refuses closes the tab and reloads the projects: the no-session
+ * state shows, or the missing-folder state when the folder is gone.
  */
 async function openTab(project: Project): Promise<void> {
-  const tab = tabs.open(project.id);
+  opening.add(project.id);
+  let saved;
+  try {
+    saved = await saveNewTab(project.id);
+  } finally {
+    opening.delete(project.id);
+  }
+  const tab = tabs.open(project.id, saved.id);
   createPane(tab.id);
   renderTabs();
-  if (await startTab(tab.id, project.path)) {
+  if (await startTab(tab.id, "new", project.path)) {
     return;
   }
   if (tabs.find(tab.id)) {
-    await closeTab(tab.id);
+    await closeTab(tab.id, true);
   }
   await reloadAfterRefusal(project.id);
 }
 
 /**
- * Starts a new session in session tab `tabId`, whose session ended, on a
- * cleared screen. A start Rust refuses leaves the tab ended and reloads the
- * projects, closing every tab of the project when its folder is gone.
+ * Reopens the saved tabs of `project` from a previous run, each offering
+ * Resume and New session, without starting any session.
  */
-async function restartTab(tabId: number): Promise<void> {
+function restoreTabs(project: Project): void {
+  const ids = project.tabs.map(({ id }) => id);
+  for (const tab of tabs.restore(project.id, ids)) {
+    createPane(tab.id).showOffer("resume");
+  }
+}
+
+/** Loads the projects and reopens the saved tabs of every project, at startup. */
+async function restoreAllTabs(): Promise<void> {
+  await refreshProjects();
+  for (const project of projects) {
+    restoreTabs(project);
+  }
+  renderTabs();
+}
+
+/**
+ * Starts a session in `mode` in session tab `tabId`, restored or ended, on a
+ * cleared screen. A start Rust refuses puts the tab back in its previous state
+ * and reloads the projects, closing every tab of the project when its folder is gone.
+ */
+async function restartTab(tabId: number, mode: SpawnMode): Promise<void> {
   const tab = tabs.find(tabId);
   const project = tab ? findProject(projects, tab.projectId) : undefined;
   if (tab?.kind !== "session" || !project) {
     return;
   }
+  const previous = tab.state;
   tabs.setState(tabId, "starting");
   renderTabs();
-  if (await startTab(tabId, project.path)) {
+  if (await startTab(tabId, mode, project.path)) {
     return;
   }
-  tabs.setState(tabId, "exited");
+  tabs.setState(tabId, previous);
   renderTabs();
   await reloadAfterRefusal(project.id);
 }
@@ -349,8 +392,12 @@ async function reloadAfterRefusal(projectId: number): Promise<void> {
   }
 }
 
-/** Closes tab `tabId`: stops its session or its replay, and disposes of its terminal. */
-async function closeTab(tabId: number): Promise<void> {
+/**
+ * Closes tab `tabId`: stops its session or its replay, and disposes of its
+ * terminal. A session tab is also removed from the saved tabs when `forget` is
+ * set; otherwise Rust keeps it for the next run.
+ */
+async function closeTab(tabId: number, forget: boolean): Promise<void> {
   const pane = panes.get(tabId);
   if (!pane) {
     return;
@@ -367,13 +414,16 @@ async function closeTab(tabId: number): Promise<void> {
     pane.close();
   } else {
     await pane.close();
+    if (forget) {
+      await forgetTab(tabId);
+    }
   }
   activePane()?.view.terminal.focus();
 }
 
-/** Closes every tab of project `projectId`. */
+/** Closes every tab of project `projectId`, leaving its saved tabs to Rust. */
 async function closeProjectTabs(projectId: number): Promise<void> {
-  await Promise.all(tabs.tabsOf(projectId).map((tab) => closeTab(tab.id)));
+  await Promise.all(tabs.tabsOf(projectId).map((tab) => closeTab(tab.id, false)));
 }
 
 /** Draws the project rail and the work area from `projects` and `selectedId`. */
@@ -427,7 +477,7 @@ async function selectProject(id: number): Promise<void> {
   if (selection !== selectionCount) {
     return;
   }
-  const action = clickAction(projects, id, tabs.tabsOf(id).length > 0);
+  const action = clickAction(projects, id, tabs.tabsOf(id).length > 0 || opening.has(id));
   selectedId = keepSelection(projects, id);
   renderProjects();
   if (action.kind === "open") {
@@ -457,7 +507,10 @@ async function openFolder(): Promise<void> {
   await selectProject(project.id);
 }
 
-/** Opens the folder picker to give the selected project a new folder, then selects it again. */
+/**
+ * Opens the folder picker to give the selected project a new folder, reopens
+ * its saved tabs when it shows none, then selects it again.
+ */
 async function relocateSelected(): Promise<void> {
   const selected = findProject(projects, selectedId);
   if (!selected) {
@@ -466,6 +519,9 @@ async function relocateSelected(): Promise<void> {
   const moved = await relocateProject(selected.id);
   if (moved === null) {
     return;
+  }
+  if (tabs.tabsOf(moved.id).length === 0) {
+    restoreTabs(moved);
   }
   await selectProject(moved.id);
 }
@@ -507,7 +563,7 @@ async function mark(): Promise<void> {
 async function showReplayTab(project: Project, name: string): Promise<void> {
   const existing = tabs.replayTab();
   if (existing && existing.projectId !== project.id) {
-    await closeTab(existing.id);
+    await closeTab(existing.id, false);
   }
   const tab = tabs.openReplay(project.id, name);
   const pane = panes.get(tab.id);
@@ -660,4 +716,4 @@ unicodeSelect.addEventListener("change", () => {
 });
 
 refreshRecordingsOrReport();
-report(refreshProjects);
+report(restoreAllTabs);

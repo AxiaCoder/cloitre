@@ -163,7 +163,7 @@ class FakeElement {
 }
 
 interface SpawnArgs {
-  folder: string;
+  mode: string;
   tabId: number;
   cols: number;
   rows: number;
@@ -189,6 +189,7 @@ function recorder() {
     onError: (error) => events.push(`error ${String(error)}`),
     onMarkKey: () => events.push("mark"),
     onRestart: () => events.push("restart"),
+    onResume: () => events.push("resume"),
     onClose: () => events.push("close"),
   };
   return { events, handlers };
@@ -207,6 +208,16 @@ function endNoticeOf(pane: TabPane) {
   }
   const [text, restart, close] = notice.children;
   return { notice, text, restart, close };
+}
+
+/** The start notice of `pane`, with its text and its Resume and New session buttons. */
+function startNoticeOf(pane: TabPane) {
+  const notice = containerOf(pane).children.find((child) => child.className === "start-notice");
+  if (!notice) {
+    throw new Error("no start notice");
+  }
+  const [text, resume, newSession] = notice.children;
+  return { notice, text, resume, newSession };
 }
 
 /** The terminal the pane drew. */
@@ -269,23 +280,23 @@ afterEach(() => {
 describe("TabPane.start", () => {
   it("spawns claude for its tab id on a cleared screen fitted to its container", async () => {
     const pane = openPane(7, recorder().handlers);
-    expect(await pane.start("/projects/a")).toBe(true);
+    expect(await pane.start("new")).toBe(true);
     expect(terminalOf(pane).resets).toBe(1);
     expect(spawns).toHaveLength(1);
-    expect(spawns[0]).toMatchObject({ folder: "/projects/a", tabId: 7, cols: 100, rows: 30 });
+    expect(spawns[0]).toMatchObject({ tabId: 7, mode: "new", cols: 100, rows: 30 });
     expect(containerOf(pane).parent).toBe(parent);
   });
 
   it("writes the session output to its own terminal", async () => {
     const pane = openPane(1, recorder().handlers);
-    await pane.start("/projects/a");
+    await pane.start("new");
     spawns[0].onOutput.onmessage([104, 105]);
     expect(terminalOf(pane).written.map((bytes) => [...bytes])).toEqual([[104, 105]]);
   });
 
   it("keeps writing output while hidden", async () => {
     const pane = openPane(1, recorder().handlers);
-    await pane.start("/projects/a");
+    await pane.start("new");
     pane.hide();
     spawns[0].onOutput.onmessage([65]);
     expect(containerOf(pane).hidden).toBe(true);
@@ -297,7 +308,7 @@ describe("TabPane, when claude ends", () => {
   it("shows the end notice with the exit code and tells the page", async () => {
     const { events, handlers } = recorder();
     const pane = openPane(1, handlers);
-    await pane.start("/projects/a");
+    await pane.start("new");
     expect(endNoticeOf(pane).notice.hidden).toBe(true);
     spawns[0].onExit.onmessage(3);
     const { notice, text } = endNoticeOf(pane);
@@ -309,7 +320,7 @@ describe("TabPane, when claude ends", () => {
   it("asks the page to restart or to close from the notice buttons", async () => {
     const { events, handlers } = recorder();
     const pane = openPane(1, handlers);
-    await pane.start("/projects/a");
+    await pane.start("new");
     spawns[0].onExit.onmessage(0);
     const { restart, close } = endNoticeOf(pane);
     expect(restart.textContent).toBe("Restart");
@@ -321,10 +332,10 @@ describe("TabPane, when claude ends", () => {
 
   it("restarts in the same tab with the same tab id and hides the notice", async () => {
     const pane = openPane(4, recorder().handlers);
-    await pane.start("/projects/a");
+    await pane.start("new");
     spawns[0].onExit.onmessage(1);
     await settle();
-    expect(await pane.start("/projects/a")).toBe(true);
+    expect(await pane.start("new")).toBe(true);
     expect(spawns.map((spawn) => spawn.tabId)).toEqual([4, 4]);
     expect(endNoticeOf(pane).notice.hidden).toBe(true);
     expect(pane.slot.current).toEqual({ id: 2 });
@@ -332,12 +343,12 @@ describe("TabPane, when claude ends", () => {
 
   it("shows the previous end notice again when Rust refuses the restart", async () => {
     const pane = openPane(1, recorder().handlers);
-    await pane.start("/projects/a");
+    await pane.start("new");
     spawns[0].onExit.onmessage(2);
     tauri.invoke.mockImplementation((command) =>
       command === "pty_spawn" ? Promise.reject(new Error("folder refused")) : Promise.resolve(),
     );
-    await expect(pane.start("/projects/a")).rejects.toThrow("folder refused");
+    await expect(pane.start("new")).rejects.toThrow("folder refused");
     const { notice, text } = endNoticeOf(pane);
     expect(notice.hidden).toBe(false);
     expect(text.textContent).toBe("Claude Code ended (code 2)");
@@ -348,7 +359,90 @@ describe("TabPane, when claude ends", () => {
       command === "pty_spawn" ? Promise.reject(new Error("folder refused")) : Promise.resolve(),
     );
     const pane = openPane(1, recorder().handlers);
-    await expect(pane.start("/projects/a")).rejects.toThrow("folder refused");
+    await expect(pane.start("new")).rejects.toThrow("folder refused");
+    expect(endNoticeOf(pane).notice.hidden).toBe(true);
+  });
+});
+
+describe("TabPane start notice", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("starts hidden", () => {
+    const pane = openPane(1, recorder().handlers);
+    expect(startNoticeOf(pane).notice.hidden).toBe(true);
+  });
+
+  it("offers Resume and New session on a restored tab, and tells the page which one", () => {
+    const { events, handlers } = recorder();
+    const pane = openPane(1, handlers);
+    pane.showOffer("resume");
+    const { notice, text, resume, newSession } = startNoticeOf(pane);
+    expect(notice.hidden).toBe(false);
+    expect(text.textContent).toBe("Resume the previous conversation, or start a new session.");
+    expect(resume.hidden).toBe(false);
+    expect(resume.textContent).toBe("Resume");
+    expect(newSession.textContent).toBe("New session");
+    resume.click();
+    newSession.click();
+    expect(events).toEqual(["resume", "restart"]);
+  });
+
+  it("resumes for its tab id and hides the notice", async () => {
+    const pane = openPane(3, recorder().handlers);
+    pane.showOffer("resume");
+    expect(await pane.start("resume")).toBe(true);
+    expect(spawns[0]).toMatchObject({ tabId: 3, mode: "resume" });
+    expect(startNoticeOf(pane).notice.hidden).toBe(true);
+  });
+
+  it("gives the exit code and offers Resume and New session when the resume fails right away", async () => {
+    const { events, handlers } = recorder();
+    const pane = openPane(1, handlers);
+    pane.showOffer("resume");
+    await pane.start("resume");
+    spawns[0].onExit.onmessage(1);
+    const { notice, text, resume, newSession } = startNoticeOf(pane);
+    expect(notice.hidden).toBe(false);
+    expect(text.textContent).toBe(
+      "Claude Code exited with code 1 while resuming. The previous conversation may no longer exist.",
+    );
+    expect(resume.hidden).toBe(false);
+    expect(endNoticeOf(pane).notice.hidden).toBe(true);
+    resume.click();
+    newSession.click();
+    expect(events).toEqual(["exit 1", "resume", "restart"]);
+  });
+
+  it("shows the end notice when a resumed session ends after the failure window", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const pane = openPane(1, recorder().handlers);
+    await pane.start("resume");
+    now.mockReturnValue(1_000 + 60_000);
+    spawns[0].onExit.onmessage(1);
+    expect(startNoticeOf(pane).notice.hidden).toBe(true);
+    expect(endNoticeOf(pane).notice.hidden).toBe(false);
+  });
+
+  it("shows the end notice when a new session fails right away", async () => {
+    const pane = openPane(1, recorder().handlers);
+    await pane.start("new");
+    spawns[0].onExit.onmessage(1);
+    expect(startNoticeOf(pane).notice.hidden).toBe(true);
+    expect(endNoticeOf(pane).notice.hidden).toBe(false);
+  });
+
+  it("shows the start notice again when Rust refuses the resume", async () => {
+    tauri.invoke.mockImplementation((command) =>
+      command === "pty_spawn" ? Promise.reject(new Error("no tab with id 1")) : Promise.resolve(),
+    );
+    const pane = openPane(1, recorder().handlers);
+    pane.showOffer("resume");
+    await expect(pane.start("resume")).rejects.toThrow("no tab with id 1");
+    const { notice, resume } = startNoticeOf(pane);
+    expect(notice.hidden).toBe(false);
+    expect(resume.hidden).toBe(false);
     expect(endNoticeOf(pane).notice.hidden).toBe(true);
   });
 });
@@ -356,7 +450,7 @@ describe("TabPane, when claude ends", () => {
 describe("TabPane.close", () => {
   it("kills its session, disposes of the terminal and removes the container", async () => {
     const pane = openPane(1, recorder().handlers);
-    await pane.start("/projects/a");
+    await pane.start("new");
     await pane.close();
     expect(calls("pty_kill")).toEqual([{ id: 1 }]);
     expect(pane.slot.current).toBeUndefined();
@@ -367,8 +461,8 @@ describe("TabPane.close", () => {
   it("leaves the other tabs' sessions running", async () => {
     const first = openPane(1, recorder().handlers);
     const second = openPane(2, recorder().handlers);
-    await first.start("/projects/a");
-    await second.start("/projects/b");
+    await first.start("new");
+    await second.start("new");
     await first.close();
     expect(calls("pty_kill")).toEqual([{ id: 1 }]);
     expect(second.slot.current).toEqual({ id: 2 });
@@ -379,7 +473,7 @@ describe("TabPane.close", () => {
 describe("TabPane, hidden and shown", () => {
   it("does not refit while hidden, and sends the new size to its session once shown", async () => {
     const pane = openPane(1, recorder().handlers);
-    await pane.start("/projects/a");
+    await pane.start("new");
     pane.hide();
     const fitsWhileShown = fakes.state.fits;
     fakes.state.containerSize = { cols: 140, rows: 50 };
@@ -396,7 +490,7 @@ describe("TabPane, hidden and shown", () => {
 
   it("resizes its session when its container changes size while shown", async () => {
     const pane = openPane(1, recorder().handlers);
-    await pane.start("/projects/a");
+    await pane.start("new");
     fakes.state.containerSize = { cols: 120, rows: 40 };
     for (const fire of observers) {
       fire();
@@ -410,8 +504,8 @@ describe("TabPane input", () => {
   it("sends what the user types to its own session", async () => {
     const first = openPane(1, recorder().handlers);
     const second = openPane(2, recorder().handlers);
-    await first.start("/projects/a");
-    await second.start("/projects/a");
+    await first.start("new");
+    await second.start("new");
     terminalOf(second).dataListener("ls");
     await settle();
     expect(calls("pty_write")).toEqual([{ id: 2, data: "ls" }]);
@@ -420,7 +514,7 @@ describe("TabPane input", () => {
   it("reports a failed write to the page", async () => {
     const { events, handlers } = recorder();
     const pane = openPane(1, handlers);
-    await pane.start("/projects/a");
+    await pane.start("new");
     tauri.invoke.mockImplementation((command) =>
       command === "pty_write" ? Promise.reject(new Error("gone")) : Promise.resolve(),
     );

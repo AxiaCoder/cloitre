@@ -235,6 +235,14 @@ impl PtyRegistry {
         Ok(())
     }
 
+    /// Counts the registered sessions whose process has not exited yet.
+    pub fn running_count(&self) -> usize {
+        lock(&self.sessions)
+            .values()
+            .filter(|session| lock(&session.master).is_some())
+            .count()
+    }
+
     /// Stops every registered session. Called when the app exits and when the page reloads.
     ///
     /// A session still starting when this runs is refused and stopped by
@@ -427,6 +435,42 @@ mod tests {
     }
 
     #[test]
+    fn only_sessions_whose_process_runs_are_counted() {
+        let registry = PtyRegistry::default();
+        assert_eq!(registry.running_count(), 0);
+        let size = pty_size(80, 24).unwrap();
+        let waiting = registry
+            .spawn(registry.epoch(), wait_quietly(10), size, |_| {}, |_| {})
+            .unwrap();
+        let (output_tx, output_rx) = mpsc::channel();
+        let (exit_tx, exit_rx) = mpsc::channel();
+        let exiting = registry
+            .spawn(
+                registry.epoch(),
+                print_and_exit("cloitre-marker", 0),
+                size,
+                move |bytes| {
+                    let _ = output_tx.send(bytes.to_vec());
+                },
+                move |code| {
+                    let _ = exit_tx.send(code);
+                },
+            )
+            .unwrap();
+        assert!(wait_for_output(
+            &registry,
+            exiting,
+            &output_rx,
+            "cloitre-marker"
+        ));
+        assert_eq!(exit_rx.recv_timeout(PROCESS_TIMEOUT), Ok(0));
+        assert_eq!(registry.running_count(), 1);
+        registry.kill(waiting).unwrap();
+        assert_eq!(registry.running_count(), 0);
+        registry.kill(exiting).unwrap();
+    }
+
+    #[test]
     fn resize_after_exit_is_accepted() {
         let registry = PtyRegistry::default();
         let (output_tx, output_rx) = mpsc::channel();
@@ -520,17 +564,25 @@ mod tests {
         let script = folder.path().join("claude.cmd");
         std::fs::write(
             &script,
-            "@echo cloitre-batch-marker
+            "@echo cloitre-batch-marker %*
 ",
         )
         .unwrap();
+        let session = crate::session::SessionId::generate();
         let registry = PtyRegistry::default();
         let (output_tx, output_rx) = mpsc::channel();
         let (exit_tx, exit_rx) = mpsc::channel();
         let id = registry
             .spawn(
                 registry.epoch(),
-                crate::launch::claude_command(&script, folder.path(), std::num::NonZeroU32::MIN),
+                crate::launch::claude_command(
+                    &script,
+                    folder.path(),
+                    std::num::NonZeroU32::MIN,
+                    crate::session::LaunchMode::Resume,
+                    &session,
+                    None,
+                ),
                 pty_size(80, 24).unwrap(),
                 move |bytes| {
                     let _ = output_tx.send(bytes.to_vec());
@@ -544,7 +596,7 @@ mod tests {
             &registry,
             id,
             &output_rx,
-            "cloitre-batch-marker"
+            &format!("cloitre-batch-marker --resume {session}")
         ));
         assert_eq!(exit_rx.recv_timeout(PROCESS_TIMEOUT), Ok(0));
         assert_eq!(registry.kill(id), Ok(()));

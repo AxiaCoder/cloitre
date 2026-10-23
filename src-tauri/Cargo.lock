@@ -338,6 +338,7 @@ dependencies = [
 name = "cloitre"
 version = "0.1.0"
 dependencies = [
+ "dirs",
  "dunce",
  "portable-pty",
  "serde",
@@ -346,6 +347,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tempfile",
+ "uuid",
  "which",
  "windows-sys 0.61.2",
 ]

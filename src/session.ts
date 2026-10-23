@@ -1,4 +1,4 @@
-import { killPty, resizePty, spawnPty, writePty, type PtyHandlers, type PtySession } from "./pty";
+import { killPty, resizePty, spawnPty, writePty, type PtyHandlers, type PtySession, type SpawnMode } from "./pty";
 
 /** Terminal size, in character cells. */
 export interface TerminalSize {
@@ -37,8 +37,8 @@ export class SessionSlot {
   }
 
   /**
-   * Stops the current session, calls `prepare` and starts `claude` in `folder`
-   * for tab `tabId`, with the size `prepare` returns. `handlers` only hear from this session; its
+   * Stops the current session, calls `prepare` and starts `claude` for tab
+   * `tabId` in `mode`, with the size `prepare` returns. `handlers` only hear from this session; its
    * exit releases it, after `onExit` ran, and output that arrives after the exit
    * notice still reaches `onOutput` until the next start or stop.
    *
@@ -47,8 +47,8 @@ export class SessionSlot {
    * message, leaving no session running.
    */
   async start(
-    folder: string,
     tabId: number,
+    mode: SpawnMode,
     prepare: () => TerminalSize,
     handlers: PtyHandlers,
   ): Promise<boolean> {
@@ -61,7 +61,7 @@ export class SessionSlot {
     const spawnedSize = prepare();
     this.size = spawnedSize;
     let exited = false;
-    const spawning = spawnPty(folder, tabId, spawnedSize.cols, spawnedSize.rows, {
+    const spawning = spawnPty(tabId, mode, spawnedSize.cols, spawnedSize.rows, {
       onOutput: (bytes) => {
         if (mine === this.generation) {
           handlers.onOutput(bytes);

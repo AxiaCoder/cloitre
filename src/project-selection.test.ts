@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { chooseWorkArea, clickAction, keepSelection } from "./project-selection";
 import type { Project } from "./projects";
 
-const alpha: Project = { id: 1, name: "alpha", path: "C:\\work\\alpha", exists: true };
-const gone: Project = { id: 2, name: "gone", path: "C:\\work\\gone", exists: false };
+const alpha: Project = { id: 1, name: "alpha", path: "C:\\work\\alpha", exists: true, tabs: [] };
+const gone: Project = { id: 2, name: "gone", path: "C:\\work\\gone", exists: false, tabs: [] };
 
 describe("chooseWorkArea", () => {
   it("shows the empty state when there is no project", () => {

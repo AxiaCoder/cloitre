@@ -5,6 +5,12 @@ export interface PtySession {
   readonly id: number;
 }
 
+/**
+ * How a tab's session starts: `"new"` starts a new conversation, `"resume"`
+ * reopens the tab's previous one.
+ */
+export type SpawnMode = "new" | "resume";
+
 /** Callbacks a session reports to. */
 export interface PtyHandlers {
   /** Receives every chunk of raw output bytes, in order. */
@@ -22,13 +28,13 @@ function toBytes(payload: ArrayBuffer | number[]): Uint8Array {
 }
 
 /**
- * Starts `claude` in `folder` for tab `tabId` (from 1), with a terminal of
- * `cols` x `rows`. Rejects with the Rust refusal message when the folder, the
- * tab id or the size is refused.
+ * Starts `claude` in the project folder of tab `tabId` (a tab id from
+ * `tab_open`), in `mode`, with a terminal of `cols` x `rows`. Rejects with the
+ * Rust refusal message when the tab, the folder or the size is refused.
  */
 export async function spawnPty(
-  folder: string,
   tabId: number,
+  mode: SpawnMode,
   cols: number,
   rows: number,
   handlers: PtyHandlers,
@@ -39,7 +45,7 @@ export async function spawnPty(
   };
   const onExit = new Channel<number>();
   onExit.onmessage = handlers.onExit;
-  const id = await invoke<number>("pty_spawn", { folder, tabId, cols, rows, onOutput, onExit });
+  const id = await invoke<number>("pty_spawn", { tabId, mode, cols, rows, onOutput, onExit });
   return { id };
 }
 

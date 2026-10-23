@@ -1,5 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 
+/** A tab of a project, as Rust keeps it between runs. */
+export interface ProjectTab {
+  /** Unique across every project, from 1, never reused. */
+  readonly id: number;
+}
+
 /** A project as Rust reports it. */
 export interface Project {
   readonly id: number;
@@ -9,6 +15,8 @@ export interface Project {
   readonly path: string;
   /** Whether that path still names a folder. */
   readonly exists: boolean;
+  /** Its tabs, in opening order. */
+  readonly tabs: readonly ProjectTab[];
 }
 
 /** Every project, with the warning Rust gives when the saved list could not be loaded. */
@@ -45,4 +53,20 @@ export function relocateProject(id: number): Promise<Project | null> {
 /** Removes project `id`. Rejects with the Rust refusal message. */
 export function removeProject(id: number): Promise<void> {
   return invoke("project_remove", { id });
+}
+
+/**
+ * Opens a new tab in project `projectId` and saves it. Starts no session.
+ * Resolves with the tab; rejects with the Rust refusal message.
+ */
+export function openTab(projectId: number): Promise<ProjectTab> {
+  return invoke<ProjectTab>("tab_open", { projectId });
+}
+
+/**
+ * Removes tab `tabId` from its project's saved tabs. Does not stop its
+ * session: the caller kills it first. Rejects with the Rust refusal message.
+ */
+export function closeTab(tabId: number): Promise<void> {
+  return invoke("tab_close", { tabId });
 }
