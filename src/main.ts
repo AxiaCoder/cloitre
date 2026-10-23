@@ -9,6 +9,7 @@ import {
   type ReplaySpeed,
   type ReplayTarget,
 } from "./recording";
+import { CloseGuard } from "./close-guard";
 import { chooseWorkArea, clickAction, findProject, keepSelection } from "./project-selection";
 import { addProject, listProjects, relocateProject, removeProject, type Project } from "./projects";
 import { ReplayDeck, type LoadedReplay } from "./replay-deck";
@@ -69,6 +70,8 @@ let selectionCount = 0;
 let warningClosed = false;
 /** The pane of the replay tab, the only one, while it is open. */
 let replayPane: ReplayPane | undefined;
+/** Keeps a double click on a close button from closing the next tab too. */
+const closeGuard = new CloseGuard();
 
 /** Returns the active tab of the selected project, if any. */
 function activeTab(): Tab | undefined {
@@ -175,7 +178,9 @@ function tabElement(tab: Tab, active: boolean): HTMLDivElement {
   close.textContent = "×";
   close.setAttribute("aria-label", `Close ${tab.label}`);
   close.addEventListener("click", () => {
-    report(() => closeTab(tab.id));
+    if (closeGuard.accept(performance.now())) {
+      report(() => closeTab(tab.id));
+    }
   });
   item.append(label, close);
   return item;

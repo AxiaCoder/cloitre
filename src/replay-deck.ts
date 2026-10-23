@@ -18,9 +18,8 @@ export interface ReplayDeckHooks {
 }
 
 /**
- * Holds at most one replay on screen. Loads, claims and stops run one at a
- * time, in the order they were asked for, and each one ends the replay on
- * screen first. A replay no longer on screen does not run again.
+ * Holds at most one replay on screen. Loads and stops run one at a time, in
+ * the order they were asked for, and each one ends the replay on screen first. A replay no longer on screen does not run again.
  */
 export class ReplayDeck {
   private loaded: LoadedReplay | undefined;
@@ -38,10 +37,10 @@ export class ReplayDeck {
   }
 
   /**
-   * Once every earlier load, claim and stop has settled, ends the replay on
-   * screen, then runs `operation`. Settles as `operation` does.
+   * Once every earlier load and stop has settled, ends the replay on screen,
+   * then runs `operation`. Settles as `operation` does.
    */
-  claim<T>(operation: () => Promise<T>): Promise<T> {
+  private claim<T>(operation: () => Promise<T>): Promise<T> {
     return this.enqueue(async () => {
       await this.end();
       return operation();

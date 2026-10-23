@@ -76,21 +76,17 @@ describe("ReplayDeck, overlapping", () => {
     });
   });
 
-  it("a claim made while a load is in flight runs once that replay is ended", async () => {
+  it("a stop asked while a load is in flight ends that replay once it is loaded", async () => {
     const { target } = logTarget();
     const { hooks, deliver } = gatedHooks();
     const deck = new ReplayDeck(target, hooks);
 
     const loading = deck.load("one");
-    let seen: unknown = "not run";
-    const claimed = deck.claim(() => {
-      seen = deck.current;
-      return Promise.resolve();
-    });
+    const stopping = deck.stop();
     await deliver("one");
-    await Promise.all([loading, claimed]);
+    await loading;
 
-    expect(seen).toBeUndefined();
+    expect(await stopping).toBe(true);
     expect(deck.current).toBeUndefined();
   });
 
@@ -167,18 +163,15 @@ describe("ReplayDeck, around the page", () => {
     expect(calls).toEqual([]);
   });
 
-  it("releases the screen of the replay a claim ends", async () => {
+  it("releases the screen of the replay a load ends, before reading the next recording", async () => {
     const { target } = logTarget();
     const { calls, hooks } = loggedHooks(slowRecording);
     const deck = new ReplayDeck(target, hooks);
     await deck.load("one");
 
-    await deck.claim(() => {
-      calls.push("operation");
-      return Promise.resolve();
-    });
+    await deck.load("two");
 
-    expect(calls.slice(-2)).toEqual(["release", "operation"]);
+    expect(calls).toEqual(["read one", "hold", "release", "read two", "hold"]);
   });
 
   it("rejects a load whose read fails, and still runs the next one", async () => {
