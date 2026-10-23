@@ -397,18 +397,22 @@ describe("TabPane start notice", () => {
     expect(startNoticeOf(pane).notice.hidden).toBe(true);
   });
 
-  it("offers only New session when the resume fails right away, instead of the end notice", async () => {
+  it("gives the exit code and offers Resume and New session when the resume fails right away", async () => {
     const { events, handlers } = recorder();
     const pane = openPane(1, handlers);
     pane.showOffer("resume");
     await pane.start("resume");
     spawns[0].onExit.onmessage(1);
-    const { notice, text, resume } = startNoticeOf(pane);
+    const { notice, text, resume, newSession } = startNoticeOf(pane);
     expect(notice.hidden).toBe(false);
-    expect(text.textContent).toBe("The previous conversation could not be resumed.");
-    expect(resume.hidden).toBe(true);
+    expect(text.textContent).toBe(
+      "Claude Code exited with code 1 while resuming. The previous conversation may no longer exist.",
+    );
+    expect(resume.hidden).toBe(false);
     expect(endNoticeOf(pane).notice.hidden).toBe(true);
-    expect(events).toEqual(["exit 1"]);
+    resume.click();
+    newSession.click();
+    expect(events).toEqual(["exit 1", "resume", "restart"]);
   });
 
   it("shows the end notice when a resumed session ends after the failure window", async () => {

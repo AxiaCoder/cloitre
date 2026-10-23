@@ -63,21 +63,25 @@ export interface TabPaneHandlers {
 }
 
 /**
- * What the start notice offers: `"resume"` offers Resume and New session to a
- * restored tab, `"new"` offers New session after a resume that failed.
+ * Why the start notice offers Resume and New session: `"resume"` for a
+ * restored tab, `{ failedWith }` after a resume that ended with exit code
+ * `failedWith` within the failure window (see {@link isFailedResume}).
  */
-export type StartOffer = "resume" | "new";
+export type StartOffer = "resume" | { readonly failedWith: number };
 
-/** The start notice text for each offer. */
-const OFFER_TEXT: Record<StartOffer, string> = {
-  resume: "Resume the previous conversation, or start a new session.",
-  new: "The previous conversation could not be resumed.",
-};
+/** Returns the start notice text for `offer`. */
+function offerText(offer: StartOffer): string {
+  if (offer === "resume") {
+    return "Resume the previous conversation, or start a new session.";
+  }
+  return `Claude Code exited with code ${String(offer.failedWith)} while resuming. The previous conversation may no longer exist.`;
+}
 
 /**
  * The terminal and the `claude` session of one session tab. When the session
  * ends, a notice over the terminal gives its exit code and offers Restart and
- * Close; when a resume fails, a start notice says so and offers New session.
+ * Close; when a resume fails, a start notice gives its exit code and offers
+ * Resume and New session.
  */
 export class TabPane extends Pane {
   readonly slot = new SessionSlot();
@@ -87,7 +91,6 @@ export class TabPane extends Pane {
   private readonly endText: HTMLSpanElement;
   private readonly startNotice: HTMLDivElement;
   private readonly startText: HTMLSpanElement;
-  private readonly resumeButton: HTMLButtonElement;
   private exitCode: number | undefined;
   private offer: StartOffer | undefined;
 
@@ -143,11 +146,11 @@ export class TabPane extends Pane {
     this.endNotice.hidden = true;
     this.endNotice.append(this.endText, restart, close);
     this.startText = document.createElement("span");
-    this.resumeButton = document.createElement("button");
-    this.resumeButton.type = "button";
-    this.resumeButton.className = "primary";
-    this.resumeButton.textContent = "Resume";
-    this.resumeButton.addEventListener("click", () => {
+    const resume = document.createElement("button");
+    resume.type = "button";
+    resume.className = "primary";
+    resume.textContent = "Resume";
+    resume.addEventListener("click", () => {
       handlers.onResume();
     });
     const newSession = document.createElement("button");
@@ -160,15 +163,14 @@ export class TabPane extends Pane {
     this.startNotice.className = "start-notice";
     this.startNotice.setAttribute("role", "status");
     this.startNotice.hidden = true;
-    this.startNotice.append(this.startText, this.resumeButton, newSession);
+    this.startNotice.append(this.startText, resume, newSession);
     this.container.append(this.endNotice, this.startNotice);
   }
 
   /** Shows the start notice with `offer`, over the end notice, which it hides. */
   showOffer(offer: StartOffer): void {
     this.offer = offer;
-    this.startText.textContent = OFFER_TEXT[offer];
-    this.resumeButton.hidden = offer !== "resume";
+    this.startText.textContent = offerText(offer);
     this.startNotice.hidden = false;
     this.endNotice.hidden = true;
   }
@@ -178,7 +180,7 @@ export class TabPane extends Pane {
    * both notices. A start Rust refuses shows the notice that was up again: the
    * start notice, else the end notice of the previous session, if any. A
    * resume that fails (see {@link isFailedResume}) shows the start notice
-   * offering New session instead of the end notice. Settles as
+   * with its exit code instead of the end notice. Settles as
    * {@link SessionSlot.start} does.
    */
   async start(mode: SpawnMode): Promise<boolean> {
@@ -194,7 +196,7 @@ export class TabPane extends Pane {
         onExit: (code) => {
           this.exitCode = code;
           if (isFailedResume(mode, code, Date.now() - startedAt)) {
-            this.showOffer("new");
+            this.showOffer({ failedWith: code });
           } else {
             this.showEndNotice();
           }
