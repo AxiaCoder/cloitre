@@ -23,6 +23,8 @@ export interface Project {
 export interface ProjectList {
   readonly projects: readonly Project[];
   readonly warning: string | null;
+  /** The project to select: the last remembered one while it exists, else the first, else `null` with no project. */
+  readonly selected: number | null;
 }
 
 /** Lists every project, in the order they were added. Never rejects on the Rust side. */
@@ -53,6 +55,14 @@ export function relocateProject(id: number): Promise<Project | null> {
 /** Removes project `id`. Rejects with the Rust refusal message. */
 export function removeProject(id: number): Promise<void> {
   return invoke("project_remove", { id });
+}
+
+/**
+ * Remembers project `id` as the selected one, for the next run. Rejects with
+ * the Rust refusal message: an unknown id, a failed save.
+ */
+export function rememberSelection(id: number): Promise<void> {
+  return invoke("project_select", { id });
 }
 
 /**

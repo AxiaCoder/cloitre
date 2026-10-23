@@ -121,6 +121,7 @@ pub fn run() {
             commands::project_add,
             commands::project_relocate,
             commands::project_remove,
+            commands::project_select,
             commands::tab_open,
             commands::tab_close
         ])
@@ -216,6 +217,7 @@ mod tests {
             "allow-project-add",
             "allow-project-relocate",
             "allow-project-remove",
+            "allow-project-select",
             "allow-tab-open",
             "allow-tab-close",
         ];

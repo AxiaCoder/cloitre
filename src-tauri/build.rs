@@ -18,6 +18,7 @@ fn main() {
             "project_add",
             "project_relocate",
             "project_remove",
+            "project_select",
             "tab_open",
             "tab_close",
         ]),

@@ -59,6 +59,10 @@ pub struct ProjectsFile {
     /// older files: it then reads as 0 and the largest tab id plus one applies.
     #[serde(default)]
     pub next_tab_id: u32,
+    /// The id of the last selected project. Absent from older files: it then
+    /// reads as `None`. May name a project that is gone; see [`selection`].
+    #[serde(default)]
+    pub selected: Option<u32>,
 }
 
 impl Default for ProjectsFile {
@@ -69,6 +73,7 @@ impl Default for ProjectsFile {
             projects: Vec::new(),
             next_id: 1,
             next_tab_id: 1,
+            selected: None,
         }
     }
 }
@@ -95,6 +100,9 @@ pub struct ProjectList {
     pub projects: Vec<ProjectView>,
     /// Set when the file could not be loaded and the app started with an empty list.
     pub warning: Option<String>,
+    /// The project to select: the last selected one while it exists, else the
+    /// first project, else `None` when there is no project.
+    pub selected: Option<u32>,
 }
 
 /// The in-memory state guarded by the store's mutex.
@@ -159,6 +167,7 @@ impl ProjectStore {
         ProjectList {
             projects: state.file.projects.iter().map(view).collect(),
             warning: state.warning.clone(),
+            selected: selection(&state.file),
         }
     }
 
@@ -213,6 +222,10 @@ impl ProjectStore {
 
     /// Removes project `id`, with its tabs.
     ///
+    /// When it was the selected project, the selection moves, in the same
+    /// save, to the project that takes its place in the list, else to the one
+    /// before it, else to none.
+    ///
     /// # Errors
     /// An unknown id; a read-only store; a failed save.
     pub fn remove(&self, id: u32) -> Result<(), AppError> {
@@ -220,6 +233,38 @@ impl ProjectStore {
         let index = position(&state.file, id)?;
         let mut next = state.file.clone();
         next.projects.remove(index);
+        if next.selected == Some(id) {
+            next.selected = next
+                .projects
+                .get(index)
+                .or_else(|| {
+                    index
+                        .checked_sub(1)
+                        .and_then(|before| next.projects.get(before))
+                })
+                .map(|neighbour| neighbour.id);
+        }
+        self.commit(&mut state, next)
+    }
+
+    /// Remembers project `id` as the selected one and saves it. Writes nothing
+    /// when it already is. On a read-only store the selection is kept in
+    /// memory only, and no error is returned.
+    ///
+    /// # Errors
+    /// An unknown id; a failed save.
+    pub fn select(&self, id: u32) -> Result<(), AppError> {
+        let mut state = lock(&self.state);
+        position(&state.file, id)?;
+        if state.file.selected == Some(id) {
+            return Ok(());
+        }
+        if state.read_only {
+            state.file.selected = Some(id);
+            return Ok(());
+        }
+        let mut next = state.file.clone();
+        next.selected = Some(id);
         self.commit(&mut state, next)
     }
 
@@ -541,6 +586,14 @@ fn position(file: &ProjectsFile, id: u32) -> Result<usize, AppError> {
         .iter()
         .position(|p| p.id == id)
         .ok_or(AppError::UnknownProject(id))
+}
+
+/// Returns the project to select in `file`: the stored selection while it
+/// names a project, else the first project, else `None`.
+fn selection(file: &ProjectsFile) -> Option<u32> {
+    file.selected
+        .filter(|id| position(file, *id).is_ok())
+        .or_else(|| file.projects.first().map(|project| project.id))
 }
 
 /// Returns what the webview receives for `project`.
@@ -1140,6 +1193,126 @@ mod tests {
             store.launch(second, LaunchMode::Resume),
             Err(AppError::UnknownTab(second))
         );
+    }
+
+    /// The `selected` field saved in the `projects.json` of `dir`.
+    fn saved_selection(dir: &Path) -> serde_json::Value {
+        let text = fs::read_to_string(dir.join("projects.json")).unwrap();
+        serde_json::from_str::<serde_json::Value>(&text).unwrap()["selected"].clone()
+    }
+
+    #[test]
+    fn the_selection_survives_a_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        store.add(&folder(dir.path(), "a")).unwrap();
+        let b = store.add(&folder(dir.path(), "b")).unwrap();
+        assert_eq!(store.list().selected, Some(1));
+        store.select(b.id).unwrap();
+        assert_eq!(store.list().selected, Some(b.id));
+        assert_eq!(store_in(dir.path()).list().selected, Some(b.id));
+        assert_eq!(saved_selection(dir.path()), b.id);
+    }
+
+    #[test]
+    fn selecting_an_unknown_project_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        store.select(a.id).unwrap();
+        assert_eq!(store.select(9), Err(AppError::UnknownProject(9)));
+        assert_eq!(store.list().selected, Some(a.id));
+    }
+
+    #[test]
+    fn selecting_the_selected_project_again_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        store.select(a.id).unwrap();
+        let file = dir.path().join("projects.json");
+        fs::remove_file(&file).unwrap();
+        assert_eq!(store.select(a.id), Ok(()));
+        assert!(!file.exists());
+    }
+
+    #[test]
+    fn the_list_resolves_the_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        assert_eq!(store.list().selected, None);
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        assert_eq!(store.list().selected, Some(a.id));
+        lock(&store.state).file.selected = Some(42);
+        assert_eq!(store.list().selected, Some(a.id));
+    }
+
+    #[test]
+    fn removing_the_selected_project_selects_its_neighbour() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let b = store.add(&folder(dir.path(), "b")).unwrap();
+        let c = store.add(&folder(dir.path(), "c")).unwrap();
+
+        store.select(b.id).unwrap();
+        store.remove(b.id).unwrap();
+        assert_eq!(store.list().selected, Some(c.id));
+        assert_eq!(saved_selection(dir.path()), c.id);
+
+        store.remove(c.id).unwrap();
+        assert_eq!(store.list().selected, Some(a.id));
+        assert_eq!(saved_selection(dir.path()), a.id);
+
+        store.remove(a.id).unwrap();
+        assert_eq!(store.list().selected, None);
+        assert_eq!(saved_selection(dir.path()), serde_json::Value::Null);
+    }
+
+    #[test]
+    fn removing_another_project_keeps_the_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let b = store.add(&folder(dir.path(), "b")).unwrap();
+        store.select(b.id).unwrap();
+        store.remove(a.id).unwrap();
+        assert_eq!(saved_selection(dir.path()), b.id);
+    }
+
+    #[test]
+    fn a_read_only_store_keeps_the_selection_in_memory() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("projects.json");
+        fs::create_dir(&file).unwrap();
+        let store = store_in(dir.path());
+        lock(&store.state).file.projects = vec![
+            Project {
+                id: 1,
+                name: "a".to_owned(),
+                path: "nowhere".to_owned(),
+                tabs: Vec::new(),
+            },
+            Project {
+                id: 2,
+                name: "b".to_owned(),
+                path: "elsewhere".to_owned(),
+                tabs: Vec::new(),
+            },
+        ];
+        assert_eq!(store.select(2), Ok(()));
+        assert_eq!(store.list().selected, Some(2));
+        assert!(names_in(&file).is_empty());
+    }
+
+    #[test]
+    fn a_file_without_selected_selects_the_first_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let older = r#"{ "version": 1, "projects": [{ "id": 4, "name": "a", "path": "nowhere", "tabs": [] }, { "id": 7, "name": "b", "path": "elsewhere", "tabs": [] }] }"#;
+        fs::write(dir.path().join("projects.json"), older).unwrap();
+        let list = store_in(dir.path()).list();
+        assert_eq!(list.warning, None);
+        assert_eq!(list.selected, Some(4));
     }
 
     #[test]

@@ -18,6 +18,19 @@ export function keepSelection(projects: readonly Project[], selectedId: number |
 }
 
 /**
+ * Returns the project to select after the list reloads: `selectedId` while it
+ * still names one of `projects`, else `stored` (the selection Rust gives) when
+ * it does, else `undefined`.
+ */
+export function nextSelection(
+  projects: readonly Project[],
+  selectedId: number | undefined,
+  stored: number | null,
+): number | undefined {
+  return keepSelection(projects, selectedId) ?? keepSelection(projects, stored ?? undefined);
+}
+
+/**
  * Chooses what the work area shows: the empty state when there is no project,
  * the missing-folder state when the selected project's folder is gone, the
  * no-session state when the selected project has no tab (`selectedHasTabs`),

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { chooseWorkArea, clickAction, keepSelection } from "./project-selection";
+import { chooseWorkArea, clickAction, keepSelection, nextSelection } from "./project-selection";
 import type { Project } from "./projects";
 
 const alpha: Project = { id: 1, name: "alpha", path: "C:\\work\\alpha", exists: true, tabs: [] };
@@ -39,6 +39,26 @@ describe("keepSelection", () => {
   it("drops a selection that left the list", () => {
     expect(keepSelection([alpha], 2)).toBeUndefined();
     expect(keepSelection([alpha], undefined)).toBeUndefined();
+  });
+});
+
+describe("nextSelection", () => {
+  it("keeps a selection that is still in the list", () => {
+    expect(nextSelection([alpha, gone], 2, 1)).toBe(2);
+  });
+
+  it("takes the stored selection when there is none", () => {
+    expect(nextSelection([alpha, gone], undefined, 2)).toBe(2);
+  });
+
+  it("takes the stored selection when the current one left the list", () => {
+    expect(nextSelection([alpha], 2, 1)).toBe(1);
+  });
+
+  it("selects nothing when neither names a project", () => {
+    expect(nextSelection([], 2, null)).toBeUndefined();
+    expect(nextSelection([alpha], 9, 8)).toBeUndefined();
+    expect(nextSelection([alpha], undefined, null)).toBeUndefined();
   });
 });
 
