@@ -1,6 +1,7 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-import { fillTexts, isTextKey, texts, type TextTarget } from "./strings";
+import { fillTexts, isTextKey, messages, texts, type TextTarget } from "./strings";
 
 /** Stand-in for an element: its text content and its attributes. */
 class FakeTarget implements TextTarget {
@@ -54,5 +55,22 @@ describe("isTextKey", () => {
     expect(isTextKey("tryAgain")).toBe(true);
     expect(isTextKey("toString")).toBe(false);
     expect(texts.tryAgain).toBe("Try again");
+  });
+});
+
+describe("index.html", () => {
+  it("names only keys the fixed texts have", () => {
+    const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+    const named = [...html.matchAll(/data-(?:text|label|title)="([^"]*)"/gu)].map((match) => match[1]);
+    expect(named.length).toBeGreaterThan(0);
+    expect(named.filter((key) => !isTextKey(key))).toEqual([]);
+  });
+});
+
+describe("messages.sessionCount", () => {
+  it("says session for one and sessions otherwise", () => {
+    expect(messages.sessionCount(0)).toBe("0 sessions");
+    expect(messages.sessionCount(1)).toBe("1 session");
+    expect(messages.sessionCount(2)).toBe("2 sessions");
   });
 });

@@ -532,6 +532,16 @@ describe("TabPane start failure card", () => {
     expect(error.textContent).toBe(notFound);
   });
 
+  it("shows a refusal that is not an Error as text", async () => {
+    tauri.invoke.mockImplementation((command) =>
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- Tauri rejects with the Rust error string
+      command === "pty_spawn" ? Promise.reject("folder not registered") : Promise.resolve(),
+    );
+    const pane = openPane(1, recorder().handlers);
+    await expect(pane.start("new", FOLDER)).rejects.toBe("folder not registered");
+    expect(failureCardOf(pane).error.textContent).toBe("folder not registered");
+  });
+
   it("offers Try again, New session and Close after a refused resume", async () => {
     refuseSpawns(new Error("refused"));
     const { events, handlers } = recorder();

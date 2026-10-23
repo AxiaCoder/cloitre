@@ -83,7 +83,15 @@ vi.mock("@xterm/addon-fit", () => ({ FitAddon: xterm.FakeFitAddon }));
 vi.mock("@xterm/addon-unicode-graphemes", () => ({ UnicodeGraphemesAddon: xterm.FakeAddon }));
 vi.mock("@xterm/addon-webgl", () => ({ WebglAddon: xterm.FakeWebglAddon }));
 
-import { TerminalView, isRenderer, isUnicodeVersion, showRenderer, terminalAppearance } from "./terminal-view";
+import {
+  TerminalView,
+  isRenderer,
+  isUnicodeVersion,
+  loadTerminalFonts,
+  readTerminalAppearance,
+  showRenderer,
+  terminalAppearance,
+} from "./terminal-view";
 
 let observers: { callback: () => void; observed: unknown[]; disconnected: boolean }[];
 
@@ -376,6 +384,50 @@ describe("terminalAppearance", () => {
 
   it("leaves out the tokens that read empty, keeping the xterm.js defaults", () => {
     expect(terminalAppearance(() => "  ")).toEqual({ theme: {} });
+  });
+});
+
+describe("readTerminalAppearance", () => {
+  it("keeps every xterm.js default without a page to read", () => {
+    vi.stubGlobal("getComputedStyle", undefined);
+    expect(readTerminalAppearance()).toEqual({ theme: {} });
+  });
+});
+
+/** Stubs a page whose `--font-mono` token reads `font`, and whose font loader runs `load`. */
+function stubFontPage(font: string, load: (spec: string) => Promise<unknown>): string[] {
+  const loaded: string[] = [];
+  vi.stubGlobal("document", {
+    documentElement: {},
+    fonts: {
+      load: (spec: string) => {
+        loaded.push(spec);
+        return load(spec);
+      },
+    },
+  });
+  vi.stubGlobal("getComputedStyle", () => ({
+    getPropertyValue: (name: string) => (name === "--font-mono" ? font : ""),
+  }));
+  return loaded;
+}
+
+describe("loadTerminalFonts", () => {
+  it("loads the regular and the bold face of the token font at the terminal size", async () => {
+    const loaded = stubFontPage('"Mono A", monospace', () => Promise.resolve([]));
+    await loadTerminalFonts();
+    expect(loaded).toEqual(['14px "Mono A", monospace', '600 14px "Mono A", monospace']);
+  });
+
+  it("resolves when a face fails to load", async () => {
+    stubFontPage('"Mono A"', () => Promise.reject(new Error("network")));
+    await expect(loadTerminalFonts()).resolves.toBeUndefined();
+  });
+
+  it("loads nothing when no font token is set", async () => {
+    const loaded = stubFontPage("", () => Promise.resolve([]));
+    await loadTerminalFonts();
+    expect(loaded).toEqual([]);
   });
 });
 

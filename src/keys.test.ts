@@ -93,4 +93,9 @@ describe("isToolsShortcut", () => {
     expect(isToolsShortcut({ ...ctrlShiftD, altKey: true })).toBe(false);
     expect(isToolsShortcut({ ...ctrlShiftD, ctrlKey: false })).toBe(false);
   });
+
+  it("ignores Ctrl+Shift+D held with the Meta key, and Ctrl+Shift with another key", () => {
+    expect(isToolsShortcut({ ...ctrlShiftD, metaKey: true })).toBe(false);
+    expect(isToolsShortcut({ ...ctrlShiftD, code: "KeyF", key: "F", keyCode: 70 })).toBe(false);
+  });
 });
