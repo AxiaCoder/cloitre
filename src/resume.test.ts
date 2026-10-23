@@ -11,6 +11,10 @@ describe("isFailedResume", () => {
     expect(isFailedResume("resume", 0, 300)).toBe(false);
   });
 
+  it("counts a resume failing just before the window closes", () => {
+    expect(isFailedResume("resume", 1, RESUME_FAILURE_WINDOW_MS - 1)).toBe(true);
+  });
+
   it("does not count a resume ending once the window has passed", () => {
     expect(isFailedResume("resume", 1, RESUME_FAILURE_WINDOW_MS)).toBe(false);
   });

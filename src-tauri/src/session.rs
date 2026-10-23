@@ -297,6 +297,8 @@ mod tests {
             "",
             "-0f8e5c1a-3b2d-4c6e-9a7f-1d2c3b4a5e6",
             "-x8e5c1a-3b2d-4c6e-9a7f-1d2c3b4a5e6f",
+            "-f8e5c1a-3b2d-4c6e-9a7f-1d2c3b4a5e6f",
+            "0f8e5c1a03b2d04c6e09a7f01d2c3b4a5e6f",
             "--resume",
             "0f8e5c1a-3b2d-4c6e-9a7f-1d2c3b4a5e6",
             "0f8e5c1a-3b2d-4c6e-9a7f-1d2c3b4a5e6f0",
@@ -510,6 +512,36 @@ mod tests {
         let (_, before) = store.launch(tab, LaunchMode::Resume).unwrap();
         PendingSessions::new(dir.path().join("nowhere")).apply(&store);
         assert_eq!(store.launch(tab, LaunchMode::Resume).unwrap().1, before);
+    }
+
+    #[test]
+    fn a_pending_id_that_cannot_be_saved_stays_for_the_next_apply() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, tab) = store_with_a_tab(dir.path());
+        let (_, before) = store.launch(tab, LaunchMode::Resume).unwrap();
+        let sessions = sessions_dir(dir.path());
+        assert!(record_session(
+            &notice(SAMPLE),
+            Some(OsStr::new(&tab.to_string())),
+            &sessions
+        ));
+        let blocker = dir
+            .path()
+            .join(format!("projects.json.{}.tmp", std::process::id()));
+        fs::create_dir(&blocker).unwrap();
+        let pending = PendingSessions::new(sessions.clone());
+
+        pending.apply(&store);
+        assert_eq!(store.launch(tab, LaunchMode::Resume).unwrap().1, before);
+        assert!(sessions.join(tab.to_string()).exists());
+
+        fs::remove_dir(&blocker).unwrap();
+        pending.apply(&store);
+        assert_eq!(
+            store.launch(tab, LaunchMode::Resume).unwrap().1.as_str(),
+            SAMPLE
+        );
+        assert!(!sessions.join(tab.to_string()).exists());
     }
 
     #[test]
