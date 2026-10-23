@@ -1,0 +1,147 @@
+/**
+ * Every text the interface shows, in one place. The fixed texts are in
+ * {@link texts}, reachable from the page by key; the texts built from a value
+ * are the functions of {@link messages}.
+ */
+
+/** The fixed texts of the interface, by key. `index.html` names them in `data-text`, `data-label` and `data-title`. */
+export const texts = {
+  closeWarning: "Close the warning",
+  devTools: "Developer tools",
+  renderer: "Renderer",
+  rendererDom: "DOM",
+  rendererWebgl: "WebGL",
+  unicodeWidths: "Unicode widths",
+  unicode15Graphemes: "15 + graphemes",
+  mark: "Mark",
+  markTitle: "Mark the recording (F9)",
+  recording: "Recording",
+  replaySpeed: "Replay speed",
+  speedInstant: "Instant",
+  speedRealtime: "Real time",
+  replay: "Replay",
+  nextMark: "Next mark",
+  stopReplay: "Stop replay",
+  noSession: "No session",
+  projects: "Projects",
+  openFolder: "Open a folder",
+  sessions: "Sessions",
+  newSession: "New session",
+  noProjectOpen: "No project open",
+  noProjectHint: "Each folder you open becomes a project, with its own Claude Code sessions.",
+  newSessionStartsIn: "A new session starts in",
+  startClaude: "Start Claude Code",
+  missingFolderTitle: "The project folder cannot be found",
+  missingFolderHint: "It may have been moved or renamed.",
+  chooseAnotherFolder: "Choose another folder",
+  removeProject: "Remove the project",
+  restart: "Restart",
+  close: "Close",
+  resume: "Resume",
+  resumeOffer: "Resume the previous conversation, or start a new session.",
+  startingTitle: "Starting Claude Code",
+  startFailedTitle: "Claude Code could not start",
+  tryAgain: "Try again",
+  notRecorded: "not recorded",
+  noSessionToMark: "No session to mark",
+  noRecordingChosen: "No recording chosen",
+  selectProjectToReplay: "Select a project to replay in",
+  replayStopped: "Replay stopped",
+  webglLost: "WebGL context lost, back to the DOM renderer",
+  webglUnavailable: "WebGL is not available, DOM renderer kept",
+} as const;
+
+/** The key of a fixed text. */
+export type TextKey = keyof typeof texts;
+
+/** The texts of the interface built from a value. */
+export const messages = {
+  /** The end notice of a session that ended with exit code `code`. */
+  sessionEnded: (code: number) => `Claude Code ended (code ${String(code)})`,
+  /** The start notice after a resume that exited with `code` right away. */
+  resumeFailed: (code: number) =>
+    `Claude Code exited with code ${String(code)} while resuming. The previous conversation may no longer exist.`,
+  /** The folder line of the starting card. */
+  startingFolder: (path: string) => `Folder: ${path}`,
+  /** The no-session state title of project `name`. */
+  noSessionTitle: (name: string) => `${name} has no session`,
+  /** The label of session tab number `number` of its project. */
+  sessionLabel: (number: number) => `Session ${String(number)}`,
+  /** The label of the replay tab showing `recording`. */
+  replayLabel: (recording: string) => `Replay ${recording}`,
+  /** The tooltip of session tab `label` in `state`. */
+  tabTitle: (label: string, state: string) => `${label} (${state})`,
+  /** The accessible name of the close button of tab `label`. */
+  closeTab: (label: string) => `Close ${label}`,
+  /** The tooltip of a project's session count. */
+  sessionCount: (count: number) => (count === 1 ? "1 session" : `${String(count)} sessions`),
+  /** The tooltip of project `name` in folder `path`. */
+  projectTitle: (name: string, path: string) => `${name}\n${path}`,
+  /** The tooltip of project `name` whose folder `path` is gone. */
+  missingProjectTitle: (name: string, path: string) => `${name}\nFolder not found: ${path}`,
+  /** The recording list entry of `name`, `kilobytes` long. */
+  recordingEntry: (name: string, kilobytes: number) => `${name} (${String(kilobytes)} KB)`,
+  /** The recording indicator of a session recorded in `name`. */
+  recordingName: (name: string) => `● recording ${name}`,
+  /** The status after a marker dropped at `time`. */
+  markedAt: (time: string) => `Marked at ${time}`,
+  /** The status after loading recording `name` whose last record was dropped. */
+  truncatedRecording: (name: string) => `${name}: the last record is incomplete and was dropped`,
+  /** The status while recording `name` replays. */
+  replaying: (name: string) => `Replaying ${name}`,
+  /** The status once recording `name` has replayed to its end. */
+  endOfRecording: (name: string) => `${name}: end of recording`,
+  /** The status of recording `name` paused at marker number `marker`. */
+  pausedAtMarker: (name: string, marker: number) => `${name}: paused at marker ${String(marker)}`,
+  /** The status of recording `name` replayed to its end looking for a marker. */
+  noMarkerLeft: (name: string) => `${name}: no marker left, end of recording`,
+} as const;
+
+/** Returns whether `key` names a fixed text. */
+export function isTextKey(key: string): key is TextKey {
+  return Object.prototype.hasOwnProperty.call(texts, key);
+}
+
+/** The attributes that name a fixed text, and where the text goes. */
+const TEXT_ATTRIBUTES = [
+  ["data-text", "textContent"],
+  ["data-label", "aria-label"],
+  ["data-title", "title"],
+] as const;
+
+/** The parts of an element {@link fillTexts} reads and writes. */
+export interface TextTarget {
+  textContent: string | null;
+  getAttribute(name: string): string | null;
+  setAttribute(name: string, value: string): void;
+}
+
+/** The part of a page {@link fillTexts} searches. */
+export interface TextRoot {
+  querySelectorAll(selectors: string): Iterable<TextTarget>;
+}
+
+/**
+ * Fills, under `root`, every element naming a fixed text: `data-text` sets
+ * its text content, `data-label` its `aria-label`, `data-title` its `title`.
+ * @throws {Error} when an element names a key {@link texts} lacks
+ */
+export function fillTexts(root: TextRoot): void {
+  const selectors = TEXT_ATTRIBUTES.map(([attribute]) => `[${attribute}]`).join(",");
+  for (const target of root.querySelectorAll(selectors)) {
+    for (const [attribute, destination] of TEXT_ATTRIBUTES) {
+      const key = target.getAttribute(attribute);
+      if (key === null) {
+        continue;
+      }
+      if (!isTextKey(key)) {
+        throw new Error(`unknown text key "${key}" in ${attribute}`);
+      }
+      if (destination === "textContent") {
+        target.textContent = texts[key];
+      } else {
+        target.setAttribute(destination, texts[key]);
+      }
+    }
+  }
+}

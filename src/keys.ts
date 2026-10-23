@@ -40,3 +40,24 @@ export function decideKey(event: KeyInput): KeyDecision {
   }
   return "terminal";
 }
+
+/** The virtual key code of the D key, the same on every keyboard layout. */
+const VIRTUAL_KEY_D = 68;
+
+/**
+ * Returns whether `event` is a keydown of Ctrl+Shift+D, which shows or hides
+ * the developer tools. Matched on the virtual key code, so it works on every
+ * keyboard layout. A held key's repeats match too: the caller keeps them from
+ * the terminal and toggles on the first one only.
+ * @param event - the key event the window is about to dispatch
+ */
+export function isToolsShortcut(event: KeyInput): boolean {
+  return (
+    event.type === "keydown" &&
+    event.ctrlKey &&
+    event.shiftKey &&
+    !event.altKey &&
+    !event.metaKey &&
+    event.keyCode === VIRTUAL_KEY_D
+  );
+}

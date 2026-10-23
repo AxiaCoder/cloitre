@@ -58,6 +58,10 @@ button.primary:hover {
   color: var(--muted);
 }
 
+.controls[hidden] {
+  display: none;
+}
+
 .controls button,
 .controls select {
   padding: var(--sp-1) var(--sp-4);
@@ -71,6 +75,8 @@ button.primary:hover {
 }
 
 #status {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -295,6 +301,9 @@ button.primary:hover {
   color: var(--crit);
   font-family: var(--font-mono);
   font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
 }
 
 /* Tab bar */
@@ -342,8 +351,13 @@ button.primary:hover {
 
 .tab.restored .tab-label,
 .tab.starting .tab-label,
-.tab.exited .tab-label {
+.tab.exited .tab-label,
+.tab.failed .tab-label {
   opacity: 0.7;
+}
+
+.tab.failed .tab-label {
+  color: var(--crit);
 }
 
 .tab.exited .tab-label {
@@ -390,6 +404,12 @@ button.primary:hover {
   background: none;
 }
 
+.tab-label:focus-visible,
+.tab-close:focus-visible,
+.new-tab:focus-visible {
+  outline-offset: -2px;
+}
+
 .tab-close:hover,
 .new-tab:hover {
   background: var(--ink-2);
@@ -403,6 +423,19 @@ button.primary:hover {
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: 14px;
+}
+
+.cwd {
+  align-self: center;
+  min-width: 0;
+  margin-left: auto;
+  padding: 0 var(--sp-6);
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Terminals */
@@ -451,6 +484,50 @@ button.primary:hover {
 .end-notice span,
 .start-notice span {
   flex: 1;
+}
+
+.pane-card {
+  position: absolute;
+  inset: 0;
+  z-index: 11;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-4);
+  padding: var(--sp-10);
+  background: var(--term-bg);
+  text-align: center;
+}
+
+.pane-card[hidden] {
+  display: none;
+}
+
+.pane-card h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.pane-card .path {
+  margin: 0;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.pane-card .error {
+  max-width: 72ch;
+  margin: 0;
+  text-align: left;
+}
+
+.pane-card .actions {
+  display: flex;
+  gap: var(--sp-4);
+  margin-top: var(--sp-2);
 }
 
 /* Spinner: three dots */

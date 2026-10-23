@@ -3,6 +3,8 @@ import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal, type ITheme } from "@xterm/xterm";
 
+import { texts } from "./strings";
+
 /** How xterm.js draws the screen. */
 export type Renderer = "dom" | "webgl";
 
@@ -238,9 +240,9 @@ export function showRenderer(
 ): void {
   picker.value = view.setRenderer(wanted, () => {
     picker.value = "dom";
-    showStatus("WebGL context lost, back to the DOM renderer");
+    showStatus(texts.webglLost);
   });
   if (picker.value !== wanted) {
-    showStatus("WebGL is not available, DOM renderer kept");
+    showStatus(texts.webglUnavailable);
   }
 }

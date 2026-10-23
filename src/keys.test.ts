@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { decideKey, type KeyInput } from "./keys";
+import { decideKey, isToolsShortcut, type KeyInput } from "./keys";
 
 /** Builds a key event with no modifier, overridden by `fields`. */
 function key(fields: Partial<KeyInput>): KeyInput {
@@ -70,5 +70,27 @@ describe("decideKey", () => {
 
   it("sends F9 with a modifier to the terminal", () => {
     expect(decideKey(key({ code: "F9", key: "F9", ctrlKey: true }))).toBe("terminal");
+  });
+});
+
+describe("isToolsShortcut", () => {
+  const ctrlShiftD = key({ code: "KeyD", key: "D", keyCode: 68, ctrlKey: true, shiftKey: true });
+
+  it("matches the keydown of Ctrl+Shift+D", () => {
+    expect(isToolsShortcut({ ...ctrlShiftD })).toBe(true);
+  });
+
+  it("matches on the virtual key code, whatever the layout puts on the key", () => {
+    expect(isToolsShortcut({ ...ctrlShiftD, code: "KeyQ", key: "Q" })).toBe(true);
+  });
+
+  it("ignores the keyup", () => {
+    expect(isToolsShortcut({ ...ctrlShiftD, type: "keyup" })).toBe(false);
+  });
+
+  it("ignores Ctrl+D, Ctrl+Alt+Shift+D and Shift+D", () => {
+    expect(isToolsShortcut({ ...ctrlShiftD, shiftKey: false })).toBe(false);
+    expect(isToolsShortcut({ ...ctrlShiftD, altKey: true })).toBe(false);
+    expect(isToolsShortcut({ ...ctrlShiftD, ctrlKey: false })).toBe(false);
   });
 });

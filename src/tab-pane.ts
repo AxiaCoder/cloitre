@@ -2,6 +2,7 @@ import { decideKey } from "./keys";
 import type { SpawnMode } from "./pty";
 import { isFailedResume } from "./resume";
 import { SessionSlot, type TerminalSize } from "./session";
+import { messages, texts } from "./strings";
 import { TerminalView } from "./terminal-view";
 
 /**
@@ -58,8 +59,10 @@ export interface TabPaneHandlers {
   onRestart(): void;
   /** The user asked, from the start notice, to resume this tab's previous conversation. */
   onResume(): void;
-  /** The user asked, from the end notice, to close this tab. */
+  /** The user asked, from the end notice or the start failure card, to close this tab. */
   onClose(): void;
+  /** The user asked, from the start failure card, to start again in `mode`, the mode that failed. */
+  onRetry(mode: SpawnMode): void;
 }
 
 /**
@@ -71,17 +74,43 @@ export type StartOffer = "resume" | { readonly failedWith: number };
 
 /** Returns the start notice text for `offer`. */
 function offerText(offer: StartOffer): string {
-  if (offer === "resume") {
-    return "Resume the previous conversation, or start a new session.";
-  }
-  return `Claude Code exited with code ${String(offer.failedWith)} while resuming. The previous conversation may no longer exist.`;
+  return offer === "resume" ? texts.resumeOffer : messages.resumeFailed(offer.failedWith);
+}
+
+/** Returns a new `<button>` of `className` showing `text`, that calls `onClick`. */
+function button(text: string, className: string, onClick: () => void): HTMLButtonElement {
+  const created = document.createElement("button");
+  created.type = "button";
+  created.className = className;
+  created.textContent = text;
+  created.addEventListener("click", onClick);
+  return created;
+}
+
+/** Returns a new element of `tagName` with `className` and `text`. */
+function textElement<K extends keyof HTMLElementTagNameMap>(
+  tagName: K,
+  className: string,
+  text: string,
+): HTMLElementTagNameMap[K] {
+  const created = document.createElement(tagName);
+  created.className = className;
+  created.textContent = text;
+  return created;
+}
+
+/** Returns the text of a start refusal: the message of an `Error`, else the value as text. */
+function refusalText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /**
  * The terminal and the `claude` session of one session tab. When the session
  * ends, a notice over the terminal gives its exit code and offers Restart and
  * Close; when a resume fails, a start notice gives its exit code and offers
- * Resume and New session.
+ * Resume and New session. While a session starts, a card over the terminal
+ * says so; when Rust refuses the start, a card gives the full refusal and
+ * offers Try again and Close.
  */
 export class TabPane extends Pane {
   readonly slot = new SessionSlot();
@@ -91,8 +120,13 @@ export class TabPane extends Pane {
   private readonly endText: HTMLSpanElement;
   private readonly startNotice: HTMLDivElement;
   private readonly startText: HTMLSpanElement;
+  private readonly startingCard: HTMLDivElement;
+  private readonly startingFolder: HTMLParagraphElement;
+  private readonly failureCard: HTMLDivElement;
+  private readonly failureText: HTMLParagraphElement;
+  private readonly failureNewSession: HTMLButtonElement;
+  private failedMode: SpawnMode = "new";
   private exitCode: number | undefined;
-  private offer: StartOffer | undefined;
 
   /** Opens a terminal for session tab `tabId` in a new container appended to `parent`. */
   constructor(
@@ -127,66 +161,88 @@ export class TabPane extends Pane {
       return false;
     });
     this.endText = document.createElement("span");
-    const restart = document.createElement("button");
-    restart.type = "button";
-    restart.className = "primary";
-    restart.textContent = "Restart";
-    restart.addEventListener("click", () => {
-      handlers.onRestart();
-    });
-    const close = document.createElement("button");
-    close.type = "button";
-    close.textContent = "Close";
-    close.addEventListener("click", () => {
-      handlers.onClose();
-    });
     this.endNotice = document.createElement("div");
     this.endNotice.className = "end-notice";
     this.endNotice.setAttribute("role", "status");
     this.endNotice.hidden = true;
-    this.endNotice.append(this.endText, restart, close);
+    this.endNotice.append(
+      this.endText,
+      button(texts.restart, "primary", () => {
+        handlers.onRestart();
+      }),
+      button(texts.close, "", () => {
+        handlers.onClose();
+      }),
+    );
     this.startText = document.createElement("span");
-    const resume = document.createElement("button");
-    resume.type = "button";
-    resume.className = "primary";
-    resume.textContent = "Resume";
-    resume.addEventListener("click", () => {
-      handlers.onResume();
-    });
-    const newSession = document.createElement("button");
-    newSession.type = "button";
-    newSession.textContent = "New session";
-    newSession.addEventListener("click", () => {
-      handlers.onRestart();
-    });
     this.startNotice = document.createElement("div");
     this.startNotice.className = "start-notice";
     this.startNotice.setAttribute("role", "status");
     this.startNotice.hidden = true;
-    this.startNotice.append(this.startText, resume, newSession);
-    this.container.append(this.endNotice, this.startNotice);
+    this.startNotice.append(
+      this.startText,
+      button(texts.resume, "primary", () => {
+        handlers.onResume();
+      }),
+      button(texts.newSession, "", () => {
+        handlers.onRestart();
+      }),
+    );
+    const spinner = document.createElement("span");
+    spinner.className = "spinner";
+    spinner.setAttribute("aria-hidden", "true");
+    spinner.append(...[1, 2, 3].map(() => document.createElement("span")));
+    this.startingFolder = textElement("p", "path", "");
+    this.startingCard = document.createElement("div");
+    this.startingCard.className = "pane-card starting-card";
+    this.startingCard.setAttribute("role", "status");
+    this.startingCard.hidden = true;
+    this.startingCard.append(textElement("h2", "", texts.startingTitle), spinner, this.startingFolder);
+    this.failureText = textElement("p", "error", "");
+    this.failureNewSession = button(texts.newSession, "", () => {
+      handlers.onRestart();
+    });
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    actions.append(
+      button(texts.tryAgain, "primary", () => {
+        handlers.onRetry(this.failedMode);
+      }),
+      this.failureNewSession,
+      button(texts.close, "", () => {
+        handlers.onClose();
+      }),
+    );
+    this.failureCard = document.createElement("div");
+    this.failureCard.className = "pane-card failure-card";
+    this.failureCard.setAttribute("role", "alert");
+    this.failureCard.hidden = true;
+    this.failureCard.append(textElement("h2", "", texts.startFailedTitle), this.failureText, actions);
+    this.container.append(this.endNotice, this.startNotice, this.startingCard, this.failureCard);
   }
 
   /** Shows the start notice with `offer`, over the end notice, which it hides. */
   showOffer(offer: StartOffer): void {
-    this.offer = offer;
     this.startText.textContent = offerText(offer);
     this.startNotice.hidden = false;
     this.endNotice.hidden = true;
   }
 
   /**
-   * Starts `claude` for this tab in `mode` on a cleared, fitted screen, hiding
-   * both notices. A start Rust refuses shows the notice that was up again: the
-   * start notice, else the end notice of the previous session, if any. A
-   * resume that fails (see {@link isFailedResume}) shows the start notice
-   * with its exit code instead of the end notice. Settles as
-   * {@link SessionSlot.start} does.
+   * Starts `claude` for this tab in `mode` on a cleared, fitted screen, in
+   * project folder `folder`. Hides both notices and any failure card, and
+   * shows the starting card, naming `folder`, until the start settles. A start
+   * Rust refuses shows the failure card with the full refusal; its Try again
+   * asks for `mode` again, and a refused resume also offers New session. A resume that fails (see {@link isFailedResume})
+   * shows the start notice with its exit code instead of the end notice.
+   * Settles as {@link SessionSlot.start} does.
    */
-  async start(mode: SpawnMode): Promise<boolean> {
-    const offered = this.offer;
+  async start(mode: SpawnMode, folder: string): Promise<boolean> {
     this.hideOffer();
     this.endNotice.hidden = true;
+    this.failureCard.hidden = true;
+    this.startingFolder.textContent = messages.startingFolder(folder);
+    this.startingCard.hidden = false;
     const startedAt = Date.now();
     try {
       return await this.slot.start(this.tabId, mode, () => this.prepareScreen(), {
@@ -204,12 +260,13 @@ export class TabPane extends Pane {
         },
       });
     } catch (error) {
-      if (offered) {
-        this.showOffer(offered);
-      } else {
-        this.showEndNotice();
-      }
+      this.failedMode = mode;
+      this.failureNewSession.hidden = mode !== "resume";
+      this.failureText.textContent = refusalText(error);
+      this.failureCard.hidden = false;
       throw error;
+    } finally {
+      this.startingCard.hidden = true;
     }
   }
 
@@ -222,7 +279,6 @@ export class TabPane extends Pane {
 
   /** Hides the start notice. */
   private hideOffer(): void {
-    this.offer = undefined;
     this.startNotice.hidden = true;
   }
 
@@ -231,7 +287,7 @@ export class TabPane extends Pane {
     if (this.exitCode === undefined) {
       return;
     }
-    this.endText.textContent = `Claude Code ended (code ${String(this.exitCode)})`;
+    this.endText.textContent = messages.sessionEnded(this.exitCode);
     this.endNotice.hidden = false;
   }
 

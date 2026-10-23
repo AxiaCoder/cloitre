@@ -10,68 +10,69 @@
   <body>
     <div id="warning" class="warning" role="alert" hidden>
       <span id="warning-text"></span>
-      <button id="warning-close" type="button" aria-label="Close the warning">×</button>
+      <button id="warning-close" type="button" data-label="closeWarning">×</button>
     </div>
-    <header class="controls">
+    <header id="controls" class="controls" data-label="devTools" hidden>
       <label>
-        Renderer
+        <span data-text="renderer"></span>
         <select id="renderer">
-          <option value="dom">DOM</option>
-          <option value="webgl" selected>WebGL</option>
+          <option value="dom" data-text="rendererDom"></option>
+          <option value="webgl" data-text="rendererWebgl" selected></option>
         </select>
       </label>
       <label>
-        Unicode widths
+        <span data-text="unicodeWidths"></span>
         <select id="unicode">
           <option value="6">6</option>
           <option value="15">15</option>
-          <option value="15-graphemes" selected>15 + graphemes</option>
+          <option value="15-graphemes" data-text="unicode15Graphemes" selected></option>
         </select>
       </label>
-      <button id="mark" type="button" title="Mark the recording (F9)">Mark</button>
+      <button id="mark" type="button" data-text="mark" data-title="markTitle"></button>
       <span id="recording" hidden></span>
       <label>
-        Recording
+        <span data-text="recording"></span>
         <select id="recordings"></select>
       </label>
-      <select id="replay-speed" aria-label="Replay speed">
-        <option value="instant" selected>Instant</option>
-        <option value="realtime">Real time</option>
+      <select id="replay-speed" data-label="replaySpeed">
+        <option value="instant" data-text="speedInstant" selected></option>
+        <option value="realtime" data-text="speedRealtime"></option>
       </select>
-      <button id="replay" type="button">Replay</button>
-      <button id="next-mark" type="button">Next mark</button>
-      <button id="stop-replay" type="button">Stop replay</button>
-      <span id="status">No session</span>
+      <button id="replay" type="button" data-text="replay"></button>
+      <button id="next-mark" type="button" data-text="nextMark"></button>
+      <button id="stop-replay" type="button" data-text="stopReplay"></button>
+      <span id="status" role="status" data-text="noSession"></span>
     </header>
     <div class="workspace">
-      <nav class="rail" aria-label="Projects">
-        <h2>Projects</h2>
+      <nav class="rail" data-label="projects">
+        <h2 data-text="projects"></h2>
         <ul id="project-list"></ul>
-        <button id="add-project" type="button" aria-label="Open a folder" title="Open a folder"><span aria-hidden="true">＋</span><span class="add-label" aria-hidden="true"> Open a folder</span></button>
+        <button id="add-project" type="button" data-label="openFolder" data-title="openFolder"><span aria-hidden="true">＋</span> <span class="add-label" aria-hidden="true" data-text="openFolder"></span></button>
       </nav>
       <main class="work">
         <div id="tab-bar" class="tab-bar" hidden>
-          <div id="tab-list" class="tab-list" role="tablist" aria-label="Sessions"></div>
-          <button id="new-tab" class="new-tab" type="button" title="New session" aria-label="New session">+</button>
+          <div id="tab-list" class="tab-list" role="tablist" data-label="sessions"></div>
+          <button id="new-tab" class="new-tab" type="button" data-title="newSession" data-label="newSession">+</button>
+          <span id="cwd" class="cwd"></span>
         </div>
         <div id="terminals" class="terminals"></div>
         <section id="empty-state" class="state" hidden>
-          <h1>No project open</h1>
-          <p>Each folder you open becomes a project, with its own Claude Code sessions.</p>
-          <button id="empty-open" class="primary" type="button">Open a folder</button>
+          <h1 data-text="noProjectOpen"></h1>
+          <p data-text="noProjectHint"></p>
+          <button id="empty-open" class="primary" type="button" data-text="openFolder"></button>
         </section>
         <section id="no-session-state" class="state" hidden>
           <h1 id="no-session-title"></h1>
-          <p>A new session starts in <span id="no-session-path" class="path"></span>.</p>
-          <button id="no-session-start" class="primary" type="button">Start Claude Code</button>
+          <p><span data-text="newSessionStartsIn"></span> <span id="no-session-path" class="path"></span>.</p>
+          <button id="no-session-start" class="primary" type="button" data-text="startClaude"></button>
         </section>
         <section id="missing-state" class="state" hidden>
-          <h1>The project folder cannot be found</h1>
+          <h1 data-text="missingFolderTitle"></h1>
           <p id="missing-path" class="path"></p>
-          <p>It may have been moved or renamed.</p>
+          <p data-text="missingFolderHint"></p>
           <div class="actions">
-            <button id="relocate" class="primary" type="button">Choose another folder</button>
-            <button id="remove" type="button">Remove the project</button>
+            <button id="relocate" class="primary" type="button" data-text="chooseAnotherFolder"></button>
+            <button id="remove" type="button" data-text="removeProject"></button>
           </div>
         </section>
       </main>

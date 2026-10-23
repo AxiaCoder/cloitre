@@ -1,8 +1,11 @@
+import { messages } from "./strings";
+
 /**
  * Where a session tab's `claude` session stands. `"restored"` is a tab reopened
- * from a previous run, waiting for the user to resume or start a session.
+ * from a previous run, waiting for the user to resume or start a session;
+ * `"failed"` is a tab whose last start Rust refused.
  */
-export type TabState = "restored" | "starting" | "running" | "exited";
+export type TabState = "restored" | "starting" | "running" | "exited" | "failed";
 
 /** One tab of a project running a `claude` session in its terminal. */
 export interface SessionTab {
@@ -84,7 +87,7 @@ export class TabModel {
    * Either way the tab becomes the project's active tab.
    */
   openReplay(projectId: number, recording: string): ReplayTab {
-    const label = `Replay ${recording}`;
+    const label = messages.replayLabel(recording);
     const existing = this.tabs.find((tab) => tab.kind === "replay" && tab.projectId === projectId);
     if (existing?.kind === "replay") {
       existing.recording = recording;
@@ -165,7 +168,7 @@ export class TabModel {
   private addSession(projectId: number, id: number, state: TabState): SessionTab {
     const number = (this.lastNumbers.get(projectId) ?? 0) + 1;
     this.lastNumbers.set(projectId, number);
-    const tab: StoredTab = { kind: "session", id, projectId, label: `Session ${String(number)}`, state };
+    const tab: StoredTab = { kind: "session", id, projectId, label: messages.sessionLabel(number), state };
     this.tabs.push(tab);
     return tab;
   }
