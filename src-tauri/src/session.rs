@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::error::AppError;
 use crate::launch::TAB_ID_VAR;
 use crate::projects::{ProjectStore, write_file_atomically};
 
@@ -235,33 +236,46 @@ impl PendingSessions {
     /// then deletes its file.
     ///
     /// Only files named by a decimal number are read, so the hook's temporary
-    /// files are left alone. A file that does not hold exactly a session id, or
-    /// names no tab of `store`, is deleted and ignored. A file whose id could
-    /// not be saved is kept, to be applied next time.
+    /// files are left alone. Each file is first renamed to `<n>.applying`, so
+    /// an id the hook writes for the same tab meanwhile stays for the next
+    /// apply. A file that does not hold exactly a session id, or names no tab
+    /// of `store`, is deleted and ignored. A file whose id could not be saved
+    /// goes back under its name, unless the hook wrote a newer one there.
     pub fn apply(&self, store: &ProjectStore) {
+        self.apply_with(|tab, id| store.set_session(tab, id));
+    }
+
+    /// Does what [`Self::apply`] does, storing each id with `save`, which
+    /// receives the tab id and the session id.
+    fn apply_with(&self, mut save: impl FnMut(u32, SessionId) -> Result<(), AppError>) {
         let Ok(entries) = fs::read_dir(&self.dir) else {
             return;
         };
         for entry in entries.flatten() {
             let name = entry.file_name();
-            if !name
+            let Some(text) = name
                 .to_str()
-                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
-            {
+                .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+            else {
+                continue;
+            };
+            let path = entry.path();
+            let claimed = self.dir.join(format!("{text}.applying"));
+            if fs::rename(&path, &claimed).is_err() {
                 continue;
             }
-            let path = entry.path();
             let tab = parse_tab_id(&name);
-            let id = fs::read_to_string(&path)
+            let id = fs::read_to_string(&claimed)
                 .ok()
                 .and_then(|text| SessionId::parse(&text));
             let saved = match (tab, id) {
-                (Some(tab), Some(id)) => store.set_session(tab.get(), id),
+                (Some(tab), Some(id)) => save(tab.get(), id),
                 _ => Ok(()),
             };
-            if saved.is_ok() {
-                let _ = fs::remove_file(&path);
+            if saved.is_err() && fs::hard_link(&claimed, &path).is_err() && !path.exists() {
+                continue;
             }
+            let _ = fs::remove_file(&claimed);
         }
     }
 
@@ -533,7 +547,7 @@ mod tests {
 
         pending.apply(&store);
         assert_eq!(store.launch(tab, LaunchMode::Resume).unwrap().1, before);
-        assert!(sessions.join(tab.to_string()).exists());
+        assert_eq!(file_names(&sessions), [tab.to_string()]);
 
         fs::remove_dir(&blocker).unwrap();
         pending.apply(&store);
@@ -542,6 +556,47 @@ mod tests {
             SAMPLE
         );
         assert!(!sessions.join(tab.to_string()).exists());
+    }
+
+    /// The names of the files left in `dir`.
+    fn file_names(dir: &Path) -> Vec<String> {
+        fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect()
+    }
+
+    const NEWER: &str = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+
+    #[test]
+    fn an_id_the_hook_writes_during_an_apply_stays_for_the_next() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = sessions_dir(dir.path());
+        fs::create_dir_all(&sessions).unwrap();
+        fs::write(sessions.join("3"), SAMPLE).unwrap();
+        let mut applied = Vec::new();
+        PendingSessions::new(sessions.clone()).apply_with(|tab, id| {
+            fs::write(sessions.join("3"), NEWER).unwrap();
+            applied.push((tab, id));
+            Ok(())
+        });
+        assert_eq!(applied, [(3, SessionId::parse(SAMPLE).unwrap())]);
+        assert_eq!(fs::read_to_string(sessions.join("3")).unwrap(), NEWER);
+        assert_eq!(file_names(&sessions), ["3"]);
+    }
+
+    #[test]
+    fn a_failed_apply_leaves_the_newer_id_the_hook_wrote() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = sessions_dir(dir.path());
+        fs::create_dir_all(&sessions).unwrap();
+        fs::write(sessions.join("3"), SAMPLE).unwrap();
+        PendingSessions::new(sessions.clone()).apply_with(|_, _| {
+            fs::write(sessions.join("3"), NEWER).unwrap();
+            Err(AppError::UnknownTab(3))
+        });
+        assert_eq!(fs::read_to_string(sessions.join("3")).unwrap(), NEWER);
+        assert_eq!(file_names(&sessions), ["3"]);
     }
 
     #[test]
