@@ -292,6 +292,16 @@ pub fn project_remove(projects: State<'_, ProjectStore>, id: u32) -> Result<(), 
     projects.remove(id)
 }
 
+/// Remembers project `id` as the selected one, for the next run.
+///
+/// # Errors
+/// An unknown id; a failed save. A read-only project list is not an error:
+/// the selection is then kept until the app closes.
+#[tauri::command(async)]
+pub fn project_select(projects: State<'_, ProjectStore>, id: u32) -> Result<(), AppError> {
+    projects.select(id)
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::{self, Write};

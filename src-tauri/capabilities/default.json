@@ -16,6 +16,7 @@
     "allow-project-add",
     "allow-project-relocate",
     "allow-project-remove",
+    "allow-project-select",
     "allow-tab-open",
     "allow-tab-close"
   ]

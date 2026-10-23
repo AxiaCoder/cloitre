@@ -17,13 +17,14 @@ import {
 } from "./recording";
 import { CloseGuard } from "./close-guard";
 import { isToolsShortcut } from "./keys";
-import { chooseWorkArea, clickAction, findProject, keepSelection } from "./project-selection";
+import { chooseWorkArea, clickAction, findProject, keepSelection, nextSelection } from "./project-selection";
 import {
   addProject,
   closeTab as forgetTab,
   listProjects,
   openTab as saveNewTab,
   relocateProject,
+  rememberSelection,
   removeProject,
   type Project,
 } from "./projects";
@@ -533,20 +534,24 @@ function renderProjects(): void {
   renderTabs();
 }
 
-/** Reloads the project list from Rust, keeps the selection when it is still there, and redraws. */
+/**
+ * Reloads the project list from Rust and redraws. Keeps the selection when it
+ * is still there, else selects the project Rust gives, without opening a tab.
+ */
 async function refreshProjects(): Promise<void> {
   const list = await listProjects();
   projects = list.projects;
-  selectedId = keepSelection(projects, selectedId);
+  selectedId = nextSelection(projects, selectedId, list.selected);
   setWarning({ ...warning, loadWarning: list.warning });
   renderProjects();
 }
 
 /**
- * Reloads the project list, then selects project `id`: shows its active tab,
- * or opens one when it has none. Selecting a project whose folder is gone closes
- * its tabs and shows the missing-folder state. Other projects' sessions keep
- * running. A selection overtaken by a later one while the list reloads does nothing.
+ * Reloads the project list, then selects project `id` and has Rust remember
+ * it: shows its active tab, or opens one when it has none. Selecting a project
+ * whose folder is gone closes its tabs and shows the missing-folder state.
+ * Other projects' sessions keep running. A selection overtaken by a later one
+ * while the list reloads does nothing.
  */
 async function selectProject(id: number): Promise<void> {
   selectionCount += 1;
@@ -558,6 +563,9 @@ async function selectProject(id: number): Promise<void> {
   const action = clickAction(projects, id, tabs.tabsOf(id).length > 0 || opening.has(id));
   selectedId = keepSelection(projects, id);
   renderProjects();
+  if (action.kind !== "none") {
+    report(() => rememberSelection(id));
+  }
   if (action.kind === "open") {
     await openTab(action.project);
   } else if (action.kind === "missing") {
@@ -603,12 +611,16 @@ async function relocateSelected(): Promise<void> {
   await selectProject(moved.id);
 }
 
-/** Removes the selected project, closing all its tabs. */
+/**
+ * Removes the selected project, closing all its tabs, then selects the project Rust gives, without opening a tab.
+ * The displayed project is stored as Rust's selection first, so the neighbour Rust picks is the neighbour of the removed one.
+ */
 async function removeSelected(): Promise<void> {
   const selected = findProject(projects, selectedId);
   if (!selected) {
     return;
   }
+  await rememberSelection(selected.id);
   await removeProject(selected.id);
   if (selectedId === selected.id) {
     selectedId = undefined;
