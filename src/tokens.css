@@ -1,0 +1,69 @@
+/* The only file allowed to hold color literals. */
+
+:root {
+  /* Surfaces */
+  --ink-0: #0f1220;
+  --ink-1: #151a2c;
+  --ink-2: #1d2440;
+  --ink-3: #0a0d18;
+  --line: #2b3354;
+
+  /* Text */
+  --text: #dfe3f3;
+  --muted: #959fc4;
+  --on-marker: #ffffff;
+
+  /* Amber: a session is waiting, nothing else */
+  --accent: #e6aa3a;
+  --accent-ink: #1b1406;
+
+  /* Status */
+  --ok: #6cc29a;
+  --warn: #e58a4b;
+  --warn-bg: #3a2618;
+  --crit: #e07a6a;
+  --replay: #9db4e0;
+
+  /* Project markers, indexed by project id (no amber, no orange) */
+  --marker-1: #4f7fd9;
+  --marker-2: #3a9e96;
+  --marker-3: #5b9c5f;
+  --marker-4: #8467c9;
+  --marker-5: #b9568f;
+  --marker-6: #3d8fbf;
+  --marker-7: #6670c9;
+  --marker-8: #6b7a99;
+
+  /* Terminal */
+  --term-bg: var(--ink-3);
+  --term-fg: var(--text);
+  --term-cursor: var(--text);
+  --term-cursor-ink: var(--ink-3);
+  --term-selection: rgba(149, 159, 196, 0.3);
+  --term-scrollbar: rgba(223, 227, 243, 0.1);
+  --term-scrollbar-hover: rgba(223, 227, 243, 0.25);
+  --term-scrollbar-active: rgba(223, 227, 243, 0.35);
+
+  /* Type */
+  --font-ui: "IBM Plex Sans", system-ui, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+
+  /* Spacing */
+  --sp-1: 2px;
+  --sp-2: 4px;
+  --sp-3: 6px;
+  --sp-4: 8px;
+  --sp-5: 10px;
+  --sp-6: 12px;
+  --sp-7: 14px;
+  --sp-8: 16px;
+  --sp-10: 24px;
+
+  /* Sizes */
+  --radius: 6px;
+  --rail-width: 220px;
+  --rail-width-narrow: 52px;
+  --tab-bar-height: 36px;
+  --marker-size: 28px;
+  --dot-size: 6px;
+}

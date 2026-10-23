@@ -83,7 +83,7 @@ vi.mock("@xterm/addon-fit", () => ({ FitAddon: xterm.FakeFitAddon }));
 vi.mock("@xterm/addon-unicode-graphemes", () => ({ UnicodeGraphemesAddon: xterm.FakeAddon }));
 vi.mock("@xterm/addon-webgl", () => ({ WebglAddon: xterm.FakeWebglAddon }));
 
-import { TerminalView, isRenderer, isUnicodeVersion, showRenderer } from "./terminal-view";
+import { TerminalView, isRenderer, isUnicodeVersion, showRenderer, terminalAppearance } from "./terminal-view";
 
 let observers: { callback: () => void; observed: unknown[]; disconnected: boolean }[];
 
@@ -345,9 +345,37 @@ describe("TerminalView.setUnicodeVersion", () => {
 });
 
 describe("TerminalView theme", () => {
-  it("draws on a black background", () => {
+  it("takes its background and font from the page's CSS tokens", () => {
+    const tokens: Record<string, string> = { "--term-bg": " tokenBg", "--font-mono": ' "Mono A", monospace' };
+    vi.stubGlobal("document", { documentElement: {} });
+    vi.stubGlobal("getComputedStyle", () => ({ getPropertyValue: (name: string) => tokens[name] ?? "" }));
     const { terminal } = openView();
-    expect(terminal.options.theme?.background).toBe("#000000");
+    const options = terminal.options as { theme?: { background?: string }; fontFamily?: string };
+    expect(options.theme?.background).toBe("tokenBg");
+    expect(options.fontFamily).toBe('"Mono A", monospace');
+  });
+});
+
+describe("terminalAppearance", () => {
+  it("maps each terminal token to its xterm.js theme key", () => {
+    const appearance = terminalAppearance((name) => `value of ${name}`);
+    expect(appearance).toEqual({
+      fontFamily: "value of --font-mono",
+      theme: {
+        background: "value of --term-bg",
+        foreground: "value of --term-fg",
+        cursor: "value of --term-cursor",
+        cursorAccent: "value of --term-cursor-ink",
+        selectionBackground: "value of --term-selection",
+        scrollbarSliderBackground: "value of --term-scrollbar",
+        scrollbarSliderHoverBackground: "value of --term-scrollbar-hover",
+        scrollbarSliderActiveBackground: "value of --term-scrollbar-active",
+      },
+    });
+  });
+
+  it("leaves out the tokens that read empty, keeping the xterm.js defaults", () => {
+    expect(terminalAppearance(() => "  ")).toEqual({ theme: {} });
   });
 });
 

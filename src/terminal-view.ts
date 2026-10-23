@@ -1,7 +1,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { Terminal } from "@xterm/xterm";
+import { Terminal, type ITheme } from "@xterm/xterm";
 
 /** How xterm.js draws the screen. */
 export type Renderer = "dom" | "webgl";
@@ -22,6 +22,79 @@ export function isUnicodeVersion(value: string): value is UnicodeVersion {
   return value === "6" || value === "15" || value === "15-graphemes";
 }
 
+/** The terminal font size, in CSS pixels. */
+const TERMINAL_FONT_SIZE = 14;
+
+/** Reads one CSS custom property, such as `--term-bg`; `""` when it is not set. */
+export type TokenReader = (name: string) => string;
+
+/** The font and colors of a terminal, as xterm.js takes them. Unset ones keep the xterm.js default. */
+export interface TerminalAppearance {
+  fontFamily?: string;
+  theme: ITheme;
+}
+
+/** Which CSS custom property gives each color of the terminal theme. */
+const THEME_TOKENS: Readonly<Record<string, keyof ITheme>> = {
+  "--term-bg": "background",
+  "--term-fg": "foreground",
+  "--term-cursor": "cursor",
+  "--term-cursor-ink": "cursorAccent",
+  "--term-selection": "selectionBackground",
+  "--term-scrollbar": "scrollbarSliderBackground",
+  "--term-scrollbar-hover": "scrollbarSliderHoverBackground",
+  "--term-scrollbar-active": "scrollbarSliderActiveBackground",
+};
+
+/**
+ * Builds the terminal appearance from the CSS tokens `read` returns: the font
+ * from `--font-mono`, the colors from the `--term-*` tokens. A token that reads
+ * empty is left out.
+ */
+export function terminalAppearance(read: TokenReader): TerminalAppearance {
+  const theme: Record<string, string> = {};
+  for (const [token, key] of Object.entries(THEME_TOKENS)) {
+    const value = read(token).trim();
+    if (value !== "") {
+      theme[key] = value;
+    }
+  }
+  const fontFamily = read("--font-mono").trim();
+  return fontFamily === "" ? { theme } : { fontFamily, theme };
+}
+
+/**
+ * The terminal appearance from the tokens on the page's root element. Without
+ * a page to read, as under Node, every token reads empty.
+ */
+export function readTerminalAppearance(): TerminalAppearance {
+  if (typeof getComputedStyle !== "function") {
+    return terminalAppearance(() => "");
+  }
+  const style = getComputedStyle(document.documentElement);
+  return terminalAppearance((name) => style.getPropertyValue(name));
+}
+
+/**
+ * Resolves once the regular and bold faces of the terminal font are loaded, so
+ * a terminal opened afterwards measures its cells on the right glyphs. Never
+ * rejects: a font that fails to load leaves the fallback in place.
+ */
+export async function loadTerminalFonts(): Promise<void> {
+  const { fontFamily } = readTerminalAppearance();
+  if (fontFamily === undefined) {
+    return;
+  }
+  try {
+    await Promise.all([
+      document.fonts.load(`${String(TERMINAL_FONT_SIZE)}px ${fontFamily}`),
+      document.fonts.load(`600 ${String(TERMINAL_FONT_SIZE)}px ${fontFamily}`),
+    ]);
+  } catch {
+    return;
+  }
+}
+
 /**
  * One xterm.js terminal filling its container. It refits itself whenever the
  * container changes size while visible, and its renderer and width table can
@@ -37,20 +110,16 @@ export class TerminalView {
   /**
    * Opens a terminal in `container`, drawn by the DOM renderer until
    * {@link TerminalView.setRenderer} switches it, with the Unicode 15 grapheme table.
+   * Its font and colors come from `appearance`, by default the page's CSS tokens.
    */
-  constructor(container: HTMLElement) {
+  constructor(container: HTMLElement, appearance: TerminalAppearance = readTerminalAppearance()) {
     this.terminal = new Terminal({
       allowProposedApi: true,
       cursorBlink: true,
-      fontFamily: '"Cascadia Mono", Consolas, monospace',
-      fontSize: 14,
+      ...appearance,
+      fontSize: TERMINAL_FONT_SIZE,
+      fontWeightBold: "600",
       scrollback: 10_000,
-      theme: {
-        background: "#000000",
-        scrollbarSliderBackground: "rgba(255, 255, 255, 0.1)",
-        scrollbarSliderHoverBackground: "rgba(255, 255, 255, 0.25)",
-        scrollbarSliderActiveBackground: "rgba(255, 255, 255, 0.35)",
-      },
     });
     this.terminal.loadAddon(this.fitAddon);
     this.terminal.loadAddon(new UnicodeGraphemesAddon());

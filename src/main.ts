@@ -1,4 +1,10 @@
+import "@fontsource/ibm-plex-sans/400.css";
+import "@fontsource/ibm-plex-sans/500.css";
+import "@fontsource/ibm-plex-sans/600.css";
+import "@fontsource/jetbrains-mono/400.css";
+import "@fontsource/jetbrains-mono/600.css";
 import "@xterm/xterm/css/xterm.css";
+import "./tokens.css";
 import "./styles.css";
 
 import {
@@ -24,7 +30,14 @@ import type { SpawnMode } from "./pty";
 import { ReplayDeck, type LoadedReplay } from "./replay-deck";
 import { ReplayPane, TabPane } from "./tab-pane";
 import { TabModel, type Tab } from "./tabs";
-import { isRenderer, isUnicodeVersion, showRenderer, type TerminalView } from "./terminal-view";
+import { markerIndex, projectInitials } from "./project-marker";
+import {
+  isRenderer,
+  isUnicodeVersion,
+  loadTerminalFonts,
+  showRenderer,
+  type TerminalView,
+} from "./terminal-view";
 
 /** Returns the element with `id`, or throws when the page lacks it. */
 function element<T extends HTMLElement>(id: string, type: new () => T): T {
@@ -67,6 +80,8 @@ const statusText = element("status", HTMLSpanElement);
 
 /** The tabs of every project. */
 const tabs = new TabModel();
+/** The session count element of each project in the rail, by project id. */
+const sessionCounts = new Map<number, HTMLSpanElement>();
 /** The terminal of each open tab, by tab id: a session pane or the replay pane. */
 const panes = new Map<number, TabPane | ReplayPane>();
 /** The projects as last listed by Rust. */
@@ -231,6 +246,7 @@ function renderTabs(): void {
     showRenderer(shown.view, isRenderer(wanted) ? wanted : "webgl", rendererSelect, showStatus);
   }
   showRecording(shown instanceof TabPane ? shown.recording : undefined);
+  renderSessionCounts();
 }
 
 /** Makes tab `tabId` its project's active tab, shows it and gives it the keyboard. */
@@ -426,8 +442,18 @@ async function closeProjectTabs(projectId: number): Promise<void> {
   await Promise.all(tabs.tabsOf(projectId).map((tab) => closeTab(tab.id, false)));
 }
 
+/** Shows, next to each project in the rail, how many session tabs it has open; nothing for none. */
+function renderSessionCounts(): void {
+  for (const [projectId, count] of sessionCounts) {
+    const open = tabs.tabsOf(projectId).filter((tab) => tab.kind === "session").length;
+    count.textContent = open > 0 ? String(open) : "";
+    count.title = open === 1 ? "1 session" : `${String(open)} sessions`;
+  }
+}
+
 /** Draws the project rail and the work area from `projects` and `selectedId`. */
 function renderProjects(): void {
+  sessionCounts.clear();
   projectList.replaceChildren(
     ...projects.map((project) => {
       const button = document.createElement("button");
@@ -435,14 +461,27 @@ function renderProjects(): void {
       button.className = "project";
       button.classList.toggle("active", project.id === selectedId);
       button.classList.toggle("missing", !project.exists);
-      button.title = project.exists ? project.path : `Folder not found: ${project.path}`;
+      button.title = project.exists
+        ? `${project.name}\n${project.path}`
+        : `${project.name}\nFolder not found: ${project.path}`;
+      const marker = document.createElement("span");
+      marker.className = "project-marker";
+      marker.setAttribute("aria-hidden", "true");
+      marker.style.backgroundColor = `var(--marker-${String(markerIndex(project.id))})`;
+      marker.textContent = projectInitials(project.name);
       const name = document.createElement("span");
       name.className = "project-name";
       name.textContent = project.name;
       const path = document.createElement("span");
       path.className = "project-path";
       path.textContent = project.path;
-      button.append(name, path);
+      const text = document.createElement("span");
+      text.className = "project-text";
+      text.append(name, path);
+      const count = document.createElement("span");
+      count.className = "project-count";
+      sessionCounts.set(project.id, count);
+      button.append(marker, text, count);
       button.addEventListener("click", () => {
         report(() => selectProject(project.id));
       });
@@ -716,4 +755,7 @@ unicodeSelect.addEventListener("change", () => {
 });
 
 refreshRecordingsOrReport();
-report(restoreAllTabs);
+report(async () => {
+  await loadTerminalFonts();
+  await restoreAllTabs();
+});
