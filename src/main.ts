@@ -611,12 +611,16 @@ async function relocateSelected(): Promise<void> {
   await selectProject(moved.id);
 }
 
-/** Removes the selected project, closing all its tabs, then selects the project Rust gives, without opening a tab. */
+/**
+ * Removes the selected project, closing all its tabs, then selects the project Rust gives, without opening a tab.
+ * The displayed project is stored as Rust's selection first, so the neighbour Rust picks is the neighbour of the removed one.
+ */
 async function removeSelected(): Promise<void> {
   const selected = findProject(projects, selectedId);
   if (!selected) {
     return;
   }
+  await rememberSelection(selected.id);
   await removeProject(selected.id);
   if (selectedId === selected.id) {
     selectedId = undefined;
