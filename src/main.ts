@@ -1,4 +1,10 @@
+import "@fontsource/ibm-plex-sans/400.css";
+import "@fontsource/ibm-plex-sans/500.css";
+import "@fontsource/ibm-plex-sans/600.css";
+import "@fontsource/jetbrains-mono/400.css";
+import "@fontsource/jetbrains-mono/600.css";
 import "@xterm/xterm/css/xterm.css";
+import "./tokens.css";
 import "./styles.css";
 
 import {
@@ -10,6 +16,7 @@ import {
   type ReplayTarget,
 } from "./recording";
 import { CloseGuard } from "./close-guard";
+import { isToolsShortcut } from "./keys";
 import { chooseWorkArea, clickAction, findProject, keepSelection } from "./project-selection";
 import {
   addProject,
@@ -22,9 +29,18 @@ import {
 } from "./projects";
 import type { SpawnMode } from "./pty";
 import { ReplayDeck, type LoadedReplay } from "./replay-deck";
+import { fillTexts, messages, texts } from "./strings";
+import { closeWarning, NO_WARNING, warningText as shownWarning, type WarningState } from "./warning-bar";
 import { ReplayPane, TabPane } from "./tab-pane";
-import { TabModel, type Tab } from "./tabs";
-import { isRenderer, isUnicodeVersion, showRenderer, type TerminalView } from "./terminal-view";
+import { afterRefusedStart, TabModel, type Tab, type TabState } from "./tabs";
+import { markerIndex, projectInitials } from "./project-marker";
+import {
+  isRenderer,
+  isUnicodeVersion,
+  loadTerminalFonts,
+  showRenderer,
+  type TerminalView,
+} from "./terminal-view";
 
 /** Returns the element with `id`, or throws when the page lacks it. */
 function element<T extends HTMLElement>(id: string, type: new () => T): T {
@@ -34,6 +50,8 @@ function element<T extends HTMLElement>(id: string, type: new () => T): T {
   }
   return found;
 }
+
+fillTexts(document);
 
 const warningBar = element("warning", HTMLDivElement);
 const warningText = element("warning-text", HTMLSpanElement);
@@ -53,6 +71,8 @@ const noSessionStartButton = element("no-session-start", HTMLButtonElement);
 const tabBar = element("tab-bar", HTMLDivElement);
 const tabList = element("tab-list", HTMLDivElement);
 const newTabButton = element("new-tab", HTMLButtonElement);
+const cwdText = element("cwd", HTMLSpanElement);
+const controls = element("controls", HTMLElement);
 const terminals = element("terminals", HTMLDivElement);
 const rendererSelect = element("renderer", HTMLSelectElement);
 const unicodeSelect = element("unicode", HTMLSelectElement);
@@ -67,6 +87,8 @@ const statusText = element("status", HTMLSpanElement);
 
 /** The tabs of every project. */
 const tabs = new TabModel();
+/** The session count element of each project in the rail, by project id. */
+const sessionCounts = new Map<number, HTMLSpanElement>();
 /** The terminal of each open tab, by tab id: a session pane or the replay pane. */
 const panes = new Map<number, TabPane | ReplayPane>();
 /** The projects as last listed by Rust. */
@@ -75,14 +97,16 @@ let projects: readonly Project[] = [];
 let selectedId: number | undefined;
 /** How many project selections have started; the latest one is the only one that acts. */
 let selectionCount = 0;
-/** Whether the user closed the load warning; it stays closed until the app restarts. */
-let warningClosed = false;
+/** What the warning bar has to show. */
+let warning: WarningState = NO_WARNING;
 /** The pane of the replay tab, the only one, while it is open. */
 let replayPane: ReplayPane | undefined;
 /** Keeps a double click on a close button from closing the next tab too. */
 const closeGuard = new CloseGuard();
 /** The ids of the projects whose new tab Rust is still creating. */
 const opening = new Set<number>();
+/** Settles once the terminal fonts are loaded, or failed to load; a terminal opened before would measure the fallback font. */
+const fontsReady = loadTerminalFonts();
 
 /** Returns the active tab of the selected project, if any. */
 function activeTab(): Tab | undefined {
@@ -135,9 +159,22 @@ const deck = new ReplayDeck(replayTarget, {
   },
 });
 
-/** Shows a short message in the control bar. */
+/** Shows a short message on the status line of the developer tools, seen only while they are shown. */
 function showStatus(message: string): void {
   statusText.textContent = message;
+}
+
+/** Sets what the warning bar has to show, then draws it. */
+function setWarning(state: WarningState): void {
+  warning = state;
+  const shown = shownWarning(warning);
+  warningText.textContent = shown ?? "";
+  warningBar.hidden = shown === undefined;
+}
+
+/** Shows `error` in the warning bar until the user closes it, even after the user closed the load warning. */
+function showError(error: unknown): void {
+  setWarning({ ...warning, actionError: String(error) });
 }
 
 /** Shows the recording indicator with `text`, or hides it when `text` is `undefined`. */
@@ -153,7 +190,7 @@ async function refreshRecordings(): Promise<void> {
   recordingsSelect.replaceChildren(
     ...recordings.map((recording) => {
       const kilobytes = Math.ceil(recording.size / 1024);
-      return new Option(`${recording.name} (${String(kilobytes)} KB)`, recording.name);
+      return new Option(messages.recordingEntry(recording.name, kilobytes), recording.name);
     }),
   );
   if (recordings.some((recording) => recording.name === chosen)) {
@@ -161,7 +198,7 @@ async function refreshRecordings(): Promise<void> {
   }
 }
 
-/** Reloads the list of recordings, showing a failure in the control bar. */
+/** Reloads the list of recordings, showing a failure on the developer tools' status line. */
 function refreshRecordingsOrReport(): void {
   refreshRecordings().catch((error: unknown) => {
     showStatus(String(error));
@@ -179,7 +216,7 @@ function tabElement(tab: Tab, active: boolean): HTMLDivElement {
   label.type = "button";
   label.className = "tab-label";
   label.textContent = tab.label;
-  label.title = tab.kind === "session" ? `${tab.label} (${tab.state})` : tab.label;
+  label.title = tab.kind === "session" ? messages.tabTitle(tab.label, tab.state) : tab.label;
   label.addEventListener("click", () => {
     activateTab(tab.id);
   });
@@ -187,7 +224,7 @@ function tabElement(tab: Tab, active: boolean): HTMLDivElement {
   close.type = "button";
   close.className = "tab-close";
   close.textContent = "×";
-  close.setAttribute("aria-label", `Close ${tab.label}`);
+  close.setAttribute("aria-label", messages.closeTab(tab.label));
   close.addEventListener("click", () => {
     if (closeGuard.accept(performance.now())) {
       report(() => closeTab(tab.id, true));
@@ -210,11 +247,13 @@ function renderTabs(): void {
   missingState.hidden = area.kind !== "missing";
   missingPath.textContent = area.kind === "missing" ? area.project.path : "";
   noSessionState.hidden = area.kind !== "no-session";
-  noSessionTitle.textContent = area.kind === "no-session" ? `${area.project.name} has no session` : "";
+  noSessionTitle.textContent = area.kind === "no-session" ? messages.noSessionTitle(area.project.name) : "";
   noSessionPath.textContent = area.kind === "no-session" ? area.project.path : "";
   const project = area.kind === "terminal" ? findProject(projects, selectedId) : undefined;
   const active = project ? tabs.activeOf(project.id) : undefined;
   tabBar.hidden = project === undefined;
+  cwdText.textContent = project?.path ?? "";
+  cwdText.title = project?.path ?? "";
   tabList.replaceChildren(...(project ? tabs.tabsOf(project.id) : []).map((tab) => tabElement(tab, tab === active)));
   tabList.querySelector(".tab.active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
   let shown: TabPane | ReplayPane | undefined;
@@ -231,6 +270,7 @@ function renderTabs(): void {
     showRenderer(shown.view, isRenderer(wanted) ? wanted : "webgl", rendererSelect, showStatus);
   }
   showRecording(shown instanceof TabPane ? shown.recording : undefined);
+  renderSessionCounts();
 }
 
 /** Makes tab `tabId` its project's active tab, shows it and gives it the keyboard. */
@@ -259,7 +299,7 @@ function createPane(tabId: number): TabPane {
       refreshRecordingsOrReport();
     },
     onError: (error) => {
-      showStatus(String(error));
+      showError(error);
     },
     onMarkKey: () => {
       report(mark);
@@ -273,6 +313,9 @@ function createPane(tabId: number): TabPane {
     onClose: () => {
       report(() => closeTab(tabId, true));
     },
+    onRetry: (mode) => {
+      report(() => restartTab(tabId, mode));
+    },
   });
   registerPane(pane);
   return pane;
@@ -280,49 +323,58 @@ function createPane(tabId: number): TabPane {
 
 /**
  * Starts `claude` in `mode` for session tab `tabId`, whose project folder is
- * `folder`. Resolves with whether the session started; a failure is shown in
- * the control bar.
+ * `folder`. Resolves with whether the session started; a start Rust refuses
+ * puts the tab in the `"failed"` state, its pane showing the refusal.
  */
 async function startTab(tabId: number, mode: SpawnMode, folder: string): Promise<boolean> {
   const pane = panes.get(tabId);
   if (!(pane instanceof TabPane)) {
     return false;
   }
+  let running: boolean;
   try {
-    const running = await pane.start(mode);
-    const session = pane.slot.current;
-    if (running && session) {
-      const tab = tabs.find(tabId);
-      if (tab?.kind === "session" && tab.state === "starting") {
-        tabs.setState(tabId, "running");
-      }
-      renderTabs();
-      if (pane === activePane()) {
-        showStatus(folder);
-        pane.view.terminal.focus();
-      }
-      const name = await currentRecording(session);
-      if (pane.slot.current === session) {
-        pane.recording = name === null ? "not recorded" : `● recording ${name}`;
-        if (pane === activePane()) {
-          showRecording(pane.recording);
-        }
-      }
-      refreshRecordingsOrReport();
-    }
-    return running;
-  } catch (error) {
-    showStatus(String(error));
+    running = await pane.start(mode, folder);
+  } catch {
+    tabs.setState(tabId, "failed");
+    renderTabs();
     return false;
   }
+  const session = pane.slot.current;
+  if (running && session) {
+    const tab = tabs.find(tabId);
+    if (tab?.kind === "session" && tab.state === "starting") {
+      tabs.setState(tabId, "running");
+    }
+    renderTabs();
+    if (pane === activePane()) {
+      pane.view.terminal.focus();
+    }
+    const name = await currentRecording(session);
+    if (pane.slot.current === session) {
+      pane.recording = name === null ? texts.notRecorded : messages.recordingName(name);
+      if (pane === activePane()) {
+        showRecording(pane.recording);
+      }
+    }
+    refreshRecordingsOrReport();
+  }
+  return running;
+}
+
+/** Returns the state of session tab `tabId`, or `undefined` when it is gone or a replay tab. */
+function sessionState(tabId: number): TabState | undefined {
+  const tab = tabs.find(tabId);
+  return tab?.kind === "session" ? tab.state : undefined;
 }
 
 /**
- * Opens a tab in `project`, saved by Rust, and starts a new session in it. A
- * start Rust refuses closes the tab and reloads the projects: the no-session
- * state shows, or the missing-folder state when the folder is gone.
+ * Opens a tab in `project`, saved by Rust, and starts a new session in it,
+ * once the terminal fonts are loaded. A start Rust refuses leaves the tab
+ * showing the refusal and reloads the projects, closing the project's tabs
+ * when its folder is gone.
  */
 async function openTab(project: Project): Promise<void> {
+  await fontsReady;
   opening.add(project.id);
   let saved;
   try {
@@ -336,7 +388,7 @@ async function openTab(project: Project): Promise<void> {
   if (await startTab(tab.id, "new", project.path)) {
     return;
   }
-  if (tabs.find(tab.id)) {
+  if (afterRefusedStart(sessionState(tab.id), undefined) === "close") {
     await closeTab(tab.id, true);
   }
   await reloadAfterRefusal(project.id);
@@ -364,8 +416,10 @@ async function restoreAllTabs(): Promise<void> {
 
 /**
  * Starts a session in `mode` in session tab `tabId`, restored or ended, on a
- * cleared screen. A start Rust refuses puts the tab back in its previous state
- * and reloads the projects, closing every tab of the project when its folder is gone.
+ * cleared screen. A start Rust refuses leaves the tab showing the refusal and
+ * reloads the projects, closing every tab of the project when its folder is
+ * gone; a start overtaken by another start or a stop puts the tab back in its
+ * previous state.
  */
 async function restartTab(tabId: number, mode: SpawnMode): Promise<void> {
   const tab = tabs.find(tabId);
@@ -379,8 +433,10 @@ async function restartTab(tabId: number, mode: SpawnMode): Promise<void> {
   if (await startTab(tabId, mode, project.path)) {
     return;
   }
-  tabs.setState(tabId, previous);
-  renderTabs();
+  if (afterRefusedStart(sessionState(tabId), previous) === "restore") {
+    tabs.setState(tabId, previous);
+    renderTabs();
+  }
   await reloadAfterRefusal(project.id);
 }
 
@@ -426,8 +482,18 @@ async function closeProjectTabs(projectId: number): Promise<void> {
   await Promise.all(tabs.tabsOf(projectId).map((tab) => closeTab(tab.id, false)));
 }
 
+/** Shows, next to each project in the rail, how many session tabs it has open; nothing for none. */
+function renderSessionCounts(): void {
+  for (const [projectId, count] of sessionCounts) {
+    const open = tabs.tabsOf(projectId).filter((tab) => tab.kind === "session").length;
+    count.textContent = open > 0 ? String(open) : "";
+    count.title = messages.sessionCount(open);
+  }
+}
+
 /** Draws the project rail and the work area from `projects` and `selectedId`. */
 function renderProjects(): void {
+  sessionCounts.clear();
   projectList.replaceChildren(
     ...projects.map((project) => {
       const button = document.createElement("button");
@@ -435,14 +501,27 @@ function renderProjects(): void {
       button.className = "project";
       button.classList.toggle("active", project.id === selectedId);
       button.classList.toggle("missing", !project.exists);
-      button.title = project.exists ? project.path : `Folder not found: ${project.path}`;
+      button.title = project.exists
+        ? messages.projectTitle(project.name, project.path)
+        : messages.missingProjectTitle(project.name, project.path);
+      const marker = document.createElement("span");
+      marker.className = "project-marker";
+      marker.setAttribute("aria-hidden", "true");
+      marker.style.backgroundColor = `var(--marker-${String(markerIndex(project.id))})`;
+      marker.textContent = projectInitials(project.name);
       const name = document.createElement("span");
       name.className = "project-name";
       name.textContent = project.name;
       const path = document.createElement("span");
       path.className = "project-path";
       path.textContent = project.path;
-      button.append(name, path);
+      const text = document.createElement("span");
+      text.className = "project-text";
+      text.append(name, path);
+      const count = document.createElement("span");
+      count.className = "project-count";
+      sessionCounts.set(project.id, count);
+      button.append(marker, text, count);
       button.addEventListener("click", () => {
         report(() => selectProject(project.id));
       });
@@ -459,8 +538,7 @@ async function refreshProjects(): Promise<void> {
   const list = await listProjects();
   projects = list.projects;
   selectedId = keepSelection(projects, selectedId);
-  warningText.textContent = list.warning ?? "";
-  warningBar.hidden = list.warning === null || warningClosed;
+  setWarning({ ...warning, loadWarning: list.warning });
   renderProjects();
 }
 
@@ -485,7 +563,6 @@ async function selectProject(id: number): Promise<void> {
   } else if (action.kind === "missing") {
     await closeProjectTabs(id);
   } else if (action.kind === "show") {
-    showStatus(findProject(projects, id)?.path ?? "");
     activePane()?.view.terminal.focus();
   }
 }
@@ -548,19 +625,20 @@ async function mark(): Promise<void> {
   }
   const session = pane?.slot.current;
   if (!session) {
-    showStatus("No session to mark");
+    showStatus(texts.noSessionToMark);
     return;
   }
   await markRecording(session);
-  showStatus(`Marked at ${new Date().toLocaleTimeString()}`);
+  showStatus(messages.markedAt(new Date().toLocaleTimeString()));
 }
 
 /**
  * Shows the replay tab of `project`, labelled with recording `name`: reuses the
  * project's replay tab, else opens one, after closing the replay tab another
- * project holds.
+ * project holds. Waits for the terminal fonts first.
  */
 async function showReplayTab(project: Project, name: string): Promise<void> {
+  await fontsReady;
   const existing = tabs.replayTab();
   if (existing && existing.projectId !== project.id) {
     await closeTab(existing.id, false);
@@ -584,18 +662,18 @@ async function showReplayTab(project: Project, name: string): Promise<void> {
 async function loadReplay(): Promise<LoadedReplay | undefined> {
   const name = recordingsSelect.value;
   if (name === "") {
-    showStatus("No recording chosen");
+    showStatus(texts.noRecordingChosen);
     return undefined;
   }
   const project = findProject(projects, selectedId);
   if (!project?.exists) {
-    showStatus("Select a project to replay in");
+    showStatus(texts.selectProjectToReplay);
     return undefined;
   }
   await showReplayTab(project, name);
   const { replay, truncated } = await deck.load(name);
   if (truncated) {
-    showStatus(`${name}: the last record is incomplete and was dropped`);
+    showStatus(messages.truncatedRecording(name));
   }
   return replay;
 }
@@ -607,10 +685,10 @@ async function replayFromStart(): Promise<void> {
     return;
   }
   const speed: ReplaySpeed = speedSelect.value === "realtime" ? "realtime" : "instant";
-  showStatus(`Replaying ${loaded.name}`);
+  showStatus(messages.replaying(loaded.name));
   const stop = await deck.run(loaded, speed, false);
   if (stop === "end") {
-    showStatus(`${loaded.name}: end of recording`);
+    showStatus(messages.endOfRecording(loaded.name));
   }
 }
 
@@ -633,16 +711,16 @@ async function replayToNextMark(): Promise<void> {
   const stop = await deck.run(current, "instant", true);
   if (stop === "marker") {
     current.marks += 1;
-    showStatus(`${current.name}: paused at marker ${String(current.marks)}`);
+    showStatus(messages.pausedAtMarker(current.name, current.marks));
   } else if (stop === "end") {
-    showStatus(`${current.name}: no marker left, end of recording`);
+    showStatus(messages.noMarkerLeft(current.name));
   }
 }
 
-/** Runs `action`, showing its failure in the control bar. */
+/** Runs `action`, showing its failure in the warning bar. */
 function report(action: () => Promise<void>): void {
   action().catch((error: unknown) => {
-    showStatus(String(error));
+    showError(error);
   });
 }
 
@@ -671,8 +749,7 @@ noSessionStartButton.addEventListener("click", () => {
 });
 
 warningClose.addEventListener("click", () => {
-  warningClosed = true;
-  warningBar.hidden = true;
+  setWarning(closeWarning(warning));
 });
 
 markButton.addEventListener("click", () => {
@@ -691,7 +768,7 @@ nextMarkButton.addEventListener("click", () => {
 stopReplayButton.addEventListener("click", () => {
   report(async () => {
     if (await deck.stop()) {
-      showStatus("Replay stopped");
+      showStatus(texts.replayStopped);
     }
   });
 });
@@ -715,5 +792,23 @@ unicodeSelect.addEventListener("change", () => {
   }
 });
 
+window.addEventListener(
+  "keydown",
+  (event) => {
+    if (!isToolsShortcut(event)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) {
+      controls.hidden = !controls.hidden;
+    }
+  },
+  { capture: true },
+);
+
 refreshRecordingsOrReport();
-report(restoreAllTabs);
+report(async () => {
+  await fontsReady;
+  await restoreAllTabs();
+});

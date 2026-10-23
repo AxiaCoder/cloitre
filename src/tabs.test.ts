@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { TabModel } from "./tabs";
+import { afterRefusedStart, TabModel } from "./tabs";
 
 describe("TabModel.open", () => {
   it("keeps the id Rust gave the tab", () => {
@@ -246,5 +246,35 @@ describe("TabModel.restore", () => {
     model.restore(10, [4]);
     model.setState(4, "starting");
     expect(model.find(4)).toMatchObject({ state: "starting" });
+  });
+});
+
+describe("afterRefusedStart", () => {
+  it("keeps a tab that is gone", () => {
+    expect(afterRefusedStart(undefined, undefined)).toBe("keep");
+    expect(afterRefusedStart(undefined, "restored")).toBe("keep");
+  });
+
+  it("keeps a newly opened tab whose start failed, so its error stays shown", () => {
+    expect(afterRefusedStart("failed", undefined)).toBe("keep");
+  });
+
+  it("closes a newly opened tab whose start did not fail", () => {
+    expect(afterRefusedStart("starting", undefined)).toBe("close");
+    expect(afterRefusedStart("exited", undefined)).toBe("close");
+  });
+
+  it("puts a restarted tab still starting back in its previous state", () => {
+    expect(afterRefusedStart("starting", "restored")).toBe("restore");
+    expect(afterRefusedStart("starting", "exited")).toBe("restore");
+  });
+
+  it("keeps a restarted tab whose start failed", () => {
+    expect(afterRefusedStart("failed", "exited")).toBe("keep");
+  });
+
+  it("keeps a restarted tab another start or a stop moved on", () => {
+    expect(afterRefusedStart("running", "restored")).toBe("keep");
+    expect(afterRefusedStart("exited", "restored")).toBe("keep");
   });
 });

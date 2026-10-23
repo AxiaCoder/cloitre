@@ -1,8 +1,39 @@
+import { messages } from "./strings";
+
 /**
  * Where a session tab's `claude` session stands. `"restored"` is a tab reopened
- * from a previous run, waiting for the user to resume or start a session.
+ * from a previous run, waiting for the user to resume or start a session;
+ * `"failed"` is a tab whose last start Rust refused.
  */
-export type TabState = "restored" | "starting" | "running" | "exited";
+export type TabState = "restored" | "starting" | "running" | "exited" | "failed";
+
+/** What to do with a session tab once its start did not end in a running session. */
+export type RefusedStartOutcome = "keep" | "restore" | "close";
+
+/**
+ * Decides what becomes of a session tab whose start did not end in a running
+ * session. `stateNow` is the tab's state now, `undefined` when it is gone or no
+ * longer a session tab; `previous` is its state before the start, `undefined`
+ * for a tab opened for that start.
+ * - `"keep"`: leave the tab as it is (gone, failed with its error shown, or
+ *   moved on by another start or a stop).
+ * - `"restore"`: put the tab back in `previous`; only for a tab that existed
+ *   before and is still `"starting"`.
+ * - `"close"`: close the tab; only for a tab opened for that start and not
+ *   `"failed"`.
+ */
+export function afterRefusedStart(
+  stateNow: TabState | undefined,
+  previous: TabState | undefined,
+): RefusedStartOutcome {
+  if (stateNow === undefined) {
+    return "keep";
+  }
+  if (previous === undefined) {
+    return stateNow === "failed" ? "keep" : "close";
+  }
+  return stateNow === "starting" ? "restore" : "keep";
+}
 
 /** One tab of a project running a `claude` session in its terminal. */
 export interface SessionTab {
@@ -84,7 +115,7 @@ export class TabModel {
    * Either way the tab becomes the project's active tab.
    */
   openReplay(projectId: number, recording: string): ReplayTab {
-    const label = `Replay ${recording}`;
+    const label = messages.replayLabel(recording);
     const existing = this.tabs.find((tab) => tab.kind === "replay" && tab.projectId === projectId);
     if (existing?.kind === "replay") {
       existing.recording = recording;
@@ -165,7 +196,7 @@ export class TabModel {
   private addSession(projectId: number, id: number, state: TabState): SessionTab {
     const number = (this.lastNumbers.get(projectId) ?? 0) + 1;
     this.lastNumbers.set(projectId, number);
-    const tab: StoredTab = { kind: "session", id, projectId, label: `Session ${String(number)}`, state };
+    const tab: StoredTab = { kind: "session", id, projectId, label: messages.sessionLabel(number), state };
     this.tabs.push(tab);
     return tab;
   }
