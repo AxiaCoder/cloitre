@@ -7,6 +7,34 @@ import { messages } from "./strings";
  */
 export type TabState = "restored" | "starting" | "running" | "exited" | "failed";
 
+/** What to do with a session tab once its start did not end in a running session. */
+export type RefusedStartOutcome = "keep" | "restore" | "close";
+
+/**
+ * Decides what becomes of a session tab whose start did not end in a running
+ * session. `stateNow` is the tab's state now, `undefined` when it is gone or no
+ * longer a session tab; `previous` is its state before the start, `undefined`
+ * for a tab opened for that start.
+ * - `"keep"`: leave the tab as it is (gone, failed with its error shown, or
+ *   moved on by another start or a stop).
+ * - `"restore"`: put the tab back in `previous`; only for a tab that existed
+ *   before and is still `"starting"`.
+ * - `"close"`: close the tab; only for a tab opened for that start and not
+ *   `"failed"`.
+ */
+export function afterRefusedStart(
+  stateNow: TabState | undefined,
+  previous: TabState | undefined,
+): RefusedStartOutcome {
+  if (stateNow === undefined) {
+    return "keep";
+  }
+  if (previous === undefined) {
+    return stateNow === "failed" ? "keep" : "close";
+  }
+  return stateNow === "starting" ? "restore" : "keep";
+}
+
 /** One tab of a project running a `claude` session in its terminal. */
 export interface SessionTab {
   readonly kind: "session";

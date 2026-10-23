@@ -32,7 +32,7 @@ import { ReplayDeck, type LoadedReplay } from "./replay-deck";
 import { fillTexts, messages, texts } from "./strings";
 import { closeWarning, NO_WARNING, warningText as shownWarning, type WarningState } from "./warning-bar";
 import { ReplayPane, TabPane } from "./tab-pane";
-import { TabModel, type Tab } from "./tabs";
+import { afterRefusedStart, TabModel, type Tab, type TabState } from "./tabs";
 import { markerIndex, projectInitials } from "./project-marker";
 import {
   isRenderer,
@@ -361,6 +361,12 @@ async function startTab(tabId: number, mode: SpawnMode, folder: string): Promise
   return running;
 }
 
+/** Returns the state of session tab `tabId`, or `undefined` when it is gone or a replay tab. */
+function sessionState(tabId: number): TabState | undefined {
+  const tab = tabs.find(tabId);
+  return tab?.kind === "session" ? tab.state : undefined;
+}
+
 /**
  * Opens a tab in `project`, saved by Rust, and starts a new session in it,
  * once the terminal fonts are loaded. A start Rust refuses leaves the tab
@@ -382,8 +388,7 @@ async function openTab(project: Project): Promise<void> {
   if (await startTab(tab.id, "new", project.path)) {
     return;
   }
-  const after = tabs.find(tab.id);
-  if (after?.kind === "session" && after.state !== "failed") {
+  if (afterRefusedStart(sessionState(tab.id), undefined) === "close") {
     await closeTab(tab.id, true);
   }
   await reloadAfterRefusal(project.id);
@@ -428,8 +433,7 @@ async function restartTab(tabId: number, mode: SpawnMode): Promise<void> {
   if (await startTab(tabId, mode, project.path)) {
     return;
   }
-  const after = tabs.find(tabId);
-  if (after?.kind === "session" && after.state === "starting") {
+  if (afterRefusedStart(sessionState(tabId), previous) === "restore") {
     tabs.setState(tabId, previous);
     renderTabs();
   }
