@@ -34,7 +34,6 @@ function logTarget() {
 function gatedHooks() {
   const pending = new Map<string, () => void>();
   const hooks: ReplayDeckHooks = {
-    stopSession: () => Promise.resolve(),
     read: (name) =>
       new Promise((resolve) => {
         pending.set(name, () => {
@@ -77,21 +76,17 @@ describe("ReplayDeck, overlapping", () => {
     });
   });
 
-  it("a claim made while a load is in flight runs once that replay is ended", async () => {
+  it("a stop asked while a load is in flight ends that replay once it is loaded", async () => {
     const { target } = logTarget();
     const { hooks, deliver } = gatedHooks();
     const deck = new ReplayDeck(target, hooks);
 
     const loading = deck.load("one");
-    let seen: unknown = "not run";
-    const claimed = deck.claim(() => {
-      seen = deck.current;
-      return Promise.resolve();
-    });
+    const stopping = deck.stop();
     await deliver("one");
-    await Promise.all([loading, claimed]);
+    await loading;
 
-    expect(seen).toBeUndefined();
+    expect(await stopping).toBe(true);
     expect(deck.current).toBeUndefined();
   });
 
@@ -114,10 +109,6 @@ describe("ReplayDeck, overlapping", () => {
 function loggedHooks(bytes: Uint8Array, failing: string[] = []) {
   const calls: string[] = [];
   const hooks: ReplayDeckHooks = {
-    stopSession: () => {
-      calls.push("stopSession");
-      return Promise.resolve();
-    },
     read: (name) => {
       calls.push(`read ${name}`);
       return failing.includes(name) ? Promise.reject(new Error(`cannot read ${name}`)) : Promise.resolve(bytes);
@@ -129,14 +120,14 @@ function loggedHooks(bytes: Uint8Array, failing: string[] = []) {
 }
 
 describe("ReplayDeck, around the page", () => {
-  it("stops the session, reads the recording, then holds the screen", async () => {
+  it("reads the recording, then holds the screen, without touching any session", async () => {
     const { target } = logTarget();
     const { calls, hooks } = loggedHooks(slowRecording);
     const deck = new ReplayDeck(target, hooks);
 
     const { replay, truncated } = await deck.load("one");
 
-    expect(calls).toEqual(["stopSession", "read one", "hold"]);
+    expect(calls).toEqual(["read one", "hold"]);
     expect(replay.name).toBe("one");
     expect(replay.marks).toBe(0);
     expect(truncated).toBe(false);
@@ -172,18 +163,15 @@ describe("ReplayDeck, around the page", () => {
     expect(calls).toEqual([]);
   });
 
-  it("releases the screen of the replay a claim ends", async () => {
+  it("releases the screen of the replay a load ends, before reading the next recording", async () => {
     const { target } = logTarget();
     const { calls, hooks } = loggedHooks(slowRecording);
     const deck = new ReplayDeck(target, hooks);
     await deck.load("one");
 
-    await deck.claim(() => {
-      calls.push("operation");
-      return Promise.resolve();
-    });
+    await deck.load("two");
 
-    expect(calls.slice(-2)).toEqual(["release", "operation"]);
+    expect(calls).toEqual(["read one", "hold", "release", "read two", "hold"]);
   });
 
   it("rejects a load whose read fails, and still runs the next one", async () => {

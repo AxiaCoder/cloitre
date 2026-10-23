@@ -22,11 +22,13 @@ function toBytes(payload: ArrayBuffer | number[]): Uint8Array {
 }
 
 /**
- * Starts `claude` in `folder` with a terminal of `cols` x `rows`.
- * Rejects with the Rust refusal message when the folder or the size is refused.
+ * Starts `claude` in `folder` for tab `tabId` (from 1), with a terminal of
+ * `cols` x `rows`. Rejects with the Rust refusal message when the folder, the
+ * tab id or the size is refused.
  */
 export async function spawnPty(
   folder: string,
+  tabId: number,
   cols: number,
   rows: number,
   handlers: PtyHandlers,
@@ -37,7 +39,7 @@ export async function spawnPty(
   };
   const onExit = new Channel<number>();
   onExit.onmessage = handlers.onExit;
-  const id = await invoke<number>("pty_spawn", { folder, cols, rows, onOutput, onExit });
+  const id = await invoke<number>("pty_spawn", { folder, tabId, cols, rows, onOutput, onExit });
   return { id };
 }
 

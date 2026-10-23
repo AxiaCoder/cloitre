@@ -9,12 +9,13 @@ import {
   type ReplaySpeed,
   type ReplayTarget,
 } from "./recording";
-import { decideKey } from "./keys";
-import { chooseWorkArea, findProject, keepSelection, projectToStart } from "./project-selection";
+import { CloseGuard } from "./close-guard";
+import { chooseWorkArea, clickAction, findProject, keepSelection } from "./project-selection";
 import { addProject, listProjects, relocateProject, removeProject, type Project } from "./projects";
 import { ReplayDeck, type LoadedReplay } from "./replay-deck";
-import { SessionSlot } from "./session";
-import { TerminalView, isRenderer, isUnicodeVersion, showRenderer, startRenderer } from "./terminal-view";
+import { ReplayPane, TabPane } from "./tab-pane";
+import { TabModel, type Tab } from "./tabs";
+import { isRenderer, isUnicodeVersion, showRenderer, type TerminalView } from "./terminal-view";
 
 /** Returns the element with `id`, or throws when the page lacks it. */
 function element<T extends HTMLElement>(id: string, type: new () => T): T {
@@ -36,6 +37,14 @@ const missingState = element("missing-state", HTMLElement);
 const missingPath = element("missing-path", HTMLParagraphElement);
 const relocateButton = element("relocate", HTMLButtonElement);
 const removeButton = element("remove", HTMLButtonElement);
+const noSessionState = element("no-session-state", HTMLElement);
+const noSessionTitle = element("no-session-title", HTMLHeadingElement);
+const noSessionPath = element("no-session-path", HTMLSpanElement);
+const noSessionStartButton = element("no-session-start", HTMLButtonElement);
+const tabBar = element("tab-bar", HTMLDivElement);
+const tabList = element("tab-list", HTMLDivElement);
+const newTabButton = element("new-tab", HTMLButtonElement);
+const terminals = element("terminals", HTMLDivElement);
 const rendererSelect = element("renderer", HTMLSelectElement);
 const unicodeSelect = element("unicode", HTMLSelectElement);
 const markButton = element("mark", HTMLButtonElement);
@@ -46,38 +55,72 @@ const replayButton = element("replay", HTMLButtonElement);
 const nextMarkButton = element("next-mark", HTMLButtonElement);
 const stopReplayButton = element("stop-replay", HTMLButtonElement);
 const statusText = element("status", HTMLSpanElement);
-const view = new TerminalView(element("terminal", HTMLDivElement));
-const slot = new SessionSlot();
+
+/** The tabs of every project. */
+const tabs = new TabModel();
+/** The terminal of each open tab, by tab id: a session pane or the replay pane. */
+const panes = new Map<number, TabPane | ReplayPane>();
+/** The projects as last listed by Rust. */
+let projects: readonly Project[] = [];
+/** The id of the selected project, if any. */
+let selectedId: number | undefined;
+/** How many project selections have started; the latest one is the only one that acts. */
+let selectionCount = 0;
+/** Whether the user closed the load warning; it stays closed until the app restarts. */
+let warningClosed = false;
+/** The pane of the replay tab, the only one, while it is open. */
+let replayPane: ReplayPane | undefined;
+/** Keeps a double click on a close button from closing the next tab too. */
+const closeGuard = new CloseGuard();
+
+/** Returns the active tab of the selected project, if any. */
+function activeTab(): Tab | undefined {
+  return selectedId === undefined ? undefined : tabs.activeOf(selectedId);
+}
+
+/** Returns the pane of the selected project's active tab, if any. */
+function activePane(): TabPane | ReplayPane | undefined {
+  const tab = activeTab();
+  return tab ? panes.get(tab.id) : undefined;
+}
+
+/** The terminal a replay draws into: the replay tab's, while it is open. */
+function replayView(): TerminalView | undefined {
+  return replayPane?.view;
+}
 
 /** The xterm.js terminal, as a replay draws into it. */
 const replayTarget: ReplayTarget = {
   reset: () => {
-    view.terminal.reset();
+    replayView()?.terminal.reset();
   },
   resize: (cols, rows) => {
-    view.terminal.resize(cols, rows);
+    replayView()?.terminal.resize(cols, rows);
   },
   write: (data) => {
-    view.terminal.write(data);
+    replayView()?.terminal.write(data);
   },
   drained: () =>
     new Promise((resolve) => {
-      view.terminal.write("", resolve);
+      const view = replayView();
+      if (view) {
+        view.terminal.write("", resolve);
+      } else {
+        resolve();
+      }
     }),
 };
 
 /** The replay on screen; loads, session starts and stops take their turn through it. */
 const deck = new ReplayDeck(replayTarget, {
-  stopSession: async () => {
-    await slot.stop();
-    showRecording(undefined);
-  },
   read: readRecording,
   hold: () => {
-    view.autoFit = false;
+    if (replayPane) {
+      replayPane.view.autoFit = false;
+    }
   },
   release: () => {
-    view.clearAndFit();
+    replayPane?.view.clearAndFit();
   },
 });
 
@@ -114,48 +157,141 @@ function refreshRecordingsOrReport(): void {
   });
 }
 
-/** Clears the screen, refits it and returns the size to start a session with. */
-function prepareScreen(): { cols: number; rows: number } {
-  view.terminal.reset();
-  view.fit();
-  return { cols: view.terminal.cols, rows: view.terminal.rows };
+/** Builds the tab bar entry of `tab`: its label, which activates it, and its close button. */
+function tabElement(tab: Tab, active: boolean): HTMLDivElement {
+  const item = document.createElement("div");
+  item.className = `tab ${tab.kind === "session" ? tab.state : "replay"}`;
+  item.classList.toggle("active", active);
+  item.setAttribute("role", "tab");
+  item.setAttribute("aria-selected", String(active));
+  const label = document.createElement("button");
+  label.type = "button";
+  label.className = "tab-label";
+  label.textContent = tab.label;
+  label.title = tab.kind === "session" ? `${tab.label} (${tab.state})` : tab.label;
+  label.addEventListener("click", () => {
+    activateTab(tab.id);
+  });
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "tab-close";
+  close.textContent = "×";
+  close.setAttribute("aria-label", `Close ${tab.label}`);
+  close.addEventListener("click", () => {
+    if (closeGuard.accept(performance.now())) {
+      report(() => closeTab(tab.id));
+    }
+  });
+  item.append(label, close);
+  return item;
 }
 
-/** The projects as last listed by Rust. */
-let projects: readonly Project[] = [];
-/** The id of the selected project, if any. */
-let selectedId: number | undefined;
-/** How many project selections have started; the latest one is the only one that acts. */
-let selectionCount = 0;
-/** Whether the user closed the load warning; it stays closed until the app restarts. */
-let warningClosed = false;
+/**
+ * Draws the work area: the empty, missing-folder or no-session state, or the
+ * selected project's tab bar with its active tab's terminal shown on the
+ * renderer the picker names. Every other terminal is hidden, on the DOM
+ * renderer, its session left running.
+ */
+function renderTabs(): void {
+  const hasTabs = selectedId !== undefined && tabs.tabsOf(selectedId).length > 0;
+  const area = chooseWorkArea(projects, selectedId, hasTabs);
+  emptyState.hidden = area.kind !== "empty";
+  missingState.hidden = area.kind !== "missing";
+  missingPath.textContent = area.kind === "missing" ? area.project.path : "";
+  noSessionState.hidden = area.kind !== "no-session";
+  noSessionTitle.textContent = area.kind === "no-session" ? `${area.project.name} has no session` : "";
+  noSessionPath.textContent = area.kind === "no-session" ? area.project.path : "";
+  const project = area.kind === "terminal" ? findProject(projects, selectedId) : undefined;
+  const active = project ? tabs.activeOf(project.id) : undefined;
+  tabBar.hidden = project === undefined;
+  tabList.replaceChildren(...(project ? tabs.tabsOf(project.id) : []).map((tab) => tabElement(tab, tab === active)));
+  tabList.querySelector(".tab.active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  let shown: TabPane | ReplayPane | undefined;
+  for (const [id, pane] of panes) {
+    if (id === active?.id) {
+      shown = pane;
+    } else {
+      pane.hide();
+    }
+  }
+  if (shown) {
+    shown.show();
+    const wanted = rendererSelect.value;
+    showRenderer(shown.view, isRenderer(wanted) ? wanted : "webgl", rendererSelect, showStatus);
+  }
+  showRecording(shown instanceof TabPane ? shown.recording : undefined);
+}
+
+/** Makes tab `tabId` its project's active tab, shows it and gives it the keyboard. */
+function activateTab(tabId: number): void {
+  tabs.activate(tabId);
+  renderTabs();
+  panes.get(tabId)?.view.terminal.focus();
+}
+
+/** Gives `pane` the width table the control shows and registers it under its tab id. */
+function registerPane(pane: TabPane | ReplayPane): void {
+  const unicode = unicodeSelect.value;
+  if (isUnicodeVersion(unicode)) {
+    pane.view.setUnicodeVersion(unicode);
+  }
+  panes.set(pane.tabId, pane);
+}
+
+/** Creates the pane of session tab `tabId`, with the width table the control shows. */
+function createPane(tabId: number): TabPane {
+  const pane = new TabPane(terminals, tabId, {
+    onExit: () => {
+      tabs.setState(tabId, "exited");
+      pane.recording = undefined;
+      renderTabs();
+      refreshRecordingsOrReport();
+    },
+    onError: (error) => {
+      showStatus(String(error));
+    },
+    onMarkKey: () => {
+      report(mark);
+    },
+    onRestart: () => {
+      report(() => restartTab(tabId));
+    },
+    onClose: () => {
+      report(() => closeTab(tabId));
+    },
+  });
+  registerPane(pane);
+  return pane;
+}
 
 /**
- * Stops the current session and the replay, then starts `claude` in `folder`
- * on a cleared screen. Resolves with whether the session started; a failure is
- * shown in the control bar.
+ * Starts `claude` in `folder` for session tab `tabId`. Resolves with whether
+ * the session started; a failure is shown in the control bar.
  */
-async function startSession(folder: string): Promise<boolean> {
+async function startTab(tabId: number, folder: string): Promise<boolean> {
+  const pane = panes.get(tabId);
+  if (!(pane instanceof TabPane)) {
+    return false;
+  }
   try {
-    const running = await deck.claim(() =>
-      slot.start(folder, prepareScreen, {
-        onOutput: (bytes) => {
-          view.terminal.write(bytes);
-        },
-        onExit: (code) => {
-          view.terminal.write(`\r\n[claude exited with code ${String(code)}]\r\n`);
-          showRecording(undefined);
-          refreshRecordingsOrReport();
-        },
-      }),
-    );
-    const session = slot.current;
+    const running = await pane.start(folder);
+    const session = pane.slot.current;
     if (running && session) {
-      showStatus(folder);
-      view.terminal.focus();
+      const tab = tabs.find(tabId);
+      if (tab?.kind === "session" && tab.state === "starting") {
+        tabs.setState(tabId, "running");
+      }
+      renderTabs();
+      if (pane === activePane()) {
+        showStatus(folder);
+        pane.view.terminal.focus();
+      }
       const name = await currentRecording(session);
-      if (slot.current === session) {
-        showRecording(name === null ? "not recorded" : `● recording ${name}`);
+      if (pane.slot.current === session) {
+        pane.recording = name === null ? "not recorded" : `● recording ${name}`;
+        if (pane === activePane()) {
+          showRecording(pane.recording);
+        }
       }
       refreshRecordingsOrReport();
     }
@@ -166,12 +302,78 @@ async function startSession(folder: string): Promise<boolean> {
   }
 }
 
-/** Stops the current session and the replay. */
-async function stopSession(): Promise<void> {
-  await deck.claim(async () => {
-    await slot.stop();
-    showRecording(undefined);
-  });
+/**
+ * Opens a tab in `project` and starts its session. A start Rust refuses closes
+ * the tab and reloads the projects: the no-session state shows, or the
+ * missing-folder state when the folder is gone.
+ */
+async function openTab(project: Project): Promise<void> {
+  const tab = tabs.open(project.id);
+  createPane(tab.id);
+  renderTabs();
+  if (await startTab(tab.id, project.path)) {
+    return;
+  }
+  if (tabs.find(tab.id)) {
+    await closeTab(tab.id);
+  }
+  await reloadAfterRefusal(project.id);
+}
+
+/**
+ * Starts a new session in session tab `tabId`, whose session ended, on a
+ * cleared screen. A start Rust refuses leaves the tab ended and reloads the
+ * projects, closing every tab of the project when its folder is gone.
+ */
+async function restartTab(tabId: number): Promise<void> {
+  const tab = tabs.find(tabId);
+  const project = tab ? findProject(projects, tab.projectId) : undefined;
+  if (tab?.kind !== "session" || !project) {
+    return;
+  }
+  tabs.setState(tabId, "starting");
+  renderTabs();
+  if (await startTab(tabId, project.path)) {
+    return;
+  }
+  tabs.setState(tabId, "exited");
+  renderTabs();
+  await reloadAfterRefusal(project.id);
+}
+
+/** Reloads the projects after a refused start; closes every tab of project `projectId` when its folder is gone. */
+async function reloadAfterRefusal(projectId: number): Promise<void> {
+  await refreshProjects();
+  if (findProject(projects, projectId)?.exists === false) {
+    await closeProjectTabs(projectId);
+  }
+}
+
+/** Closes tab `tabId`: stops its session or its replay, and disposes of its terminal. */
+async function closeTab(tabId: number): Promise<void> {
+  const pane = panes.get(tabId);
+  if (!pane) {
+    return;
+  }
+  panes.delete(tabId);
+  tabs.close(tabId);
+  pane.hide();
+  renderTabs();
+  if (pane instanceof ReplayPane) {
+    await deck.stop();
+    if (replayPane === pane) {
+      replayPane = undefined;
+    }
+    pane.close();
+  } else {
+    await pane.close();
+  }
+  activePane()?.view.terminal.focus();
+}
+
+/** Closes every tab of project `projectId`. */
+async function closeProjectTabs(projectId: number): Promise<void> {
+  await Promise.all(tabs.tabsOf(projectId).map((tab) => closeTab(tab.id)));
 }
 
 /** Draws the project rail and the work area from `projects` and `selectedId`. */
@@ -199,10 +401,7 @@ function renderProjects(): void {
       return item;
     }),
   );
-  const area = chooseWorkArea(projects, selectedId);
-  emptyState.hidden = area.kind !== "empty";
-  missingState.hidden = area.kind !== "missing";
-  missingPath.textContent = area.kind === "missing" ? area.project.path : "";
+  renderTabs();
 }
 
 /** Reloads the project list from Rust, keeps the selection when it is still there, and redraws. */
@@ -216,11 +415,10 @@ async function refreshProjects(): Promise<void> {
 }
 
 /**
- * Reloads the project list, then selects project `id` and starts a session in
- * its folder, unless that project's session already runs. Selecting a project
- * whose folder is gone stops the running session and shows the missing-folder
- * state; so does a session start that Rust refuses because the folder has just gone.
- * A selection overtaken by a later one while the list reloads does nothing.
+ * Reloads the project list, then selects project `id`: shows its active tab,
+ * or opens one when it has none. Selecting a project whose folder is gone closes
+ * its tabs and shows the missing-folder state. Other projects' sessions keep
+ * running. A selection overtaken by a later one while the list reloads does nothing.
  */
 async function selectProject(id: number): Promise<void> {
   selectionCount += 1;
@@ -229,15 +427,24 @@ async function selectProject(id: number): Promise<void> {
   if (selection !== selectionCount) {
     return;
   }
-  const toStart = projectToStart(projects, id, selectedId, slot.current !== undefined);
+  const action = clickAction(projects, id, tabs.tabsOf(id).length > 0);
   selectedId = keepSelection(projects, id);
   renderProjects();
-  if (toStart) {
-    if (!(await startSession(toStart.path))) {
-      await refreshProjects();
-    }
-  } else if (findProject(projects, id)?.exists === false) {
-    await stopSession();
+  if (action.kind === "open") {
+    await openTab(action.project);
+  } else if (action.kind === "missing") {
+    await closeProjectTabs(id);
+  } else if (action.kind === "show") {
+    showStatus(findProject(projects, id)?.path ?? "");
+    activePane()?.view.terminal.focus();
+  }
+}
+
+/** Opens a new tab in the selected project, when its folder exists. */
+async function openTabInSelected(): Promise<void> {
+  const selected = findProject(projects, selectedId);
+  if (selected?.exists) {
+    await openTab(selected);
   }
 }
 
@@ -263,7 +470,7 @@ async function relocateSelected(): Promise<void> {
   await selectProject(moved.id);
 }
 
-/** Removes the selected project, stopping its session. */
+/** Removes the selected project, closing all its tabs. */
 async function removeSelected(): Promise<void> {
   const selected = findProject(projects, selectedId);
   if (!selected) {
@@ -272,14 +479,18 @@ async function removeSelected(): Promise<void> {
   await removeProject(selected.id);
   if (selectedId === selected.id) {
     selectedId = undefined;
-    await stopSession();
   }
+  await closeProjectTabs(selected.id);
   await refreshProjects();
 }
 
-/** Writes a marker in the recording of the running session. */
+/** Writes a marker in the recording of the active tab's session. Does nothing on a replay tab. */
 async function mark(): Promise<void> {
-  const session = slot.current;
+  const pane = activePane();
+  if (pane instanceof ReplayPane) {
+    return;
+  }
+  const session = pane?.slot.current;
   if (!session) {
     showStatus("No session to mark");
     return;
@@ -289,8 +500,30 @@ async function mark(): Promise<void> {
 }
 
 /**
- * Stops the session and any replay, then loads the chosen recording on a
- * replay of its own. The grid stops following its container until the replay ends.
+ * Shows the replay tab of `project`, labelled with recording `name`: reuses the
+ * project's replay tab, else opens one, after closing the replay tab another
+ * project holds.
+ */
+async function showReplayTab(project: Project, name: string): Promise<void> {
+  const existing = tabs.replayTab();
+  if (existing && existing.projectId !== project.id) {
+    await closeTab(existing.id);
+  }
+  const tab = tabs.openReplay(project.id, name);
+  const pane = panes.get(tab.id);
+  if (pane instanceof ReplayPane) {
+    replayPane = pane;
+  } else {
+    replayPane = new ReplayPane(terminals, tab.id);
+    registerPane(replayPane);
+  }
+  renderTabs();
+}
+
+/**
+ * Ends any replay, then loads the chosen recording on a replay of its own,
+ * drawn in the selected project's replay tab. No session is touched. The grid
+ * stops following its container until the replay ends.
  */
 async function loadReplay(): Promise<LoadedReplay | undefined> {
   const name = recordingsSelect.value;
@@ -298,6 +531,12 @@ async function loadReplay(): Promise<LoadedReplay | undefined> {
     showStatus("No recording chosen");
     return undefined;
   }
+  const project = findProject(projects, selectedId);
+  if (!project?.exists) {
+    showStatus("Select a project to replay in");
+    return undefined;
+  }
+  await showReplayTab(project, name);
   const { replay, truncated } = await deck.load(name);
   if (truncated) {
     showStatus(`${name}: the last record is incomplete and was dropped`);
@@ -322,8 +561,16 @@ async function replayFromStart(): Promise<void> {
 /** Replays instantly up to the next marker of the chosen recording, then pauses there. */
 async function replayToNextMark(): Promise<void> {
   const onScreen = deck.current;
-  const current =
-    onScreen?.name === recordingsSelect.value && !onScreen.player.finished ? onScreen : await loadReplay();
+  const shownTab = tabs.replayTab();
+  const resumable =
+    onScreen?.name === recordingsSelect.value &&
+    !onScreen.player.finished &&
+    shownTab !== undefined &&
+    shownTab.projectId === selectedId;
+  if (resumable) {
+    activateTab(shownTab.id);
+  }
+  const current = resumable ? onScreen : await loadReplay();
   if (!current) {
     return;
   }
@@ -343,33 +590,6 @@ function report(action: () => Promise<void>): void {
   });
 }
 
-view.terminal.onData((data) => {
-  slot.write(data).catch((error: unknown) => {
-    showStatus(String(error));
-  });
-});
-
-view.terminal.onResize((size) => {
-  slot.resize(size).catch((error: unknown) => {
-    showStatus(String(error));
-  });
-});
-
-view.terminal.attachCustomKeyEventHandler((event) => {
-  const decision = decideKey(event);
-  if (decision === "terminal") {
-    return true;
-  }
-  if (decision === "paste") {
-    return false;
-  }
-  event.preventDefault();
-  if (event.type === "keydown" && !event.repeat) {
-    report(mark);
-  }
-  return false;
-});
-
 addProjectButton.addEventListener("click", () => {
   report(openFolder);
 });
@@ -386,6 +606,14 @@ removeButton.addEventListener("click", () => {
   report(removeSelected);
 });
 
+newTabButton.addEventListener("click", () => {
+  report(openTabInSelected);
+});
+
+noSessionStartButton.addEventListener("click", () => {
+  report(openTabInSelected);
+});
+
 warningClose.addEventListener("click", () => {
   warningClosed = true;
   warningBar.hidden = true;
@@ -393,7 +621,7 @@ warningClose.addEventListener("click", () => {
 
 markButton.addEventListener("click", () => {
   report(mark);
-  view.terminal.focus();
+  activePane()?.view.terminal.focus();
 });
 
 replayButton.addEventListener("click", () => {
@@ -414,20 +642,22 @@ stopReplayButton.addEventListener("click", () => {
 
 rendererSelect.addEventListener("change", () => {
   const wanted = rendererSelect.value;
-  if (isRenderer(wanted)) {
-    showRenderer(view, wanted, rendererSelect, showStatus);
-    view.terminal.focus();
+  const pane = activePane();
+  if (isRenderer(wanted) && pane) {
+    showRenderer(pane.view, wanted, rendererSelect, showStatus);
+    pane.view.terminal.focus();
   }
 });
 
 unicodeSelect.addEventListener("change", () => {
   const wanted = unicodeSelect.value;
   if (isUnicodeVersion(wanted)) {
-    view.setUnicodeVersion(wanted);
-    view.terminal.focus();
+    for (const pane of panes.values()) {
+      pane.view.setUnicodeVersion(wanted);
+    }
+    activePane()?.view.terminal.focus();
   }
 });
 
-startRenderer(view, rendererSelect, showStatus);
 refreshRecordingsOrReport();
 report(refreshProjects);

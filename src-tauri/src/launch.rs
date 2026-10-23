@@ -3,6 +3,7 @@ mod windows;
 
 use std::env;
 use std::ffi::OsStr;
+use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 
 use portable_pty::CommandBuilder;
@@ -11,6 +12,17 @@ use crate::error::AppError;
 
 /// Environment variables set on every `claude` session, on top of the inherited ones.
 pub const SESSION_ENV: [(&str, &str); 2] = [("TERM", "xterm-256color"), ("COLORTERM", "truecolor")];
+
+/// Name of the variable that carries the id of the session's tab, in decimal.
+pub const TAB_ID_VAR: &str = "CLOITRE_TAB_ID";
+
+/// Checks a tab id received from the webview: tab ids start at 1.
+///
+/// # Errors
+/// [`AppError::InvalidTabId`] for 0.
+pub fn tab_id(value: u32) -> Result<NonZeroU32, AppError> {
+    NonZeroU32::new(value).ok_or(AppError::InvalidTabId)
+}
 
 /// Finds the `claude` executable: first on the `path` list (a `PATH` value),
 /// then at the first of `fallbacks` that is an existing file, in order.
@@ -66,17 +78,19 @@ pub fn resolve_claude() -> Result<PathBuf, AppError> {
     find_claude(env::var_os("PATH").as_deref(), &install_locations())
 }
 
-/// Builds the command line of a new `claude` session in `folder`.
+/// Builds the command line of a new `claude` session in `folder`, for tab `tab`.
 ///
 /// The command is `program` with no argument at all: nothing coming from the
-/// webview reaches the argument list. The caller must pass a folder already
-/// checked by [`crate::folder::validate_folder`].
-pub fn claude_command(program: &Path, folder: &Path) -> CommandBuilder {
+/// webview reaches the argument list. On top of the inherited environment it
+/// sets [`SESSION_ENV`] and [`TAB_ID_VAR`] to `tab` in decimal. The caller must
+/// pass a folder already checked by [`crate::folder::validate_folder`].
+pub fn claude_command(program: &Path, folder: &Path, tab: NonZeroU32) -> CommandBuilder {
     let mut command = CommandBuilder::new(program);
     command.cwd(folder);
     for (key, value) in SESSION_ENV {
         command.env(key, value);
     }
+    command.env(TAB_ID_VAR, tab.to_string());
     command
 }
 
@@ -178,6 +192,7 @@ mod tests {
         claude_command(
             Path::new("/opt/tools/claude"),
             Path::new("/projects/example"),
+            NonZeroU32::new(42).unwrap(),
         )
     }
 
@@ -202,5 +217,34 @@ mod tests {
         let command = sample_command();
         assert_eq!(command.get_env("TERM"), Some(OsStr::new("xterm-256color")));
         assert_eq!(command.get_env("COLORTERM"), Some(OsStr::new("truecolor")));
+    }
+
+    #[test]
+    fn sets_the_tab_id_in_decimal() {
+        let command = sample_command();
+        assert_eq!(command.get_env(TAB_ID_VAR), Some(OsStr::new("42")));
+    }
+
+    #[test]
+    fn changes_no_inherited_variable_but_the_session_ones() {
+        let inherited = CommandBuilder::new("/opt/tools/claude");
+        let session_keys: Vec<&str> = SESSION_ENV
+            .iter()
+            .map(|(key, _)| *key)
+            .chain([TAB_ID_VAR])
+            .collect();
+        let command = sample_command();
+        for (key, value) in command.iter_full_env_as_str() {
+            assert!(
+                session_keys.contains(&key) || inherited.get_env(key) == Some(OsStr::new(value)),
+                "{key} was changed"
+            );
+        }
+    }
+
+    #[test]
+    fn tab_id_zero_is_refused() {
+        assert_eq!(tab_id(0), Err(AppError::InvalidTabId));
+        assert_eq!(tab_id(1), Ok(NonZeroU32::new(1).unwrap()));
     }
 }

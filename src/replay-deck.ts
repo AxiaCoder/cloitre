@@ -9,8 +9,6 @@ export interface LoadedReplay {
 
 /** What a {@link ReplayDeck} needs from the page around it. */
 export interface ReplayDeckHooks {
-  /** Stops the live session, if any. */
-  stopSession(): Promise<void>;
   /** Returns the raw bytes of recording `name`. */
   read(name: string): Promise<Uint8Array>;
   /** Called when a replay takes the screen. */
@@ -20,9 +18,8 @@ export interface ReplayDeckHooks {
 }
 
 /**
- * Holds at most one replay on screen. Loads, claims and stops run one at a
- * time, in the order they were asked for, and each one ends the replay on
- * screen first. A replay no longer on screen does not run again.
+ * Holds at most one replay on screen. Loads and stops run one at a time, in
+ * the order they were asked for, and each one ends the replay on screen first. A replay no longer on screen does not run again.
  */
 export class ReplayDeck {
   private loaded: LoadedReplay | undefined;
@@ -40,10 +37,10 @@ export class ReplayDeck {
   }
 
   /**
-   * Once every earlier load, claim and stop has settled, ends the replay on
-   * screen, then runs `operation`. Settles as `operation` does.
+   * Once every earlier load and stop has settled, ends the replay on screen,
+   * then runs `operation`. Settles as `operation` does.
    */
-  claim<T>(operation: () => Promise<T>): Promise<T> {
+  private claim<T>(operation: () => Promise<T>): Promise<T> {
     return this.enqueue(async () => {
       await this.end();
       return operation();
@@ -51,13 +48,12 @@ export class ReplayDeck {
   }
 
   /**
-   * Stops the replay on screen and the live session, then loads recording
+   * Stops the replay on screen, then loads recording
    * `name` on a replay of its own. `truncated` tells whether its last record
    * was dropped. Rejects when the read or the decoding fails.
    */
   load(name: string): Promise<{ replay: LoadedReplay; truncated: boolean }> {
     return this.claim(async () => {
-      await this.hooks.stopSession();
       const decoded = decodeRecording(await this.hooks.read(name));
       this.hooks.hold();
       const replay: LoadedReplay = { player: new Replay(decoded.events, this.target), name, marks: 0 };

@@ -530,7 +530,7 @@ mod tests {
         let id = registry
             .spawn(
                 registry.epoch(),
-                crate::launch::claude_command(&script, folder.path()),
+                crate::launch::claude_command(&script, folder.path(), std::num::NonZeroU32::MIN),
                 pty_size(80, 24).unwrap(),
                 move |bytes| {
                     let _ = output_tx.send(bytes.to_vec());
