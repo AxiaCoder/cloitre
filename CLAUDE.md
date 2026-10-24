@@ -22,6 +22,8 @@ Early stage. The work is tracked in GitHub issues, milestone POC. Start with iss
 
 ## Quality
 
+The checks a pull request must pass are listed in `.github/workflows/checks.yml`, which runs them on every pull request and every push to `main`. That file is the reference: a check added there applies to everyone, a check named only here does not.
+
 - Every Rust function has a doc comment saying what it does and what its caller must know.
 - No Rust code without a test. `cargo clippy --all-targets -- -D warnings` and `cargo test` pass before a pull request.
 - Every named TypeScript function, method and class has a JSDoc comment (enforced by ESLint). `pnpm lint`, `pnpm typecheck` and `pnpm test` pass before a pull request.
