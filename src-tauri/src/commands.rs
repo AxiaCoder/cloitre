@@ -431,6 +431,27 @@ mod tests {
     }
 
     #[test]
+    fn picker_gate_reopens_after_the_holder_panics() {
+        let gate = PickerGate::default();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _open = gate.try_open().expect("the first picker opens");
+            panic!("the picker failed");
+        }));
+        assert!(outcome.is_err());
+        assert!(gate.try_open().is_some());
+    }
+
+    #[test]
+    fn picker_gate_reopens_after_each_close() {
+        let gate = PickerGate::default();
+        for _ in 0..3 {
+            let open = gate.try_open();
+            assert!(open.is_some());
+            assert!(gate.try_open().is_none());
+        }
+    }
+
+    #[test]
     fn output_sink_records_each_chunk_before_sending_it() {
         let file = SharedSink::default();
         let recorder: SharedRecorder =
