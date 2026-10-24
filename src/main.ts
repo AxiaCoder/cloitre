@@ -550,6 +550,15 @@ function closeMarkerMenu(): void {
   markerMenu = undefined;
 }
 
+/** Closes the marker menu, if one is open, and gives focus back to its project. */
+function dismissMarkerMenu(): void {
+  if (markerMenu !== undefined) {
+    const { anchor } = markerMenu;
+    closeMarkerMenu();
+    anchor.focus();
+  }
+}
+
 /** A button of the marker menu showing `content`, named `label`, marked when `current`; runs `pick` on click. */
 function markerChoice(label: string, current: boolean, content: Node | string, pick: () => void): HTMLButtonElement {
   const choice = document.createElement("button");
@@ -606,6 +615,7 @@ function openMarkerMenu(project: Project, anchor: HTMLButtonElement): void {
   noIcon.classList.add("marker-no-icon");
   const menu = document.createElement("div");
   menu.className = "marker-menu";
+  menu.tabIndex = -1;
   menu.setAttribute("role", "dialog");
   menu.setAttribute("aria-label", messages.markerMenu(project.name));
   menu.append(markerGroup(texts.markerColors, colors), markerGroup(texts.markerIcons, [...icons, noIcon]));
@@ -953,10 +963,8 @@ unicodeSelect.addEventListener("change", () => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && markerMenu !== undefined) {
-    const { anchor } = markerMenu;
-    closeMarkerMenu();
-    anchor.focus();
+  if (event.key === "Escape") {
+    dismissMarkerMenu();
   }
 });
 
@@ -970,7 +978,7 @@ document.addEventListener(
   { capture: true },
 );
 
-window.addEventListener("resize", closeMarkerMenu);
+window.addEventListener("resize", dismissMarkerMenu);
 
 window.addEventListener(
   "keydown",
