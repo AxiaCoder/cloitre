@@ -26,6 +26,7 @@ dunce = "1.0.5"
 which = "8.0.6"
 uuid = { version = "1.28.0", features = ["v4"] }
 dirs = "7.0.0"
+tauri-plugin-single-instance = "2.5.4"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = [
