@@ -581,7 +581,7 @@ function markerGroup(title: string, choices: readonly HTMLButtonElement[]): HTML
 /**
  * Opens, under project button `anchor`, the menu that changes the marker of
  * `project`: its colors, its icons and a button back to the color marker.
- * Focuses the current choice.
+ * Picking a color also drops the icon. Focuses the current choice.
  */
 function openMarkerMenu(project: Project, anchor: HTMLButtonElement): void {
   closeMarkerMenu();
@@ -592,7 +592,12 @@ function openMarkerMenu(project: Project, anchor: HTMLButtonElement): void {
     const swatch = document.createElement("span");
     swatch.className = "marker-swatch";
     swatch.style.backgroundColor = markerColorValue(color);
-    return markerChoice(messages.markerColor(color), color === project.color, swatch, pick(color, project.icon));
+    return markerChoice(
+      messages.markerColor(color),
+      project.icon === null && color === project.color,
+      swatch,
+      pick(color, null),
+    );
   });
   const icons = MARKER_ICONS.map((icon) =>
     markerChoice(messages.markerIcon(icon), icon === project.icon, markerIcon(icon), pick(project.color, icon)),
