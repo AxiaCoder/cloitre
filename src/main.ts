@@ -546,8 +546,9 @@ function projectMarker(project: Project): HTMLSpanElement {
 
 /** Closes the marker menu, if one is open. */
 function closeMarkerMenu(): void {
-  markerMenu?.element.remove();
+  const open = markerMenu;
   markerMenu = undefined;
+  open?.element.remove();
 }
 
 /** Closes the marker menu, if one is open, and gives focus back to its project. */
