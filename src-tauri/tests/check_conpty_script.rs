@@ -25,8 +25,12 @@ fn copy_of_vendored_conpty() -> tempfile::TempDir {
 }
 
 /// Runs the check script with `-Root root` and returns what it printed and its exit code.
+///
+/// `PSModulePath` is removed so that Windows PowerShell builds its own: one
+/// inherited from PowerShell 7 makes `Get-AuthenticodeSignature` fail to load.
 fn check(root: &Path) -> Output {
     Command::new("powershell.exe")
+        .env_remove("PSModulePath")
         .args([
             "-NoProfile",
             "-NonInteractive",
@@ -46,11 +50,20 @@ fn printed(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+/// Returns the standard output and the standard error of `output`, for a failure message.
+fn report(output: &Output) -> String {
+    format!(
+        "stdout:\n{}\nstderr:\n{}",
+        printed(output),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
 #[test]
 fn script_passes_on_the_vendored_files() {
     let folder = copy_of_vendored_conpty();
     let output = check(folder.path());
-    assert!(output.status.success(), "{}", printed(&output));
+    assert!(output.status.success(), "{}", report(&output));
     assert!(printed(&output).contains("conpty check passed"));
 }
 
@@ -64,7 +77,7 @@ fn script_fails_when_a_file_is_altered() {
     std::fs::write(&dll, bytes).unwrap();
 
     let output = check(folder.path());
-    assert_eq!(output.status.code(), Some(1), "{}", printed(&output));
+    assert_eq!(output.status.code(), Some(1), "{}", report(&output));
     let text = printed(&output);
     assert!(text.contains("conpty.dll: SHA-256 is"), "{text}");
     assert!(
@@ -80,6 +93,10 @@ fn script_fails_when_a_file_is_missing() {
     std::fs::remove_file(folder.path().join("x64/OpenConsole.exe")).unwrap();
 
     let output = check(folder.path());
-    assert_eq!(output.status.code(), Some(1), "{}", printed(&output));
-    assert!(printed(&output).contains("x64/OpenConsole.exe: file not found"));
+    assert_eq!(output.status.code(), Some(1), "{}", report(&output));
+    assert!(
+        printed(&output).contains("x64/OpenConsole.exe: file not found"),
+        "{}",
+        report(&output)
+    );
 }
