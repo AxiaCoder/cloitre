@@ -123,7 +123,8 @@ pub fn run() {
             commands::project_remove,
             commands::project_select,
             commands::tab_open,
-            commands::tab_close
+            commands::tab_close,
+            commands::tab_activate
         ])
         .build(tauri::generate_context!())
         .expect("error while building the app")
@@ -220,6 +221,7 @@ mod tests {
             "allow-project-select",
             "allow-tab-open",
             "allow-tab-close",
+            "allow-tab-activate",
         ];
         expected.sort_unstable();
         assert_eq!(granted, expected);

@@ -97,7 +97,7 @@ Returns one recording file, for the webview to decode and replay.
 Lists the projects.
 
 - **Arguments**: none.
-- **Returns**: `{ projects, warning, selected }`. `projects` is an array of `{ id, name, path, exists, tabs }`, in the order the projects were added: `id` (integer), `name` (folder name), `path` (canonical folder path, as last chosen), `exists` (whether that path still names a folder), `tabs` (array of `{ id }`, the project's tabs in the order they were opened; their session ids are not sent). `warning` is a message string when the project file could not be loaded at startup (see [Projects](#projects)), `null` otherwise; it stays the same until the app restarts. `selected` is the id of the project to select: the last one `project_select` remembered while it is still in the list, else the first project, else `null` when there is no project.
+- **Returns**: `{ projects, warning, selected }`. `projects` is an array of `{ id, name, path, exists, tabs, activeTab }`, in the order the projects were added: `id` (integer), `name` (folder name), `path` (canonical folder path, as last chosen), `exists` (whether that path still names a folder), `tabs` (array of `{ id }`, the project's tabs in the order they were opened; their session ids are not sent), `activeTab` (the id of the tab to bring to the front: the last active one while it is still one of `tabs`, else the first tab, else `null` when the project has no tab). `warning` is a message string when the project file could not be loaded at startup (see [Projects](#projects)), `null` otherwise; it stays the same until the app restarts. `selected` is the id of the project to select: the last one `project_select` remembered while it is still in the list, else the first project, else `null` when there is no project.
 - **Refuses**: nothing.
 
 ### `project_add`
@@ -134,7 +134,7 @@ Remembers a project as the selected one, so that the next run selects it again. 
 
 ### `tab_open`
 
-Opens a new tab in a project. Rust gives it a new Claude Code session id, which it keeps; the tab starts no session until `pty_spawn`.
+Opens a new tab in a project. Rust gives it a new Claude Code session id, which it keeps; the tab starts no session until `pty_spawn`. The new tab becomes the project's active tab, in the same save.
 
 - **Arguments**: `projectId` (integer, a project id).
 - **Returns**: `{ id }`, the tab id (integer, starts at 1, unique across every project, never reused).
@@ -142,11 +142,19 @@ Opens a new tab in a project. Rust gives it a new Claude Code session id, which 
 
 ### `tab_close`
 
-Closes a tab: it is removed from its project, with the session id the hook left for it. A running session of that tab is not stopped: the webview calls `pty_kill` first.
+Closes a tab: it is removed from its project, with the session id the hook left for it. A running session of that tab is not stopped: the webview calls `pty_kill` first. When it was the project's active tab, the active tab moves, in the same save, to the tab that takes its place, else to the one before it, else to none.
 
 - **Arguments**: `tabId` (integer, a tab id).
 - **Returns**: nothing.
 - **Refuses**: an unknown tab id ("no tab with id <id>"); a read-only project list; a failed save.
+
+### `tab_activate`
+
+Remembers a tab as the active tab of its project, so that the next run brings it to the front again. Saves nothing when it already is the active one. On a read-only project list the active tab is kept in memory until the app closes.
+
+- **Arguments**: `tabId` (integer, a tab id).
+- **Returns**: nothing.
+- **Refuses**: an unknown tab id ("no tab with id <id>"); a failed save.
 
 ## Projects
 
@@ -167,7 +175,8 @@ The project list belongs to Rust: `pty_spawn` runs only in the folder of a proje
         "path": "C:\\work\\example",
         "tabs": [
           { "id": 1, "session_id": "0f8e5c1a-3b2d-4c6e-9a7f-1d2c3b4a5e6f" }
-        ]
+        ],
+        "active_tab": 1
       }
     ],
     "next_id": 2,
@@ -176,7 +185,7 @@ The project list belongs to Rust: `pty_spawn` runs only in the folder of a proje
   }
   ```
 
-  `id` is unique in the file and never reused, even after the project with the largest id is removed: a new project takes `next_id`, or the largest id plus one when that is higher, and `next_id` becomes its id plus one. `next_id` may be absent (files written before it existed); it then counts as 0, so the format version stays 1. `path` is the canonical folder path. `tabs` lists the project's tabs, in the order they were opened: `id` is at least 1, unique across every project of the file and never reused, by the same rule as project ids with `next_tab_id` (absent from older files, it then counts as 0); `session_id` is the Claude Code session id the tab resumes, in the form `pty_spawn` checks. A tab id of 0, a tab id used twice, or a missing or malformed `session_id` makes the whole file unreadable (see below). `selected` is the id of the last selected project, or `null`; it may name a project that is gone, and `project_list` then gives the first project instead. Absent from older files, it counts as `null`. A change of shape that an older app cannot read raises `version`.
+  `id` is unique in the file and never reused, even after the project with the largest id is removed: a new project takes `next_id`, or the largest id plus one when that is higher, and `next_id` becomes its id plus one. `next_id` may be absent (files written before it existed); it then counts as 0, so the format version stays 1. `path` is the canonical folder path. `tabs` lists the project's tabs, in the order they were opened: `id` is at least 1, unique across every project of the file and never reused, by the same rule as project ids with `next_tab_id` (absent from older files, it then counts as 0); `session_id` is the Claude Code session id the tab resumes, in the form `pty_spawn` checks. `active_tab` is the id of the project's last active tab, or `null`; it may name a tab that is gone, and `project_list` then gives the project's first tab instead. Absent from older files, it counts as `null`. A tab id of 0, a tab id used twice, or a missing or malformed `session_id` makes the whole file unreadable (see below). `selected` is the id of the last selected project, or `null`; it may name a project that is gone, and `project_list` then gives the first project instead. Absent from older files, it counts as `null`. A change of shape that an older app cannot read raises `version`.
 - **Writing**: to `projects.json.<process id>.tmp` in the same folder, flushed to disk, then renamed over `projects.json`, so the file is always whole. Two app instances each keep their own list in memory: one can overwrite a change of the other, never break the file. A failed write leaves the file and the list as they were, and the command fails with "the project list could not be saved: <reason>".
 - **Unreadable file**: a missing file gives an empty list with no warning. A file that cannot be read, is not valid JSON, has no `version`, another `version`, or content that is not a project list, is copied to `projects.json.unreadable` (then `projects.json.unreadable-2`, `-3`… when that name is taken) and the app starts with an empty list; `project_list` returns the warning "The project list could not be loaded (<reason>). It was copied to <copy path> and the app started with an empty list." When the copy fails too, the warning says so and every change is refused with "the project list is read-only until the app restarts: its file could not be loaded nor copied aside", so the file is never overwritten.
 

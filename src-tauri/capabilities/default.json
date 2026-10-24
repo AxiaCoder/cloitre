@@ -18,6 +18,7 @@
     "allow-project-remove",
     "allow-project-select",
     "allow-tab-open",
-    "allow-tab-close"
+    "allow-tab-close",
+    "allow-tab-activate"
   ]
 }

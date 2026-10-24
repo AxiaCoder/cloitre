@@ -25,6 +25,10 @@ pub struct Project {
     /// The project's tabs, in the order they were opened.
     #[serde(default)]
     pub tabs: Vec<Tab>,
+    /// The id of the project's last active tab. Absent from older files: it
+    /// then reads as `None`. May name a tab that is gone; see [`active_tab`].
+    #[serde(default)]
+    pub active_tab: Option<u32>,
 }
 
 /// One tab as stored in the file.
@@ -91,6 +95,10 @@ pub struct ProjectView {
     pub exists: bool,
     /// The project's tabs, in the order they were opened.
     pub tabs: Vec<TabView>,
+    /// The tab to bring to the front: the last active one while it exists,
+    /// else the first tab, else `None` when the project has no tab.
+    #[serde(rename = "activeTab")]
+    pub active_tab: Option<u32>,
 }
 
 /// What `project_list` returns: the projects and the load warning, if any.
@@ -193,6 +201,7 @@ impl ProjectStore {
             name: folder_name(&canonical),
             path: path_string(&canonical)?,
             tabs: Vec::new(),
+            active_tab: None,
         });
         self.commit(&mut state, next)?;
         Ok(view(state.file.projects.last().expect("just pushed")))
@@ -268,7 +277,8 @@ impl ProjectStore {
         self.commit(&mut state, next)
     }
 
-    /// Opens a new tab in project `project`, with a new session id, and returns it.
+    /// Opens a new tab in project `project`, with a new session id, and returns
+    /// it. The new tab becomes the project's active tab, in the same save.
     ///
     /// # Errors
     /// An unknown project id; a read-only store; a failed save.
@@ -282,11 +292,16 @@ impl ProjectStore {
             id,
             session_id: SessionId::generate(),
         });
+        next.projects[index].active_tab = Some(id);
         self.commit(&mut state, next)?;
         Ok(TabView { id })
     }
 
     /// Closes tab `tab`: it is removed from its project.
+    ///
+    /// When it was the project's active tab, the active tab moves, in the same
+    /// save, to the tab that takes its place, else to the one before it, else
+    /// to none.
     ///
     /// # Errors
     /// [`AppError::UnknownTab`]; a read-only store; a failed save.
@@ -294,7 +309,40 @@ impl ProjectStore {
         let mut state = lock(&self.state);
         let (project, index) = tab_position(&state.file, tab)?;
         let mut next = state.file.clone();
-        next.projects[project].tabs.remove(index);
+        let owner = &mut next.projects[project];
+        owner.tabs.remove(index);
+        if owner.active_tab == Some(tab) {
+            owner.active_tab = owner
+                .tabs
+                .get(index)
+                .or_else(|| {
+                    index
+                        .checked_sub(1)
+                        .and_then(|before| owner.tabs.get(before))
+                })
+                .map(|neighbour| neighbour.id);
+        }
+        self.commit(&mut state, next)
+    }
+
+    /// Remembers tab `tab` as the active tab of its project and saves it.
+    /// Writes nothing when it already is. On a read-only store the active tab
+    /// is kept in memory only, and no error is returned.
+    ///
+    /// # Errors
+    /// [`AppError::UnknownTab`]; a failed save.
+    pub fn activate_tab(&self, tab: u32) -> Result<(), AppError> {
+        let mut state = lock(&self.state);
+        let (project, _) = tab_position(&state.file, tab)?;
+        if state.file.projects[project].active_tab == Some(tab) {
+            return Ok(());
+        }
+        if state.read_only {
+            state.file.projects[project].active_tab = Some(tab);
+            return Ok(());
+        }
+        let mut next = state.file.clone();
+        next.projects[project].active_tab = Some(tab);
         self.commit(&mut state, next)
     }
 
@@ -596,6 +644,15 @@ fn selection(file: &ProjectsFile) -> Option<u32> {
         .or_else(|| file.projects.first().map(|project| project.id))
 }
 
+/// Returns the tab to bring to the front in `project`: the stored active tab
+/// while it names a tab of the project, else the first tab, else `None`.
+fn active_tab(project: &Project) -> Option<u32> {
+    project
+        .active_tab
+        .filter(|id| project.tabs.iter().any(|tab| tab.id == *id))
+        .or_else(|| project.tabs.first().map(|tab| tab.id))
+}
+
 /// Returns what the webview receives for `project`.
 fn view(project: &Project) -> ProjectView {
     ProjectView {
@@ -608,6 +665,7 @@ fn view(project: &Project) -> ProjectView {
             .iter()
             .map(|tab| TabView { id: tab.id })
             .collect(),
+        active_tab: active_tab(project),
     }
 }
 
@@ -1292,12 +1350,14 @@ mod tests {
                 name: "a".to_owned(),
                 path: "nowhere".to_owned(),
                 tabs: Vec::new(),
+                active_tab: None,
             },
             Project {
                 id: 2,
                 name: "b".to_owned(),
                 path: "elsewhere".to_owned(),
                 tabs: Vec::new(),
+                active_tab: None,
             },
         ];
         assert_eq!(store.select(2), Ok(()));
@@ -1345,6 +1405,7 @@ mod tests {
             name: "a".to_owned(),
             path: "nowhere".to_owned(),
             tabs: Vec::new(),
+            active_tab: None,
         }];
         assert_eq!(store.select(5), Err(AppError::UnknownProject(5)));
         assert_eq!(store.list().selected, Some(1));
@@ -1356,5 +1417,196 @@ mod tests {
         let store = store_in(dir.path());
         assert_eq!(store.set_session(3, SessionId::generate()), Ok(()));
         assert!(!dir.path().join("projects.json").exists());
+    }
+
+    /// The `active_tab` field of the first project saved in the
+    /// `projects.json` of `dir`.
+    fn saved_active_tab(dir: &Path) -> serde_json::Value {
+        let text = fs::read_to_string(dir.join("projects.json")).unwrap();
+        serde_json::from_str::<serde_json::Value>(&text).unwrap()["projects"][0]["active_tab"]
+            .clone()
+    }
+
+    /// The active tab `store` lists for project `id`.
+    fn listed_active_tab(store: &ProjectStore, id: u32) -> Option<u32> {
+        store
+            .list()
+            .projects
+            .into_iter()
+            .find(|project| project.id == id)
+            .unwrap()
+            .active_tab
+    }
+
+    #[test]
+    fn the_active_tab_survives_a_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let first = store.open_tab(a.id).unwrap().id;
+        store.open_tab(a.id).unwrap();
+        let third = store.open_tab(a.id).unwrap().id;
+        store.activate_tab(first).unwrap();
+        store.activate_tab(third).unwrap();
+        assert_eq!(listed_active_tab(&store_in(dir.path()), a.id), Some(third));
+        assert_eq!(saved_active_tab(dir.path()), third);
+    }
+
+    #[test]
+    fn opening_a_tab_makes_it_active() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        assert_eq!(listed_active_tab(&store, a.id), None);
+        store.open_tab(a.id).unwrap();
+        let second = store.open_tab(a.id).unwrap().id;
+        assert_eq!(listed_active_tab(&store, a.id), Some(second));
+        assert_eq!(saved_active_tab(dir.path()), second);
+    }
+
+    #[test]
+    fn closing_the_active_tab_activates_its_neighbour() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let first = store.open_tab(a.id).unwrap().id;
+        let second = store.open_tab(a.id).unwrap().id;
+        let third = store.open_tab(a.id).unwrap().id;
+
+        store.activate_tab(second).unwrap();
+        store.close_tab(second).unwrap();
+        assert_eq!(saved_active_tab(dir.path()), third);
+
+        store.close_tab(third).unwrap();
+        assert_eq!(saved_active_tab(dir.path()), first);
+
+        store.close_tab(first).unwrap();
+        assert_eq!(saved_active_tab(dir.path()), serde_json::Value::Null);
+        assert_eq!(listed_active_tab(&store, a.id), None);
+    }
+
+    #[test]
+    fn closing_another_tab_keeps_the_active_tab() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let first = store.open_tab(a.id).unwrap().id;
+        let second = store.open_tab(a.id).unwrap().id;
+        store.close_tab(first).unwrap();
+        assert_eq!(saved_active_tab(dir.path()), second);
+    }
+
+    #[test]
+    fn activating_an_unknown_tab_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let tab = store.open_tab(a.id).unwrap().id;
+        assert_eq!(store.activate_tab(9), Err(AppError::UnknownTab(9)));
+        assert_eq!(listed_active_tab(&store, a.id), Some(tab));
+    }
+
+    #[test]
+    fn activating_the_active_tab_again_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let tab = store.open_tab(a.id).unwrap().id;
+        let file = dir.path().join("projects.json");
+        fs::remove_file(&file).unwrap();
+        assert_eq!(store.activate_tab(tab), Ok(()));
+        assert!(!file.exists());
+    }
+
+    #[test]
+    fn a_read_only_store_keeps_the_active_tab_in_memory() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("projects.json");
+        fs::create_dir(&file).unwrap();
+        let store = store_in(dir.path());
+        let tab = |id| Tab {
+            id,
+            session_id: SessionId::generate(),
+        };
+        lock(&store.state).file.projects = vec![Project {
+            id: 1,
+            name: "a".to_owned(),
+            path: "nowhere".to_owned(),
+            tabs: vec![tab(1), tab(2)],
+            active_tab: None,
+        }];
+        assert_eq!(store.activate_tab(2), Ok(()));
+        assert_eq!(listed_active_tab(&store, 1), Some(2));
+        assert!(names_in(&file).is_empty());
+    }
+
+    #[test]
+    fn a_saved_active_tab_that_is_gone_activates_the_first_tab() {
+        let dir = tempfile::tempdir().unwrap();
+        let saved = r#"{ "version": 1, "projects": [{ "id": 4, "name": "a", "path": "nowhere", "active_tab": 9, "tabs": [{ "id": 2, "session_id": "6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b" }, { "id": 3, "session_id": "7f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b" }] }] }"#;
+        fs::write(dir.path().join("projects.json"), saved).unwrap();
+        let store = store_in(dir.path());
+        assert_eq!(store.list().warning, None);
+        assert_eq!(listed_active_tab(&store, 4), Some(2));
+    }
+
+    #[test]
+    fn a_file_without_active_tab_activates_each_first_tab() {
+        let dir = tempfile::tempdir().unwrap();
+        let older = r#"{ "version": 1, "projects": [{ "id": 4, "name": "a", "path": "nowhere", "tabs": [{ "id": 2, "session_id": "6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b" }, { "id": 3, "session_id": "7f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b" }] }, { "id": 7, "name": "b", "path": "elsewhere", "tabs": [{ "id": 5, "session_id": "8f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b" }] }] }"#;
+        fs::write(dir.path().join("projects.json"), older).unwrap();
+        let store = store_in(dir.path());
+        assert_eq!(store.list().warning, None);
+        assert_eq!(listed_active_tab(&store, 4), Some(2));
+        assert_eq!(listed_active_tab(&store, 7), Some(5));
+    }
+
+    #[test]
+    fn closing_a_tab_after_the_active_one_keeps_the_active_tab() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let first = store.open_tab(a.id).unwrap().id;
+        let second = store.open_tab(a.id).unwrap().id;
+        store.open_tab(a.id).unwrap();
+        store.activate_tab(first).unwrap();
+        store.close_tab(second).unwrap();
+        assert_eq!(saved_active_tab(dir.path()), first);
+    }
+
+    #[test]
+    fn activating_a_tab_changes_only_its_own_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let b = store.add(&folder(dir.path(), "b")).unwrap();
+        let a_first = store.open_tab(a.id).unwrap().id;
+        store.open_tab(a.id).unwrap();
+        let b_first = store.open_tab(b.id).unwrap().id;
+        store.open_tab(b.id).unwrap();
+
+        store.activate_tab(b_first).unwrap();
+        store.activate_tab(a_first).unwrap();
+
+        let reopened = store_in(dir.path());
+        assert_eq!(listed_active_tab(&reopened, a.id), Some(a_first));
+        assert_eq!(listed_active_tab(&reopened, b.id), Some(b_first));
+    }
+
+    #[test]
+    fn closing_the_active_tab_of_one_project_keeps_the_other_project_s() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let b = store.add(&folder(dir.path(), "b")).unwrap();
+        let a_first = store.open_tab(a.id).unwrap().id;
+        let a_second = store.open_tab(a.id).unwrap().id;
+        let b_only = store.open_tab(b.id).unwrap().id;
+
+        store.close_tab(a_second).unwrap();
+
+        let reopened = store_in(dir.path());
+        assert_eq!(listed_active_tab(&reopened, a.id), Some(a_first));
+        assert_eq!(listed_active_tab(&reopened, b.id), Some(b_only));
     }
 }

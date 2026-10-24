@@ -24,6 +24,7 @@ import {
   listProjects,
   openTab as saveNewTab,
   relocateProject,
+  rememberActiveTab,
   rememberSelection,
   removeProject,
   type Project,
@@ -274,11 +275,17 @@ function renderTabs(): void {
   renderSessionCounts();
 }
 
-/** Makes tab `tabId` its project's active tab, shows it and gives it the keyboard. */
+/**
+ * Makes tab `tabId` its project's active tab, shows it and gives it the keyboard.
+ * A session tab is also remembered by Rust as its project's active tab, for the next run.
+ */
 function activateTab(tabId: number): void {
   tabs.activate(tabId);
   renderTabs();
   panes.get(tabId)?.view.terminal.focus();
+  if (tabId > 0) {
+    report(() => rememberActiveTab(tabId));
+  }
 }
 
 /** Gives `pane` the width table the control shows and registers it under its tab id. */
@@ -401,7 +408,7 @@ async function openTab(project: Project): Promise<void> {
  */
 function restoreTabs(project: Project): void {
   const ids = project.tabs.map(({ id }) => id);
-  for (const tab of tabs.restore(project.id, ids)) {
+  for (const tab of tabs.restore(project.id, ids, project.activeTab ?? undefined)) {
     createPane(tab.id).showOffer("resume");
   }
 }
@@ -452,7 +459,9 @@ async function reloadAfterRefusal(projectId: number): Promise<void> {
 /**
  * Closes tab `tabId`: stops its session or its replay, and disposes of its
  * terminal. A session tab is also removed from the saved tabs when `forget` is
- * set; otherwise Rust keeps it for the next run.
+ * set; otherwise Rust keeps it for the next run. When `forget` is set and the
+ * tab now in front of the project is a session tab, Rust remembers it as the
+ * project's active tab.
  */
 async function closeTab(tabId: number, forget: boolean): Promise<void> {
   const pane = panes.get(tabId);
@@ -460,7 +469,7 @@ async function closeTab(tabId: number, forget: boolean): Promise<void> {
     return;
   }
   panes.delete(tabId);
-  tabs.close(tabId);
+  const closed = tabs.close(tabId)?.closed;
   pane.hide();
   renderTabs();
   if (pane instanceof ReplayPane) {
@@ -474,6 +483,10 @@ async function closeTab(tabId: number, forget: boolean): Promise<void> {
     if (forget) {
       await forgetTab(tabId);
     }
+  }
+  const active = closed && tabs.activeOf(closed.projectId);
+  if (forget && active?.kind === "session") {
+    report(() => rememberActiveTab(active.id));
   }
   activePane()?.view.terminal.focus();
 }

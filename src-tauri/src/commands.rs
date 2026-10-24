@@ -302,6 +302,16 @@ pub fn project_select(projects: State<'_, ProjectStore>, id: u32) -> Result<(), 
     projects.select(id)
 }
 
+/// Remembers tab `tab_id` as the active tab of its project, for the next run.
+///
+/// # Errors
+/// An unknown tab id; a failed save. A read-only project list is not an
+/// error: the active tab is then kept until the app closes.
+#[tauri::command(async)]
+pub fn tab_activate(projects: State<'_, ProjectStore>, tab_id: u32) -> Result<(), AppError> {
+    projects.activate_tab(tab_id)
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::{self, Write};
