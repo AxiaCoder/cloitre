@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{State, Window};
@@ -218,11 +219,37 @@ pub fn project_list(projects: State<'_, ProjectStore>) -> ProjectList {
     projects.list()
 }
 
+/// Lets at most one folder picker be open at a time, across every window.
+#[derive(Default)]
+pub struct PickerGate(AtomicBool);
+
+/// Proof that the folder picker is open; dropping it lets the next one open.
+struct PickerOpen<'a>(&'a AtomicBool);
+
+impl PickerGate {
+    /// Claims the picker: `None` when one is already open.
+    fn try_open(&self) -> Option<PickerOpen<'_>> {
+        self.0
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| PickerOpen(&self.0))
+    }
+}
+
+impl Drop for PickerOpen<'_> {
+    /// Releases the picker.
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
 /// Opens the folder picker over `window` and returns the chosen path, or
-/// `None` when the user cancels.
+/// `None` when the user cancels or when `gate` says a picker is already open,
+/// in which case no second picker opens.
 ///
 /// Blocks until the picker closes, so it must not run on the main thread.
-fn pick_folder(window: &Window) -> Option<PathBuf> {
+fn pick_folder(window: &Window, gate: &PickerGate) -> Option<PathBuf> {
+    let _open = gate.try_open()?;
     window
         .dialog()
         .file()
@@ -234,7 +261,7 @@ fn pick_folder(window: &Window) -> Option<PathBuf> {
 /// Lets the user pick a folder and adds it as a project.
 ///
 /// Returns the project, the existing one when that folder is already a
-/// project, or `None` when the user cancels.
+/// project, or `None` when the user cancels or a folder picker is already open.
 ///
 /// # Errors
 /// A picked folder that cannot be resolved or stored; a read-only project
@@ -243,15 +270,17 @@ fn pick_folder(window: &Window) -> Option<PathBuf> {
 pub fn project_add(
     window: Window,
     projects: State<'_, ProjectStore>,
+    picker: State<'_, PickerGate>,
 ) -> Result<Option<ProjectView>, AppError> {
-    pick_folder(&window)
+    pick_folder(&window, &picker)
         .map(|folder| projects.add(&folder))
         .transpose()
 }
 
 /// Lets the user pick a new folder for project `id`.
 ///
-/// Returns the updated project, or `None` when the user cancels.
+/// Returns the updated project, or `None` when the user cancels or a folder
+/// picker is already open.
 ///
 /// # Errors
 /// An unknown id; a picked folder that cannot be resolved or stored, or that
@@ -260,12 +289,13 @@ pub fn project_add(
 pub fn project_relocate(
     window: Window,
     projects: State<'_, ProjectStore>,
+    picker: State<'_, PickerGate>,
     id: u32,
 ) -> Result<Option<ProjectView>, AppError> {
     if !projects.list().projects.iter().any(|p| p.id == id) {
         return Err(AppError::UnknownProject(id));
     }
-    pick_folder(&window)
+    pick_folder(&window, &picker)
         .map(|folder| projects.relocate(id, &folder))
         .transpose()
 }
@@ -363,6 +393,41 @@ mod tests {
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn picker_gate_refuses_a_second_picker_until_the_first_closes() {
+        let gate = PickerGate::default();
+        let first = gate.try_open();
+        assert!(first.is_some());
+        assert!(gate.try_open().is_none());
+        drop(first);
+        assert!(gate.try_open().is_some());
+    }
+
+    #[test]
+    fn picker_gate_lets_one_of_many_concurrent_requests_through() {
+        let gate = PickerGate::default();
+        let barrier = std::sync::Barrier::new(8);
+        let opened = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..8)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        let open = gate.try_open();
+                        let claimed = open.is_some();
+                        barrier.wait();
+                        claimed
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .filter(|&claimed| claimed)
+                .count()
+        });
+        assert_eq!(opened, 1);
     }
 
     #[test]
