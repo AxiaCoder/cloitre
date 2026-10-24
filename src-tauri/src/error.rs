@@ -58,6 +58,8 @@ pub enum AppError {
     ProjectsNotSaved(String),
     /// The project file could not be loaded nor copied aside, so no change is saved.
     ProjectsReadOnly,
+    /// The marker catalog has no color or icon of this name.
+    UnknownMarker(String),
 }
 
 impl fmt::Display for AppError {
@@ -112,6 +114,7 @@ impl fmt::Display for AppError {
                 f,
                 "the project list is read-only until the app restarts: its file could not be loaded nor copied aside"
             ),
+            Self::UnknownMarker(name) => write!(f, "no marker color or icon named {name}"),
         }
     }
 }
@@ -210,6 +213,10 @@ mod tests {
         assert_eq!(
             AppError::FolderTaken("beta".into()).to_string(),
             "the folder is already the folder of project beta"
+        );
+        assert_eq!(
+            AppError::UnknownMarker("plaid".into()).to_string(),
+            "no marker color or icon named plaid"
         );
     }
 

@@ -1,0 +1,20 @@
+{
+  "colors": [
+    "blue",
+    "teal",
+    "purple",
+    "red",
+    "green",
+    "magenta",
+    "sky",
+    "violet",
+    "moss",
+    "rose",
+    "cyan",
+    "indigo",
+    "slate",
+    "wine",
+    "navy"
+  ],
+  "icons": ["folder", "gear", "globe", "book", "flask", "terminal", "database", "cube", "star", "leaf", "music"]
+}

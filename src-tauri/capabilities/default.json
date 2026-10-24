@@ -18,6 +18,7 @@
     "allow-project-relocate",
     "allow-project-remove",
     "allow-project-select",
+    "allow-project-set-marker",
     "allow-tab-open",
     "allow-tab-close",
     "allow-tab-activate"

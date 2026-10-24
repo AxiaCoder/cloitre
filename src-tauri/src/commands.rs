@@ -314,6 +314,22 @@ pub fn project_select(projects: State<'_, ProjectStore>, id: u32) -> Result<(), 
     projects.select(id)
 }
 
+/// Gives project `id` the marker color `color` and the marker icon `icon`,
+/// `None` for the color marker, and returns the updated project.
+///
+/// # Errors
+/// A color or icon the marker catalog lacks; an unknown id; a read-only
+/// project list; a failed save.
+#[tauri::command(async)]
+pub fn project_set_marker(
+    projects: State<'_, ProjectStore>,
+    id: u32,
+    color: String,
+    icon: Option<String>,
+) -> Result<ProjectView, AppError> {
+    projects.set_marker(id, &color, icon.as_deref())
+}
+
 /// Remembers tab `tab_id` as the active tab of its project, for the next run.
 ///
 /// # Errors

@@ -107,7 +107,7 @@ Returns one recording file, for the webview to decode and replay.
 Lists the projects.
 
 - **Arguments**: none.
-- **Returns**: `{ projects, warning, selected }`. `projects` is an array of `{ id, name, path, exists, tabs, activeTab }`, in the order the projects were added: `id` (integer), `name` (folder name), `path` (canonical folder path, as last chosen), `exists` (whether that path still names a folder), `tabs` (array of `{ id }`, the project's tabs in the order they were opened; their session ids are not sent), `activeTab` (the id of the tab to bring to the front: the last active one while it is still one of `tabs`, else the first tab, else `null` when the project has no tab). `warning` is a message string when the project file could not be loaded at startup (see [Projects](#projects)), `null` otherwise; it stays the same until the app restarts. `selected` is the id of the project to select: the last one `project_select` remembered while it is still in the list, else the first project, else `null` when there is no project.
+- **Returns**: `{ projects, warning, selected }`. `projects` is an array of `{ id, name, path, exists, tabs, activeTab, color, icon }`, in the order the projects were added: `id` (integer), `name` (folder name), `path` (canonical folder path, as last chosen), `exists` (whether that path still names a folder), `tabs` (array of `{ id }`, the project's tabs in the order they were opened; their session ids are not sent), `activeTab` (the id of the tab to bring to the front: the last active one while it is still one of `tabs`, else the first tab, else `null` when the project has no tab), `color` (the marker color, always a color name of `src/marker-catalog.json`: the stored one while the catalog has it, else the catalog color at position `(id - 1) mod <number of colors>`), `icon` (the marker icon, an icon name of the catalog, or `null` for the color marker; a stored name the catalog lacks gives `null`). `warning` is a message string when the project file could not be loaded at startup (see [Projects](#projects)), `null` otherwise; it stays the same until the app restarts. `selected` is the id of the project to select: the last one `project_select` remembered while it is still in the list, else the first project, else `null` when there is no project.
 - **Refuses**: nothing.
 
 ### `project_add`
@@ -141,6 +141,14 @@ Remembers a project as the selected one, so that the next run selects it again. 
 - **Arguments**: `id` (integer, a project id).
 - **Returns**: nothing.
 - **Refuses**: an unknown id; a failed save.
+
+### `project_set_marker`
+
+Sets the marker of a project, shown next to it in the list: a color, and an icon or none. Removing the icon keeps the color.
+
+- **Arguments**: `id` (integer, a project id), `color` (string, a color name of `src/marker-catalog.json`), `icon` (string, an icon name of the catalog, or `null` for the color marker).
+- **Returns**: the updated project, as one entry of `project_list`.
+- **Refuses**: a color or icon the catalog lacks ("no marker color or icon named <name>"); an unknown id; a read-only project list; a failed save.
 
 ### `tab_open`
 
@@ -186,7 +194,9 @@ The project list belongs to Rust: `pty_spawn` runs only in the folder of a proje
         "tabs": [
           { "id": 1, "session_id": "0f8e5c1a-3b2d-4c6e-9a7f-1d2c3b4a5e6f" }
         ],
-        "active_tab": 1
+        "active_tab": 1,
+        "color": "blue",
+        "icon": null
       }
     ],
     "next_id": 2,
@@ -195,7 +205,7 @@ The project list belongs to Rust: `pty_spawn` runs only in the folder of a proje
   }
   ```
 
-  `id` is unique in the file and never reused, even after the project with the largest id is removed: a new project takes `next_id`, or the largest id plus one when that is higher, and `next_id` becomes its id plus one. `next_id` may be absent (files written before it existed); it then counts as 0, so the format version stays 1. `path` is the canonical folder path. `tabs` lists the project's tabs, in the order they were opened: `id` is at least 1, unique across every project of the file and never reused, by the same rule as project ids with `next_tab_id` (absent from older files, it then counts as 0); `session_id` is the Claude Code session id the tab resumes, in the form `pty_spawn` checks. `active_tab` is the id of the project's last active tab, or `null`; it may name a tab that is gone, and `project_list` then gives the project's first tab instead. Absent from older files, it counts as `null`. A tab id of 0, a tab id used twice, or a missing or malformed `session_id` makes the whole file unreadable (see below). `selected` is the id of the last selected project, or `null`; it may name a project that is gone, and `project_list` then gives the first project instead. Absent from older files, it counts as `null`. A change of shape that an older app cannot read raises `version`.
+  `id` is unique in the file and never reused, even after the project with the largest id is removed: a new project takes `next_id`, or the largest id plus one when that is higher, and `next_id` becomes its id plus one. `next_id` may be absent (files written before it existed); it then counts as 0, so the format version stays 1. `path` is the canonical folder path. `tabs` lists the project's tabs, in the order they were opened: `id` is at least 1, unique across every project of the file and never reused, by the same rule as project ids with `next_tab_id` (absent from older files, it then counts as 0); `session_id` is the Claude Code session id the tab resumes, in the form `pty_spawn` checks. `active_tab` is the id of the project's last active tab, or `null`; it may name a tab that is gone, and `project_list` then gives the project's first tab instead. Absent from older files, it counts as `null`. `color` and `icon` are the project's marker, names of `src/marker-catalog.json`; a new project gets the first catalog color no project shows, or, when every color is shown, the one after the last project's. A name the catalog lacks is kept as written, a value that is not a string reads as absent; in both cases, as when absent, `project_list` gives the default color and no icon, without a warning. A tab id of 0, a tab id used twice, or a missing or malformed `session_id` makes the whole file unreadable (see below). `selected` is the id of the last selected project, or `null`; it may name a project that is gone, and `project_list` then gives the first project instead. Absent from older files, it counts as `null`. A change of shape that an older app cannot read raises `version`.
 - **Writing**: to `projects.json.<process id>.tmp` in the same folder, flushed to disk, then renamed over `projects.json`, so the file is always whole. Only one app instance runs, so no other process rewrites the file behind the list in memory: launching the app while it runs brings the running window to the front (shown, restored, focused) and the second process exits before reading the app data folder. The `SessionStart` hook runs the same executable but exits before Tauri starts, so it is not affected. A failed write leaves the file and the list as they were, and the command fails with "the project list could not be saved: <reason>".
 - **Unreadable file**: a missing file gives an empty list with no warning. A file that cannot be read, is not valid JSON, has no `version`, another `version`, or content that is not a project list, is copied to `projects.json.unreadable` (then `projects.json.unreadable-2`, `-3`… when that name is taken) and the app starts with an empty list; `project_list` returns the warning "The project list could not be loaded (<reason>). It was copied to <copy path> and the app started with an empty list." When the copy fails too, the warning says so and every change is refused with "the project list is read-only until the app restarts: its file could not be loaded nor copied aside", so the file is never overwritten.
 

@@ -150,6 +150,7 @@ pub fn run() {
             commands::project_relocate,
             commands::project_remove,
             commands::project_select,
+            commands::project_set_marker,
             commands::tab_open,
             commands::tab_close,
             commands::tab_activate
@@ -248,6 +249,7 @@ mod tests {
             "allow-project-relocate",
             "allow-project-remove",
             "allow-project-select",
+            "allow-project-set-marker",
             "allow-tab-open",
             "allow-tab-close",
             "allow-tab-activate",

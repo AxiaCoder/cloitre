@@ -29,6 +29,7 @@ import {
   rememberActiveTab,
   rememberSelection,
   removeProject,
+  setProjectMarker,
   type Project,
 } from "./projects";
 import type { SpawnMode } from "./pty";
@@ -37,7 +38,8 @@ import { fillTexts, messages, texts } from "./strings";
 import { closeWarning, NO_WARNING, warningText as shownWarning, type WarningState } from "./warning-bar";
 import { ReplayPane, TabPane } from "./tab-pane";
 import { afterRefusedStart, TabModel, type Tab, type TabState } from "./tabs";
-import { markerIndex, projectInitials } from "./project-marker";
+import { markerIcon } from "./marker-icons";
+import { FALLBACK_ICON, MARKER_COLORS, MARKER_ICONS, markerColorValue, projectInitials } from "./project-marker";
 import {
   isRenderer,
   isUnicodeVersion,
@@ -105,6 +107,8 @@ let selectionCount = 0;
 let warning: WarningState = NO_WARNING;
 /** The pane of the replay tab, the only one, while it is open. */
 let replayPane: ReplayPane | undefined;
+/** The open marker menu and the project button it opened from, while one is open. */
+let markerMenu: { element: HTMLDivElement; anchor: HTMLButtonElement } | undefined;
 /** Keeps a double click on a close button from closing the next tab too. */
 const closeGuard = new CloseGuard();
 /** The ids of the projects whose new tab Rust is still creating. */
@@ -516,8 +520,135 @@ function renderSessionCounts(): void {
   }
 }
 
+/**
+ * Builds the marker square of `project`: its icon on a plain square when it has
+ * one, else its initials on its color, or the fallback icon when its name has
+ * no letter.
+ */
+function projectMarker(project: Project): HTMLSpanElement {
+  const marker = document.createElement("span");
+  marker.className = "project-marker";
+  marker.setAttribute("aria-hidden", "true");
+  if (project.icon !== null) {
+    marker.classList.add("with-icon");
+    marker.append(markerIcon(project.icon));
+    return marker;
+  }
+  marker.style.backgroundColor = markerColorValue(project.color);
+  const initials = projectInitials(project.name);
+  if (initials === "") {
+    marker.append(markerIcon(FALLBACK_ICON));
+  } else {
+    marker.textContent = initials;
+  }
+  return marker;
+}
+
+/** Closes the marker menu, if one is open. */
+function closeMarkerMenu(): void {
+  const open = markerMenu;
+  markerMenu = undefined;
+  open?.element.remove();
+}
+
+/** Closes the marker menu, if one is open, and gives focus back to its project. */
+function dismissMarkerMenu(): void {
+  if (markerMenu !== undefined) {
+    const { anchor } = markerMenu;
+    closeMarkerMenu();
+    anchor.focus();
+  }
+}
+
+/** A button of the marker menu showing `content`, named `label`, marked when `current`; runs `pick` on click. */
+function markerChoice(label: string, current: boolean, content: Node | string, pick: () => void): HTMLButtonElement {
+  const choice = document.createElement("button");
+  choice.type = "button";
+  choice.className = "marker-choice";
+  choice.setAttribute("aria-label", label);
+  choice.setAttribute("aria-pressed", String(current));
+  choice.title = label;
+  choice.append(content);
+  choice.addEventListener("click", pick);
+  return choice;
+}
+
+/** A titled group of the marker menu holding `choices`. */
+function markerGroup(title: string, choices: readonly HTMLButtonElement[]): HTMLDivElement {
+  const heading = document.createElement("span");
+  heading.className = "marker-heading";
+  heading.textContent = title;
+  const grid = document.createElement("div");
+  grid.className = "marker-grid";
+  grid.setAttribute("role", "group");
+  grid.setAttribute("aria-label", title);
+  grid.append(...choices);
+  const group = document.createElement("div");
+  group.append(heading, grid);
+  return group;
+}
+
+/**
+ * Opens, under project button `anchor`, the menu that changes the marker of
+ * `project`: its colors, its icons and a button back to the color marker.
+ * Picking a color also drops the icon. Focuses the current choice.
+ */
+function openMarkerMenu(project: Project, anchor: HTMLButtonElement): void {
+  closeMarkerMenu();
+  const pick = (color: string, icon: string | null) => () => {
+    report(() => chooseMarker(project.id, color, icon));
+  };
+  const colors = MARKER_COLORS.map((color) => {
+    const swatch = document.createElement("span");
+    swatch.className = "marker-swatch";
+    swatch.style.backgroundColor = markerColorValue(color);
+    return markerChoice(
+      messages.markerColor(color),
+      project.icon === null && color === project.color,
+      swatch,
+      pick(color, null),
+    );
+  });
+  const icons = MARKER_ICONS.map((icon) =>
+    markerChoice(messages.markerIcon(icon), icon === project.icon, markerIcon(icon), pick(project.color, icon)),
+  );
+  const noIcon = markerChoice(texts.noIcon, project.icon === null, texts.noIcon, pick(project.color, null));
+  noIcon.classList.add("marker-no-icon");
+  const menu = document.createElement("div");
+  menu.className = "marker-menu";
+  menu.tabIndex = -1;
+  menu.setAttribute("role", "dialog");
+  menu.setAttribute("aria-label", messages.markerMenu(project.name));
+  menu.append(markerGroup(texts.markerColors, colors), markerGroup(texts.markerIcons, [...icons, noIcon]));
+  menu.addEventListener("focusout", (event) => {
+    if (!(event.relatedTarget instanceof Node && menu.contains(event.relatedTarget))) {
+      closeMarkerMenu();
+    }
+  });
+  document.body.append(menu);
+  const place = anchor.getBoundingClientRect();
+  const top = Math.max(0, Math.min(place.bottom, window.innerHeight - menu.offsetHeight));
+  menu.style.left = `${String(place.left)}px`;
+  menu.style.top = `${String(top)}px`;
+  markerMenu = { element: menu, anchor };
+  (menu.querySelector<HTMLButtonElement>("[aria-pressed='true']") ?? colors[0]).focus();
+}
+
+/**
+ * Gives project `projectId` marker `color` and `icon`, `null` for the color
+ * marker, then redraws the rail with the project Rust returns.
+ */
+async function chooseMarker(projectId: number, color: string, icon: string | null): Promise<void> {
+  closeMarkerMenu();
+  const updated = await setProjectMarker(projectId, color, icon);
+  projects = projects.map((project) => (project.id === updated.id ? updated : project));
+  renderProjects();
+  projectList.querySelector<HTMLButtonElement>(`[data-project="${String(projectId)}"]`)?.focus();
+}
+
 /** Draws the project rail and the work area from `projects` and `selectedId`. */
 function renderProjects(): void {
+  closeMarkerMenu();
   sessionCounts.clear();
   projectList.replaceChildren(
     ...projects.map((project) => {
@@ -529,11 +660,8 @@ function renderProjects(): void {
       button.title = project.exists
         ? messages.projectTitle(project.name, project.path)
         : messages.missingProjectTitle(project.name, project.path);
-      const marker = document.createElement("span");
-      marker.className = "project-marker";
-      marker.setAttribute("aria-hidden", "true");
-      marker.style.backgroundColor = `var(--marker-${String(markerIndex(project.id))})`;
-      marker.textContent = projectInitials(project.name);
+      button.dataset.project = String(project.id);
+      const marker = projectMarker(project);
       const name = document.createElement("span");
       name.className = "project-name";
       name.textContent = project.name;
@@ -549,6 +677,10 @@ function renderProjects(): void {
       button.append(marker, text, count);
       button.addEventListener("click", () => {
         report(() => selectProject(project.id));
+      });
+      button.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        openMarkerMenu(project, button);
       });
       const item = document.createElement("li");
       item.append(button);
@@ -830,6 +962,24 @@ unicodeSelect.addEventListener("change", () => {
     activePane()?.view.terminal.focus();
   }
 });
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    dismissMarkerMenu();
+  }
+});
+
+document.addEventListener(
+  "pointerdown",
+  (event) => {
+    if (markerMenu !== undefined && !(event.target instanceof Node && markerMenu.element.contains(event.target))) {
+      closeMarkerMenu();
+    }
+  },
+  { capture: true },
+);
+
+window.addEventListener("resize", dismissMarkerMenu);
 
 window.addEventListener(
   "keydown",

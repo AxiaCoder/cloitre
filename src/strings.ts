@@ -35,6 +35,9 @@ export const texts = {
   missingFolderHint: "It may have been moved or renamed.",
   chooseAnotherFolder: "Choose another folder",
   removeProject: "Remove the project",
+  markerColors: "Color",
+  markerIcons: "Icon",
+  noIcon: "No icon",
   restart: "Restart",
   close: "Close",
   resume: "Resume",
@@ -77,6 +80,12 @@ export const messages = {
   sessionCount: (count: number) => (count === 1 ? "1 session" : `${String(count)} sessions`),
   /** The tooltip of project `name` in folder `path`. */
   projectTitle: (name: string, path: string) => `${name}\n${path}`,
+  /** The accessible name of the marker menu of project `name`. */
+  markerMenu: (name: string) => `Marker of ${name}`,
+  /** The accessible name of marker color `color`. */
+  markerColor: (color: string) => `Color ${color}`,
+  /** The accessible name of marker icon `icon`. */
+  markerIcon: (icon: string) => `Icon ${icon}`,
   /** The tooltip of project `name` whose folder `path` is gone. */
   missingProjectTitle: (name: string, path: string) => `${name}\nFolder not found: ${path}`,
   /** The recording list entry of `name`, `kilobytes` long. */
