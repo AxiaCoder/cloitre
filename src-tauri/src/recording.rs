@@ -29,6 +29,12 @@ const WRITE_BUFFER_SIZE: usize = 64 * 1024;
 /// How many suffixed names are tried when two recordings start in the same second.
 const NAME_ATTEMPTS: u32 = 100;
 
+/// How many recording files are kept in the folder, the one just created included.
+pub const KEPT_RECORDINGS: usize = 20;
+
+/// Largest recording file [`RecordingRegistry::read`] returns, in bytes.
+pub const MAX_READ_BYTES: u64 = 64 * 1024 * 1024;
+
 /// Writes the records of one session to a sink.
 ///
 /// Each record is `[elapsed ms: u64][type: u8][length: u32][data]`, integers in
@@ -141,6 +147,7 @@ pub struct NewRecording {
 /// The recordings folder and the recording of each running session, by session id.
 pub struct RecordingRegistry {
     dir: PathBuf,
+    enabled: bool,
     active: Mutex<HashMap<u32, NewRecording>>,
 }
 
@@ -189,6 +196,21 @@ pub fn is_recording_name(name: &str) -> bool {
     }
 }
 
+/// Returns the key that orders recording `name` by creation: its
+/// `YYYYMMDD-HHMMSS` timestamp, then its numeric suffix, `0` when it has none.
+///
+/// `name` must be accepted by [`is_recording_name`]; any other name gets an
+/// unspecified key.
+fn creation_order(name: &str) -> (&str, u64) {
+    let stem = name.strip_suffix(EXTENSION).unwrap_or(name);
+    let (timestamp, suffix) = stem.split_at(stem.len().min(15));
+    let suffix = suffix
+        .strip_prefix('-')
+        .and_then(|digits| digits.parse().ok())
+        .unwrap_or(0);
+    (timestamp, suffix)
+}
+
 /// Turns an I/O error on a recording into an [`AppError`].
 fn io_error(error: &io::Error) -> AppError {
     if error.kind() == io::ErrorKind::NotFound {
@@ -199,20 +221,32 @@ fn io_error(error: &io::Error) -> AppError {
 }
 
 impl RecordingRegistry {
-    /// Keeps recordings in `dir`. The folder is created with the first recording.
-    pub fn new(dir: PathBuf) -> Self {
+    /// Keeps recordings in `dir`, the folder being created with the first
+    /// recording. When `enabled` is false nothing is ever recorded and the
+    /// folder is never created.
+    pub fn new(dir: PathBuf, enabled: bool) -> Self {
         Self {
             dir,
+            enabled,
             active: Mutex::new(HashMap::new()),
         }
     }
 
+    /// Tells whether sessions are recorded: the `enabled` given to [`RecordingRegistry::new`].
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
+
     /// Creates a recording file named after the current UTC time and starts it
-    /// at `cols` x `rows`.
+    /// at `cols` x `rows`, then deletes the oldest recording files beyond
+    /// [`KEPT_RECORDINGS`] (see [`RecordingRegistry::prune`]).
     ///
-    /// Returns `None` when the folder or the file cannot be created: the session
-    /// then runs unrecorded.
+    /// Returns `None` when recording is disabled, or when the folder or the
+    /// file cannot be created: the session then runs unrecorded.
     pub fn create(&self, cols: u16, rows: u16) -> Option<NewRecording> {
+        if !self.enabled {
+            return None;
+        }
         fs::create_dir_all(&self.dir).ok()?;
         let secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -231,6 +265,7 @@ impl RecordingRegistry {
             {
                 Ok(file) => {
                     let recorder = Recorder::new(Box::new(file), cols, rows);
+                    self.prune(&name);
                     return Some(NewRecording {
                         name,
                         recorder: Arc::new(Mutex::new(recorder)),
@@ -241,6 +276,34 @@ impl RecordingRegistry {
             }
         }
         None
+    }
+
+    /// Deletes the oldest recording files so that at most [`KEPT_RECORDINGS`]
+    /// stay, by creation order (see [`creation_order`]). Only names [`is_recording_name`] accepts are
+    /// touched; `created` and the file of any running session are never
+    /// deleted, even when old: a file spared that way leaves more than
+    /// [`KEPT_RECORDINGS`] in the folder, and no newer one is deleted in its
+    /// place. Failures are ignored.
+    fn prune(&self, created: &str) {
+        let Ok(entries) = fs::read_dir(&self.dir) else {
+            return;
+        };
+        let mut names: Vec<String> = entries
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|name| is_recording_name(name))
+            .collect();
+        names.sort_unstable_by(|a, b| creation_order(b).cmp(&creation_order(a)));
+        let active: Vec<String> = lock(&self.active)
+            .values()
+            .map(|recording| recording.name.clone())
+            .collect();
+        for name in names.iter().skip(KEPT_RECORDINGS) {
+            if name != created && !active.contains(name) {
+                let _ = fs::remove_file(self.dir.join(name));
+            }
+        }
     }
 
     /// Stops `recording` and deletes its file. Used when its session failed to start.
@@ -265,6 +328,7 @@ impl RecordingRegistry {
     ///
     /// # Errors
     /// [`AppError::NoRecording`] when session `id` has no recording, or its recording stopped.
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
     pub fn mark(&self, id: u32) -> Result<(), AppError> {
         let active = lock(&self.active);
         let recording = active.get(&id).ok_or(AppError::NoRecording(id))?;
@@ -279,6 +343,7 @@ impl RecordingRegistry {
 
     /// Returns the file name of the recording of session `id`, or `None` when
     /// it has none or its recording stopped.
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
     pub fn current(&self, id: u32) -> Option<String> {
         let active = lock(&self.active);
         let recording = active.get(&id)?;
@@ -306,10 +371,11 @@ impl RecordingRegistry {
         }
     }
 
-    /// Lists the recording files, newest first. A missing folder gives an empty list.
+    /// Lists the recording files, newest first by [`creation_order`]. A missing folder gives an empty list.
     ///
     /// # Errors
     /// [`AppError::Recording`] when the folder exists but cannot be read.
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
     pub fn list(&self) -> Result<Vec<RecordingInfo>, AppError> {
         let entries = match fs::read_dir(&self.dir) {
             Ok(entries) => entries,
@@ -327,7 +393,7 @@ impl RecordingRegistry {
                 })
             })
             .collect();
-        found.sort_by(|a, b| b.name.cmp(&a.name));
+        found.sort_by(|a, b| creation_order(&b.name).cmp(&creation_order(&a.name)));
         Ok(found)
     }
 
@@ -336,7 +402,9 @@ impl RecordingRegistry {
     /// # Errors
     /// [`AppError::InvalidRecordingName`] when `name` is not a name this module
     /// creates; [`AppError::UnknownRecording`] when no such regular file is in
-    /// the folder; [`AppError::Recording`] when it cannot be read.
+    /// the folder; [`AppError::RecordingTooLarge`] when the file holds more
+    /// than [`MAX_READ_BYTES`]; [`AppError::Recording`] when it cannot be read.
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
     pub fn read(&self, name: &str) -> Result<Vec<u8>, AppError> {
         if !is_recording_name(name) {
             return Err(AppError::InvalidRecordingName);
@@ -345,6 +413,12 @@ impl RecordingRegistry {
         let metadata = fs::symlink_metadata(path).map_err(|error| io_error(&error))?;
         if !metadata.is_file() {
             return Err(AppError::UnknownRecording);
+        }
+        if metadata.len() > MAX_READ_BYTES {
+            return Err(AppError::RecordingTooLarge {
+                size: metadata.len(),
+                limit: MAX_READ_BYTES,
+            });
         }
         fs::read(path).map_err(|error| io_error(&error))
     }
@@ -552,14 +626,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("a-file");
         fs::write(&file, b"x").unwrap();
-        let registry = RecordingRegistry::new(file.join("recordings"));
+        let registry = RecordingRegistry::new(file.join("recordings"), true);
         assert!(registry.create(80, 24).is_none());
     }
 
     #[test]
     fn finish_all_writes_out_and_stops_every_recording() {
         let dir = tempfile::tempdir().unwrap();
-        let registry = RecordingRegistry::new(dir.path().to_path_buf());
+        let registry = RecordingRegistry::new(dir.path().to_path_buf(), true);
         let first = registry.create(80, 24).unwrap();
         let second = registry.create(80, 24).unwrap();
         let (first_name, second_name) = (first.name.clone(), second.name.clone());
@@ -583,7 +657,7 @@ mod tests {
 
     #[test]
     fn resize_of_a_session_without_recording_does_nothing() {
-        let registry = RecordingRegistry::new(PathBuf::from("unused"));
+        let registry = RecordingRegistry::new(PathBuf::from("unused"), true);
         registry.resize(7, 100, 30);
         assert_eq!(registry.current(7), None);
     }
@@ -637,7 +711,7 @@ mod tests {
     #[test]
     fn recorder_writes_size_output_chunks_and_marker_in_order() {
         let dir = tempfile::tempdir().unwrap();
-        let registry = RecordingRegistry::new(dir.path().join("recordings"));
+        let registry = RecordingRegistry::new(dir.path().join("recordings"), true);
         let recording = registry.create(80, 24).unwrap();
         let name = recording.name.clone();
         let recorder = Arc::clone(&recording.recorder);
@@ -667,7 +741,7 @@ mod tests {
     #[test]
     fn finish_stops_recording_and_later_output_is_dropped() {
         let dir = tempfile::tempdir().unwrap();
-        let registry = RecordingRegistry::new(dir.path().to_path_buf());
+        let registry = RecordingRegistry::new(dir.path().to_path_buf(), true);
         let recording = registry.create(80, 24).unwrap();
         let name = recording.name.clone();
         let recorder = Arc::clone(&recording.recorder);
@@ -694,7 +768,7 @@ mod tests {
     #[test]
     fn mark_of_a_stopped_recording_is_refused() {
         let dir = tempfile::tempdir().unwrap();
-        let registry = RecordingRegistry::new(dir.path().to_path_buf());
+        let registry = RecordingRegistry::new(dir.path().to_path_buf(), true);
         let recording = NewRecording {
             name: "20261021-153012.rec".into(),
             recorder: Arc::new(Mutex::new(Recorder::new(
@@ -710,14 +784,14 @@ mod tests {
 
     #[test]
     fn mark_without_recording_is_refused() {
-        let registry = RecordingRegistry::new(PathBuf::from("unused"));
+        let registry = RecordingRegistry::new(PathBuf::from("unused"), true);
         assert_eq!(registry.mark(9), Err(AppError::NoRecording(9)));
     }
 
     #[test]
     fn two_recordings_in_the_same_second_get_distinct_names() {
         let dir = tempfile::tempdir().unwrap();
-        let registry = RecordingRegistry::new(dir.path().to_path_buf());
+        let registry = RecordingRegistry::new(dir.path().to_path_buf(), true);
         let first = registry.create(80, 24).unwrap();
         let second = registry.create(80, 24).unwrap();
         assert_ne!(first.name, second.name);
@@ -727,7 +801,7 @@ mod tests {
     #[test]
     fn discard_deletes_the_file() {
         let dir = tempfile::tempdir().unwrap();
-        let registry = RecordingRegistry::new(dir.path().to_path_buf());
+        let registry = RecordingRegistry::new(dir.path().to_path_buf(), true);
         let recording = registry.create(80, 24).unwrap();
         registry.discard(&recording);
         assert_eq!(registry.list().unwrap(), vec![]);
@@ -740,7 +814,7 @@ mod tests {
         fs::write(dir.path().join("20261022-100000.rec"), b"abcdef").unwrap();
         fs::write(dir.path().join("notes.txt"), b"x").unwrap();
         fs::create_dir(dir.path().join("20261023-100000.rec")).unwrap();
-        let registry = RecordingRegistry::new(dir.path().to_path_buf());
+        let registry = RecordingRegistry::new(dir.path().to_path_buf(), true);
         assert_eq!(
             registry.list().unwrap(),
             vec![
@@ -759,7 +833,7 @@ mod tests {
     #[test]
     fn list_of_a_missing_folder_is_empty() {
         let dir = tempfile::tempdir().unwrap();
-        let registry = RecordingRegistry::new(dir.path().join("missing"));
+        let registry = RecordingRegistry::new(dir.path().join("missing"), true);
         assert_eq!(registry.list().unwrap(), vec![]);
     }
 
@@ -769,7 +843,7 @@ mod tests {
         let recordings = dir.path().join("recordings");
         fs::create_dir(&recordings).unwrap();
         fs::write(dir.path().join("20261021-100000.rec"), b"secret").unwrap();
-        let registry = RecordingRegistry::new(recordings.clone());
+        let registry = RecordingRegistry::new(recordings.clone(), true);
         for name in [
             "../20261021-100000.rec",
             "..\\20261021-100000.rec",
@@ -792,5 +866,210 @@ mod tests {
             registry.read("20261021-110000.rec"),
             Err(AppError::UnknownRecording)
         );
+    }
+
+    /// Writes `count` recording files dated in 2020, oldest first, and returns their names.
+    fn old_recordings(dir: &Path, count: usize) -> Vec<String> {
+        (0..count)
+            .map(|index| {
+                let name = format!("20200101-{index:06}.rec");
+                fs::write(dir.join(&name), b"x").unwrap();
+                name
+            })
+            .collect()
+    }
+
+    /// The names of the recording files `registry` lists.
+    fn listed(registry: &RecordingRegistry) -> Vec<String> {
+        registry
+            .list()
+            .unwrap()
+            .into_iter()
+            .map(|info| info.name)
+            .collect()
+    }
+
+    #[test]
+    fn a_disabled_registry_records_nothing_and_creates_no_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let recordings = dir.path().join("recordings");
+        let registry = RecordingRegistry::new(recordings.clone(), false);
+        assert!(registry.create(80, 24).is_none());
+        assert!(!recordings.exists());
+    }
+
+    #[test]
+    fn creating_a_recording_beyond_the_kept_count_deletes_the_oldest() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = old_recordings(dir.path(), KEPT_RECORDINGS);
+        let registry = RecordingRegistry::new(dir.path().to_path_buf(), true);
+        let created = registry.create(80, 24).unwrap();
+        let names = listed(&registry);
+        assert_eq!(names.len(), KEPT_RECORDINGS);
+        assert_eq!(names[0], created.name);
+        assert!(!names.contains(&old[0]));
+        assert!(names.contains(&old[1]));
+    }
+
+    #[test]
+    fn the_recording_of_a_running_session_is_never_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = old_recordings(dir.path(), KEPT_RECORDINGS);
+        let registry = RecordingRegistry::new(dir.path().to_path_buf(), true);
+        registry.attach(
+            1,
+            NewRecording {
+                name: old[0].clone(),
+                recorder: Arc::new(Mutex::new(Recorder::new(
+                    Box::new(SharedSink::default()),
+                    80,
+                    24,
+                ))),
+            },
+        );
+        registry.create(80, 24).unwrap();
+        let names = listed(&registry);
+        assert!(names.contains(&old[0]));
+        assert_eq!(names.len(), KEPT_RECORDINGS + 1);
+    }
+
+    #[test]
+    fn files_that_are_not_recordings_are_never_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        old_recordings(dir.path(), KEPT_RECORDINGS);
+        fs::write(dir.path().join("00000000-notes.rec"), b"x").unwrap();
+        fs::write(dir.path().join("notes.txt"), b"x").unwrap();
+        let registry = RecordingRegistry::new(dir.path().to_path_buf(), true);
+        registry.create(80, 24).unwrap();
+        assert!(dir.path().join("00000000-notes.rec").exists());
+        assert!(dir.path().join("notes.txt").exists());
+        assert_eq!(listed(&registry).len(), KEPT_RECORDINGS);
+    }
+
+    #[test]
+    fn read_refuses_a_file_over_the_size_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = fs::File::create(dir.path().join("20261021-100000.rec")).unwrap();
+        file.set_len(MAX_READ_BYTES + 1).unwrap();
+        drop(file);
+        let registry = RecordingRegistry::new(dir.path().to_path_buf(), true);
+        assert_eq!(
+            registry.read("20261021-100000.rec"),
+            Err(AppError::RecordingTooLarge {
+                size: MAX_READ_BYTES + 1,
+                limit: MAX_READ_BYTES,
+            })
+        );
+    }
+
+    #[test]
+    fn read_accepts_a_file_of_exactly_the_size_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = fs::File::create(dir.path().join("20261021-100000.rec")).unwrap();
+        file.set_len(MAX_READ_BYTES).unwrap();
+        drop(file);
+        let registry = RecordingRegistry::new(dir.path().to_path_buf(), true);
+        let bytes = registry.read("20261021-100000.rec").unwrap();
+        assert_eq!(bytes.len() as u64, MAX_READ_BYTES);
+    }
+
+    #[test]
+    fn creating_the_last_kept_recording_deletes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = old_recordings(dir.path(), KEPT_RECORDINGS - 1);
+        let registry = RecordingRegistry::new(dir.path().to_path_buf(), true);
+        registry.create(80, 24).unwrap();
+        let names = listed(&registry);
+        assert_eq!(names.len(), KEPT_RECORDINGS);
+        assert!(names.contains(&old[0]));
+    }
+
+    #[test]
+    fn a_folder_named_like_a_recording_is_neither_deleted_nor_counted() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("20190101-000000.rec");
+        fs::create_dir(&folder).unwrap();
+        let old = old_recordings(dir.path(), KEPT_RECORDINGS);
+        let registry = RecordingRegistry::new(dir.path().to_path_buf(), true);
+        registry.create(80, 24).unwrap();
+        assert!(folder.is_dir());
+        let names = listed(&registry);
+        assert_eq!(names.len(), KEPT_RECORDINGS);
+        assert!(!names.contains(&old[0]));
+        assert!(names.contains(&old[1]));
+    }
+
+    #[test]
+    fn a_spared_running_recording_does_not_cost_a_newer_one_its_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = old_recordings(dir.path(), KEPT_RECORDINGS + 1);
+        let registry = RecordingRegistry::new(dir.path().to_path_buf(), true);
+        registry.attach(
+            1,
+            NewRecording {
+                name: old[0].clone(),
+                recorder: Arc::new(Mutex::new(Recorder::new(
+                    Box::new(SharedSink::default()),
+                    80,
+                    24,
+                ))),
+            },
+        );
+        registry.create(80, 24).unwrap();
+        let names = listed(&registry);
+        assert!(names.contains(&old[0]));
+        assert!(!names.contains(&old[1]));
+        assert!(names.contains(&old[2]));
+        assert_eq!(names.len(), KEPT_RECORDINGS + 1);
+    }
+
+    #[test]
+    fn list_orders_recordings_of_the_same_second_by_creation_newest_first() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in [
+            "20261021-100000.rec",
+            "20261022-100000.rec",
+            "20261022-100000-1.rec",
+            "20261022-100000-2.rec",
+            "20261022-100000-10.rec",
+            "20261023-100000.rec",
+        ] {
+            fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        let registry = RecordingRegistry::new(dir.path().to_path_buf(), true);
+        assert_eq!(
+            listed(&registry),
+            vec![
+                "20261023-100000.rec",
+                "20261022-100000-10.rec",
+                "20261022-100000-2.rec",
+                "20261022-100000-1.rec",
+                "20261022-100000.rec",
+                "20261021-100000.rec",
+            ]
+        );
+    }
+
+    #[test]
+    fn prune_deletes_the_first_recording_of_a_second_before_its_later_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let same_second = [
+            "20190101-000000.rec",
+            "20190101-000000-1.rec",
+            "20190101-000000-2.rec",
+            "20190101-000000-10.rec",
+        ];
+        for name in same_second {
+            fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        let newer = old_recordings(dir.path(), KEPT_RECORDINGS + 1 - same_second.len());
+        let registry = RecordingRegistry::new(dir.path().to_path_buf(), true);
+        registry.prune(newer.last().unwrap());
+        let names = listed(&registry);
+        assert_eq!(names.len(), KEPT_RECORDINGS);
+        assert!(!names.contains(&same_second[0].to_string()), "{names:?}");
+        for later in &same_second[1..] {
+            assert!(names.contains(&later.to_string()), "{later} gone: {names:?}");
+        }
     }
 }

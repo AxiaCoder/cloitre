@@ -10,6 +10,7 @@ fn main() {
             "pty_write",
             "pty_resize",
             "pty_kill",
+            "recording_enabled",
             "recording_mark",
             "recording_current",
             "recording_list",

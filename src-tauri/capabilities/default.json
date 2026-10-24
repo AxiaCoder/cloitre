@@ -8,6 +8,7 @@
     "allow-pty-write",
     "allow-pty-resize",
     "allow-pty-kill",
+    "allow-recording-enabled",
     "allow-recording-mark",
     "allow-recording-current",
     "allow-recording-list",

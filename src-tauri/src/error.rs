@@ -35,6 +35,13 @@ pub enum AppError {
     NoRecording(u32),
     /// A recording file could not be read; carries the underlying message.
     Recording(String),
+    /// A recording file holds `size` bytes, more than the `limit` that may be read.
+    RecordingTooLarge {
+        /// Size of the file, in bytes.
+        size: u64,
+        /// Largest size read, in bytes.
+        limit: u64,
+    },
     /// No project is registered under this id.
     UnknownProject(u32),
     /// No tab is registered under this id.
@@ -80,6 +87,10 @@ impl fmt::Display for AppError {
             Self::UnknownRecording => write!(f, "no recording with this name"),
             Self::NoRecording(id) => write!(f, "session {id} is not being recorded"),
             Self::Recording(message) => write!(f, "recording error: {message}"),
+            Self::RecordingTooLarge { size, limit } => write!(
+                f,
+                "recording of {size} bytes exceeds the {limit}-byte limit"
+            ),
             Self::UnknownProject(id) => write!(f, "no project with id {id}"),
             Self::UnknownTab(id) => write!(f, "no tab with id {id}"),
             Self::FolderNotRegistered => write!(f, "the folder is not in the project list"),
@@ -170,6 +181,14 @@ mod tests {
         assert_eq!(
             AppError::Recording("denied".into()).to_string(),
             "recording error: denied"
+        );
+        assert_eq!(
+            AppError::RecordingTooLarge {
+                size: 70,
+                limit: 64
+            }
+            .to_string(),
+            "recording of 70 bytes exceeds the 64-byte limit"
         );
     }
 

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tauri::ipc::{Channel, InvokeResponseBody, Response};
+use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{State, Window};
 use tauri_plugin_dialog::DialogExt;
 
@@ -9,7 +9,7 @@ use crate::error::AppError;
 use crate::launch::{claude_command, resolve_claude};
 use crate::projects::{ProjectList, ProjectStore, ProjectView, TabView};
 use crate::pty::{PtyRegistry, lock, pty_size};
-use crate::recording::{RecordingInfo, RecordingRegistry, SharedRecorder};
+use crate::recording::{RecordingRegistry, SharedRecorder};
 use crate::session::{HookSettings, LaunchMode, PendingSessions};
 
 /// Returns the function every output chunk of a session goes through.
@@ -37,8 +37,9 @@ fn output_sink(
 /// the session ids the hook left, then starts `claude` with `--resume` and the
 /// tab's session id. The hook settings file is passed with `--settings` when
 /// it was written. Raw output bytes are sent to `on_output`; the exit code is
-/// sent once to `on_exit`. The session is recorded to a new file of the
-/// recordings folder, unless that file cannot be created. Returns the session id.
+/// sent once to `on_exit`. In a development build the session is recorded to
+/// a new file of the recordings folder, unless that file cannot be created.
+/// Returns the session id.
 ///
 /// # Errors
 /// A zero size; a zero or unknown tab id; a project folder that no longer
@@ -159,10 +160,18 @@ pub fn pty_kill(
     killed
 }
 
+/// Tells whether this build records sessions: true in a development build only.
+/// Registered in every build.
+#[tauri::command]
+pub fn recording_enabled(recordings: State<'_, RecordingRegistry>) -> bool {
+    recordings.enabled()
+}
+
 /// Writes a marker in the recording of session `id`, flushed to disk at once.
 ///
 /// # Errors
 /// Session `id` has no recording, or its recording stopped.
+#[cfg(debug_assertions)]
 #[tauri::command(async)]
 pub fn recording_mark(recordings: State<'_, RecordingRegistry>, id: u32) -> Result<(), AppError> {
     recordings.mark(id)
@@ -170,6 +179,7 @@ pub fn recording_mark(recordings: State<'_, RecordingRegistry>, id: u32) -> Resu
 
 /// Returns the file name of the recording of session `id`, or `None` when the
 /// session is not being recorded.
+#[cfg(debug_assertions)]
 #[tauri::command(async)]
 pub fn recording_current(recordings: State<'_, RecordingRegistry>, id: u32) -> Option<String> {
     recordings.current(id)
@@ -179,10 +189,11 @@ pub fn recording_current(recordings: State<'_, RecordingRegistry>, id: u32) -> O
 ///
 /// # Errors
 /// The recordings folder exists but cannot be read.
+#[cfg(debug_assertions)]
 #[tauri::command(async)]
 pub fn recording_list(
     recordings: State<'_, RecordingRegistry>,
-) -> Result<Vec<RecordingInfo>, AppError> {
+) -> Result<Vec<crate::recording::RecordingInfo>, AppError> {
     recordings.list()
 }
 
@@ -191,12 +202,13 @@ pub fn recording_list(
 /// # Errors
 /// A name the app does not create (separators and `..` included); no such
 /// file in the recordings folder; a failed read.
+#[cfg(debug_assertions)]
 #[tauri::command(async)]
 pub fn recording_read(
     recordings: State<'_, RecordingRegistry>,
     name: String,
-) -> Result<Response, AppError> {
-    recordings.read(&name).map(Response::new)
+) -> Result<tauri::ipc::Response, AppError> {
+    recordings.read(&name).map(tauri::ipc::Response::new)
 }
 
 /// Lists the projects, each with whether its folder still exists, and the
@@ -390,7 +402,7 @@ mod tests {
     #[test]
     fn resize_is_recorded_even_when_the_pty_refuses_it() {
         let file = SharedSink::default();
-        let recordings = RecordingRegistry::new(std::env::temp_dir());
+        let recordings = RecordingRegistry::new(std::env::temp_dir(), true);
         recordings.attach(
             7,
             NewRecording {

@@ -87,8 +87,9 @@ fn stops_sessions(event: PageLoadEvent) -> bool {
 /// startup the `SessionStart` hook settings are written to `hooks.json` there,
 /// and the session ids the hook left in its `sessions` folder are applied.
 /// Closing the window while sessions run asks for confirmation first.
-/// Recordings are kept in its `recordings` folder, and closed whenever their
-/// sessions are stopped.
+/// In a development build, sessions are recorded in its `recordings` folder,
+/// and their recordings closed whenever they are stopped; a release build
+/// records nothing and registers no `recording_*` command but `recording_enabled`.
 ///
 /// # Panics
 /// When the Tauri runtime cannot start.
@@ -111,7 +112,10 @@ pub fn run() {
             app.manage(projects);
             app.manage(pending);
             app.manage(HookSettings(hook));
-            app.manage(RecordingRegistry::new(data.join("recordings")));
+            app.manage(RecordingRegistry::new(
+                data.join("recordings"),
+                cfg!(debug_assertions),
+            ));
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -132,9 +136,14 @@ pub fn run() {
             commands::pty_write,
             commands::pty_resize,
             commands::pty_kill,
+            commands::recording_enabled,
+            #[cfg(debug_assertions)]
             commands::recording_mark,
+            #[cfg(debug_assertions)]
             commands::recording_current,
+            #[cfg(debug_assertions)]
             commands::recording_list,
+            #[cfg(debug_assertions)]
             commands::recording_read,
             commands::project_list,
             commands::project_add,
@@ -229,6 +238,7 @@ mod tests {
             "allow-pty-write",
             "allow-pty-resize",
             "allow-pty-kill",
+            "allow-recording-enabled",
             "allow-recording-mark",
             "allow-recording-current",
             "allow-recording-list",
