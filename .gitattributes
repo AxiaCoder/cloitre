@@ -1,0 +1,2 @@
+vendor/**/*.dll binary
+vendor/**/*.exe binary

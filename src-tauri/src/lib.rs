@@ -259,4 +259,26 @@ mod tests {
         expected.sort_unstable();
         assert_eq!(granted, expected);
     }
+
+    #[test]
+    fn windows_build_ships_exactly_the_bundled_conpty_files() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.windows.conf.json")).unwrap();
+        assert_eq!(
+            config["bundle"]["resources"],
+            serde_json::json!({
+                "../vendor/conpty/conpty.dll": "conpty.dll",
+                "../vendor/conpty/x64/OpenConsole.exe": "x64/OpenConsole.exe",
+                "../vendor/conpty/LICENSE": "conpty-LICENSE.txt",
+            })
+        );
+        for source in config["bundle"]["resources"].as_object().unwrap().keys() {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(source);
+            assert!(path.is_file(), "missing resource {source}");
+        }
+
+        let shared: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert!(shared["bundle"].get("resources").is_none());
+    }
 }
