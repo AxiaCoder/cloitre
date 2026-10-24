@@ -469,7 +469,7 @@ async function closeTab(tabId: number, forget: boolean): Promise<void> {
     return;
   }
   panes.delete(tabId);
-  const active = tabs.close(tabId)?.active;
+  const closed = tabs.close(tabId)?.closed;
   pane.hide();
   renderTabs();
   if (pane instanceof ReplayPane) {
@@ -484,6 +484,7 @@ async function closeTab(tabId: number, forget: boolean): Promise<void> {
       await forgetTab(tabId);
     }
   }
+  const active = closed && tabs.activeOf(closed.projectId);
   if (forget && active?.kind === "session") {
     report(() => rememberActiveTab(active.id));
   }
