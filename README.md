@@ -17,7 +17,7 @@ Each build keeps its project list, tabs and session ids in its own folder, so a 
 | Release (installed app) | `%APPDATA%\com.cloitre.desktop` |
 | Development (`pnpm tauri dev`, `pnpm tauri build --debug`) | `%APPDATA%\com.cloitre.desktop.dev` |
 
-A development build shows `(dev)` after its window title.
+A development build shows `(dev)` after its window title. Run the executable `pnpm tauri build --debug` leaves in `src-tauri/target/debug`, never its installers: they keep the release identifier, so installing one replaces the installed app.
 
 ## License
 

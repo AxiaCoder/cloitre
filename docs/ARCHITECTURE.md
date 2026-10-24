@@ -11,7 +11,7 @@ The Windows build ships Microsoft's ConPTY release next to the executable: `conp
 
 ## App data folder
 
-Each build has its own app identifier, which names its app data folder and its single-instance lock: a release build keeps `com.cloitre.desktop` from `tauri.conf.json`, a development build (`pnpm tauri dev`, `pnpm tauri build --debug`) uses `com.cloitre.desktop.dev`, set by Rust before Tauri starts. On Windows the folders are `%APPDATA%\com.cloitre.desktop` and `%APPDATA%\com.cloitre.desktop.dev`. A development build also shows `(dev)` after the window title. The paths below name the release build's folder.
+Each build has its own app identifier, which names its app data folder and its single-instance lock: a release build keeps `com.cloitre.desktop` from `tauri.conf.json`, a development build (`pnpm tauri dev`, `pnpm tauri build --debug`) uses `com.cloitre.desktop.dev`, set by Rust before Tauri starts. On Windows the folders are `%APPDATA%\com.cloitre.desktop` and `%APPDATA%\com.cloitre.desktop.dev`. A development build also shows `(dev)` after the window title. The identifier is replaced at run time only: the installers `pnpm tauri build --debug` bundles keep `com.cloitre.desktop`, so installing one replaces the installed app. Below, the paths of `projects.json` and `hooks.json` name the release build's folder; recordings exist in a development build only, so their path names the development build's folder.
 
 ## How the webview may call Rust
 
@@ -247,7 +247,7 @@ When the main window is asked to close, Rust counts the sessions whose process s
 In a development build (`pnpm tauri dev`, or `pnpm tauri build --debug`), every session is recorded, so a display fault can be replayed in xterm.js without any pseudo-terminal: wrong again on replay points at xterm.js, right on replay points at the pseudo-terminal.
 
 - **Release build**: nothing is recorded, the `recordings` folder is never created, no `recording_*` command but `recording_enabled` is registered, and the webview, told so by `recording_enabled`, hides the recording indicator, the marker button and the replay controls and never calls those commands.
-- **Folder**: `recordings` in the app data folder (on Windows, `%APPDATA%\com.cloitre.desktop\recordings`), never in the repository.
+- **Folder**: `recordings` in the app data folder (on Windows, `%APPDATA%\com.cloitre.desktop.dev\recordings`), never in the repository.
 - **File name**: the UTC start time, `YYYYMMDD-HHMMSS.rec`; `YYYYMMDD-HHMMSS-N.rec` when a file with that name already exists.
 - **Retention**: each new recording keeps the 20 newest files of the folder, the new one included, in the order `recording_list` gives, and deletes the older ones. Only files with a recording name are touched, and never the file of a running session: one spared that way leaves more than 20 files, without deleting a newer one instead. A file that cannot be deleted stays; the session starts anyway.
 - **Format**: a sequence of records, nothing before the first. Integers are little-endian.
