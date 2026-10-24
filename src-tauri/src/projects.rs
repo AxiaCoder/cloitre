@@ -124,8 +124,9 @@ struct State {
 /// The project list, owned by Rust and saved to a JSON file.
 ///
 /// The file is read once, when the store opens; every change is written at once,
-/// atomically. A second app instance working on the same file may lose a change
-/// of the other one, never the file itself.
+/// atomically. The store must be the only writer of its file: a second store on
+/// the same file may lose a change of the other one, never the file itself. The
+/// app runs a single instance, so it opens one store only.
 #[derive(Debug)]
 pub struct ProjectStore {
     file: PathBuf,

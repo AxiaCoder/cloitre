@@ -8,7 +8,7 @@ mod recording;
 mod session;
 
 use tauri::webview::PageLoadEvent;
-use tauri::{Manager, RunEvent, Window, WindowEvent};
+use tauri::{AppHandle, Manager, RunEvent, Runtime, Window, WindowEvent};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 use crate::projects::ProjectStore;
@@ -57,6 +57,18 @@ fn confirm_close(window: &Window, api: &tauri::CloseRequestApi) {
         });
 }
 
+/// Brings the main window of `app` to the front: shown, restored if minimized,
+/// and focused. Does nothing when the window does not exist; a step that fails
+/// does not prevent the next ones.
+fn focus_main_window<R: Runtime>(app: &AppHandle<R>) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let _ = window.show();
+    let _ = window.unminimize();
+    let _ = window.set_focus();
+}
+
 /// Tells whether a page load `event` must stop every session: true when the
 /// page starts loading, false when it has finished.
 fn stops_sessions(event: PageLoadEvent) -> bool {
@@ -64,6 +76,10 @@ fn stops_sessions(event: PageLoadEvent) -> bool {
 }
 
 /// Builds and runs the app until its last window closes, then stops every session.
+///
+/// Only one instance runs: launched while another runs, the app brings that
+/// instance's window to the front and exits without opening a window or
+/// touching the app data folder.
 ///
 /// Every session is also stopped when the page starts loading, so a reload of
 /// the webview leaves no `claude` running that the new page cannot reach.
@@ -79,6 +95,9 @@ fn stops_sessions(event: PageLoadEvent) -> bool {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            focus_main_window(app);
+        }))
         .plugin(tauri_plugin_dialog::init())
         .manage(PtyRegistry::default())
         .setup(|app| {
