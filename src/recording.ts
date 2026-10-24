@@ -182,22 +182,49 @@ export class Replay {
   }
 }
 
-/** Lists the recording files, newest first. */
+/** Tells whether this build records sessions: only a development build does. */
+export function recordingAvailable(): boolean {
+  return import.meta.env.DEV;
+}
+
+/** Lists the recording files, newest first. Empty, without asking Rust, outside a development build. */
 export function listRecordings(): Promise<RecordingInfo[]> {
+  if (!recordingAvailable()) {
+    return Promise.resolve([]);
+  }
   return invoke("recording_list");
 }
 
-/** Reads the raw bytes of recording `name`. Rejects with the Rust refusal message. */
+/**
+ * Reads the raw bytes of recording `name`. Rejects with the Rust refusal
+ * message, or, without asking Rust, outside a development build.
+ */
 export async function readRecording(name: string): Promise<Uint8Array> {
+  if (!recordingAvailable()) {
+    throw new Error("recordings exist only in a development build");
+  }
   return new Uint8Array(await invoke<ArrayBuffer>("recording_read", { name }));
 }
 
-/** Writes a marker in the recording of `session`. Rejects when it is not recorded. */
+/**
+ * Writes a marker in the recording of `session`. Rejects when it is not
+ * recorded; does nothing, without asking Rust, outside a development build.
+ */
 export function markRecording(session: PtySession): Promise<void> {
+  if (!recordingAvailable()) {
+    return Promise.resolve();
+  }
   return invoke("recording_mark", { id: session.id });
 }
 
-/** Returns the file name of the recording of `session`, or `null` when it is not recorded. */
+/**
+ * Returns the file name of the recording of `session`, or `null` when it is
+ * not recorded, which is always the case, without asking Rust, outside a
+ * development build.
+ */
 export function currentRecording(session: PtySession): Promise<string | null> {
+  if (!recordingAvailable()) {
+    return Promise.resolve(null);
+  }
   return invoke("recording_current", { id: session.id });
 }

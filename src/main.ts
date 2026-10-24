@@ -12,6 +12,7 @@ import {
   listRecordings,
   markRecording,
   readRecording,
+  recordingAvailable,
   type ReplaySpeed,
   type ReplayTarget,
 } from "./recording";
@@ -179,9 +180,12 @@ function showError(error: unknown): void {
   setWarning({ ...warning, actionError: String(error) });
 }
 
-/** Shows the recording indicator with `text`, or hides it when `text` is `undefined`. */
+/**
+ * Shows the recording indicator with `text`, or hides it when `text` is
+ * `undefined` or the build records nothing.
+ */
 function showRecording(text: string | undefined): void {
-  recordingText.hidden = text === undefined;
+  recordingText.hidden = text === undefined || !recordingAvailable();
   recordingText.textContent = text ?? "";
 }
 
@@ -200,8 +204,14 @@ async function refreshRecordings(): Promise<void> {
   }
 }
 
-/** Reloads the list of recordings, showing a failure on the developer tools' status line. */
+/**
+ * Reloads the list of recordings, showing a failure on the developer tools'
+ * status line. Does nothing when the build records nothing.
+ */
 function refreshRecordingsOrReport(): void {
+  if (!recordingAvailable()) {
+    return;
+  }
   refreshRecordings().catch((error: unknown) => {
     showStatus(String(error));
   });
@@ -357,8 +367,8 @@ async function startTab(tabId: number, mode: SpawnMode, folder: string): Promise
     if (pane === activePane()) {
       pane.view.terminal.focus();
     }
-    const name = await currentRecording(session);
-    if (pane.slot.current === session) {
+    const name = recordingAvailable() ? await currentRecording(session) : null;
+    if (recordingAvailable() && pane.slot.current === session) {
       pane.recording = name === null ? texts.notRecorded : messages.recordingName(name);
       if (pane === activePane()) {
         showRecording(pane.recording);
@@ -642,10 +652,13 @@ async function removeSelected(): Promise<void> {
   await refreshProjects();
 }
 
-/** Writes a marker in the recording of the active tab's session. Does nothing on a replay tab. */
+/**
+ * Writes a marker in the recording of the active tab's session. Does nothing
+ * on a replay tab, or when the build records nothing.
+ */
 async function mark(): Promise<void> {
   const pane = activePane();
-  if (pane instanceof ReplayPane) {
+  if (!recordingAvailable() || pane instanceof ReplayPane) {
     return;
   }
   const session = pane?.slot.current;
@@ -832,6 +845,19 @@ window.addEventListener(
   { capture: true },
 );
 
+if (!recordingAvailable()) {
+  for (const control of [
+    markButton,
+    recordingText,
+    recordingsSelect.closest("label") ?? recordingsSelect,
+    speedSelect,
+    replayButton,
+    nextMarkButton,
+    stopReplayButton,
+  ]) {
+    control.hidden = true;
+  }
+}
 refreshRecordingsOrReport();
 report(async () => {
   await fontsReady;

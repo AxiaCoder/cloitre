@@ -2,11 +2,24 @@
 
 import { readFileSync } from "node:fs";
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
-import { Replay, decodeRecording, type RecordingEvent, type ReplayTarget } from "./recording";
+import { invoke } from "@tauri-apps/api/core";
+
+import {
+  Replay,
+  currentRecording,
+  decodeRecording,
+  listRecordings,
+  markRecording,
+  readRecording,
+  recordingAvailable,
+  type RecordingEvent,
+  type ReplayTarget,
+} from "./recording";
+import type { PtySession } from "./pty";
 
 /** Encodes one record the way Rust writes it. */
 function record(at: number, kind: number, data: number[]): number[] {
@@ -288,5 +301,30 @@ describe("Replay runs", () => {
     const replay = new Replay(events, target);
     await replay.stop();
     expect(log).toEqual([]);
+  });
+});
+
+describe("recording commands outside a development build", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.mocked(invoke).mockReset();
+  });
+
+  it("are never sent to Rust", async () => {
+    vi.stubEnv("DEV", false);
+    const session = { id: 1 } as PtySession;
+    expect(recordingAvailable()).toBe(false);
+    await expect(listRecordings()).resolves.toEqual([]);
+    await expect(currentRecording(session)).resolves.toBeNull();
+    await expect(markRecording(session)).resolves.toBeUndefined();
+    await expect(readRecording("20261021-100000.rec")).rejects.toThrow("development build");
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("are sent to Rust in a development build", async () => {
+    vi.stubEnv("DEV", true);
+    vi.mocked(invoke).mockResolvedValue([]);
+    await listRecordings();
+    expect(invoke).toHaveBeenCalledWith("recording_list");
   });
 });
