@@ -229,6 +229,25 @@ describe("TabModel.restore", () => {
     expect(model.activeOf(10)?.id).toBe(2);
   });
 
+  it("makes the remembered tab active", () => {
+    const model = new TabModel();
+    model.restore(10, [4, 9, 11], 11);
+    expect(model.activeOf(10)?.id).toBe(11);
+  });
+
+  it("makes the first tab active when the remembered one is not restored", () => {
+    const model = new TabModel();
+    model.restore(10, [4, 9], 7);
+    expect(model.activeOf(10)?.id).toBe(4);
+  });
+
+  it("keeps the active tab of a project that already has one over the remembered one", () => {
+    const model = new TabModel();
+    model.open(10, 2);
+    model.restore(10, [5, 6], 6);
+    expect(model.activeOf(10)?.id).toBe(2);
+  });
+
   it("goes on numbering after the restored tabs", () => {
     const model = new TabModel();
     model.restore(10, [4, 9]);

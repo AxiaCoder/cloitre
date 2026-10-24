@@ -17,6 +17,8 @@ export interface Project {
   readonly exists: boolean;
   /** Its tabs, in opening order. */
   readonly tabs: readonly ProjectTab[];
+  /** The tab to bring to the front: the last active one while it exists, else the first tab, else `null` with no tab. */
+  readonly activeTab: number | null;
 }
 
 /** Every project, with the warning Rust gives when the saved list could not be loaded. */
@@ -63,6 +65,14 @@ export function removeProject(id: number): Promise<void> {
  */
 export function rememberSelection(id: number): Promise<void> {
   return invoke("project_select", { id });
+}
+
+/**
+ * Remembers tab `tabId` as the active tab of its project, for the next run.
+ * Rejects with the Rust refusal message: an unknown tab id, a failed save.
+ */
+export function rememberActiveTab(tabId: number): Promise<void> {
+  return invoke("tab_activate", { tabId });
 }
 
 /**

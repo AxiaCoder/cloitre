@@ -99,12 +99,14 @@ export class TabModel {
   /**
    * Reopens the session tabs `ids` of project `projectId`, from a previous run,
    * in that order and in the `"restored"` state, labelled as {@link open} does.
-   * The first one becomes the project's active tab when the project has none.
+   * When the project has no active tab, `activeId` becomes it if it is one of
+   * `ids`, else the first of `ids`.
    */
-  restore(projectId: number, ids: readonly number[]): SessionTab[] {
+  restore(projectId: number, ids: readonly number[], activeId?: number): SessionTab[] {
     const restored = ids.map((id) => this.addSession(projectId, id, "restored"));
     if (restored.length > 0 && !this.activeIds.has(projectId)) {
-      this.activeIds.set(projectId, restored[0].id);
+      const active = restored.find((tab) => tab.id === activeId) ?? restored[0];
+      this.activeIds.set(projectId, active.id);
     }
     return restored;
   }

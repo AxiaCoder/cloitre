@@ -24,6 +24,7 @@ import {
   listProjects,
   openTab as saveNewTab,
   relocateProject,
+  rememberActiveTab,
   rememberSelection,
   removeProject,
   type Project,
@@ -274,11 +275,17 @@ function renderTabs(): void {
   renderSessionCounts();
 }
 
-/** Makes tab `tabId` its project's active tab, shows it and gives it the keyboard. */
+/**
+ * Makes tab `tabId` its project's active tab, shows it and gives it the keyboard.
+ * A session tab is also remembered by Rust as its project's active tab, for the next run.
+ */
 function activateTab(tabId: number): void {
   tabs.activate(tabId);
   renderTabs();
   panes.get(tabId)?.view.terminal.focus();
+  if (tabId > 0) {
+    report(() => rememberActiveTab(tabId));
+  }
 }
 
 /** Gives `pane` the width table the control shows and registers it under its tab id. */
@@ -401,7 +408,7 @@ async function openTab(project: Project): Promise<void> {
  */
 function restoreTabs(project: Project): void {
   const ids = project.tabs.map(({ id }) => id);
-  for (const tab of tabs.restore(project.id, ids)) {
+  for (const tab of tabs.restore(project.id, ids, project.activeTab ?? undefined)) {
     createPane(tab.id).showOffer("resume");
   }
 }
