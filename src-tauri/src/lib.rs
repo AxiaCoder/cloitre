@@ -76,9 +76,20 @@ fn stops_sessions(event: PageLoadEvent) -> bool {
     event == PageLoadEvent::Started
 }
 
+/// Gives `config` the identity of this build: its [`session::IDENTIFIER`],
+/// and in a development build ` (dev)` after every window title.
+fn apply_build_identity(config: &mut tauri::Config) {
+    config.identifier = session::IDENTIFIER.to_owned();
+    if cfg!(debug_assertions) {
+        for window in &mut config.app.windows {
+            window.title.push_str(" (dev)");
+        }
+    }
+}
+
 /// Builds and runs the app until its last window closes, then stops every session.
 ///
-/// Only one instance runs: launched while another runs, the app brings that
+/// Only one instance of a build runs: launched while another runs, the app brings that
 /// instance's window to the front and exits without opening a window or
 /// touching the app data folder.
 ///
@@ -96,6 +107,8 @@ fn stops_sessions(event: PageLoadEvent) -> bool {
 /// When the Tauri runtime cannot start.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let mut context = tauri::generate_context!();
+    apply_build_identity(context.config_mut());
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             focus_main_window(app);
@@ -157,7 +170,7 @@ pub fn run() {
             commands::tab_close,
             commands::tab_activate
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building the app")
         .run(|app, event| {
             if let RunEvent::Exit = event {
@@ -172,6 +185,20 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_identity_sets_the_identifier_and_marks_development_titles() {
+        let mut config: tauri::Config =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        apply_build_identity(&mut config);
+        assert_eq!(config.identifier, session::IDENTIFIER);
+        let expected = if cfg!(debug_assertions) {
+            "Cloître (dev)"
+        } else {
+            "Cloître"
+        };
+        assert_eq!(config.app.windows[0].title, expected);
+    }
 
     #[test]
     fn page_load_start_stops_sessions() {
