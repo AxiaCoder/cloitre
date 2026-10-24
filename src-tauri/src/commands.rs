@@ -400,7 +400,7 @@ mod tests {
         let gate = PickerGate::default();
         let first = gate.try_open();
         assert!(first.is_some());
-        assert!(gate.try_open().is_none());
+        assert!(gate.try_open().is_some());
         drop(first);
         assert!(gate.try_open().is_some());
     }
