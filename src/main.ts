@@ -459,7 +459,9 @@ async function reloadAfterRefusal(projectId: number): Promise<void> {
 /**
  * Closes tab `tabId`: stops its session or its replay, and disposes of its
  * terminal. A session tab is also removed from the saved tabs when `forget` is
- * set; otherwise Rust keeps it for the next run.
+ * set; otherwise Rust keeps it for the next run. When `forget` is set and the
+ * tab now in front of the project is a session tab, Rust remembers it as the
+ * project's active tab.
  */
 async function closeTab(tabId: number, forget: boolean): Promise<void> {
   const pane = panes.get(tabId);
@@ -467,7 +469,7 @@ async function closeTab(tabId: number, forget: boolean): Promise<void> {
     return;
   }
   panes.delete(tabId);
-  tabs.close(tabId);
+  const active = tabs.close(tabId)?.active;
   pane.hide();
   renderTabs();
   if (pane instanceof ReplayPane) {
@@ -481,6 +483,9 @@ async function closeTab(tabId: number, forget: boolean): Promise<void> {
     if (forget) {
       await forgetTab(tabId);
     }
+  }
+  if (forget && active?.kind === "session") {
+    report(() => rememberActiveTab(active.id));
   }
   activePane()?.view.terminal.focus();
 }
