@@ -160,6 +160,13 @@ pub fn pty_kill(
     killed
 }
 
+/// Tells whether this build records sessions: true in a development build only.
+/// Registered in every build.
+#[tauri::command]
+pub fn recording_enabled(recordings: State<'_, RecordingRegistry>) -> bool {
+    recordings.enabled()
+}
+
 /// Writes a marker in the recording of session `id`, flushed to disk at once.
 ///
 /// # Errors

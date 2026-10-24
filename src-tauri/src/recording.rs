@@ -196,6 +196,21 @@ pub fn is_recording_name(name: &str) -> bool {
     }
 }
 
+/// Returns the key that orders recording `name` by creation: its
+/// `YYYYMMDD-HHMMSS` timestamp, then its numeric suffix, `0` when it has none.
+///
+/// `name` must be accepted by [`is_recording_name`]; any other name gets an
+/// unspecified key.
+fn creation_order(name: &str) -> (&str, u64) {
+    let stem = name.strip_suffix(EXTENSION).unwrap_or(name);
+    let (timestamp, suffix) = stem.split_at(stem.len().min(15));
+    let suffix = suffix
+        .strip_prefix('-')
+        .and_then(|digits| digits.parse().ok())
+        .unwrap_or(0);
+    (timestamp, suffix)
+}
+
 /// Turns an I/O error on a recording into an [`AppError`].
 fn io_error(error: &io::Error) -> AppError {
     if error.kind() == io::ErrorKind::NotFound {
@@ -215,6 +230,11 @@ impl RecordingRegistry {
             enabled,
             active: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Tells whether sessions are recorded: the `enabled` given to [`RecordingRegistry::new`].
+    pub fn enabled(&self) -> bool {
+        self.enabled
     }
 
     /// Creates a recording file named after the current UTC time and starts it
@@ -259,7 +279,7 @@ impl RecordingRegistry {
     }
 
     /// Deletes the oldest recording files so that at most [`KEPT_RECORDINGS`]
-    /// stay, by name order. Only names [`is_recording_name`] accepts are
+    /// stay, by creation order (see [`creation_order`]). Only names [`is_recording_name`] accepts are
     /// touched; `created` and the file of any running session are never
     /// deleted, even when old: a file spared that way leaves more than
     /// [`KEPT_RECORDINGS`] in the folder, and no newer one is deleted in its
@@ -274,7 +294,7 @@ impl RecordingRegistry {
             .filter_map(|entry| entry.file_name().into_string().ok())
             .filter(|name| is_recording_name(name))
             .collect();
-        names.sort_unstable_by(|a, b| b.cmp(a));
+        names.sort_unstable_by(|a, b| creation_order(b).cmp(&creation_order(a)));
         let active: Vec<String> = lock(&self.active)
             .values()
             .map(|recording| recording.name.clone())
@@ -351,7 +371,7 @@ impl RecordingRegistry {
         }
     }
 
-    /// Lists the recording files, newest first. A missing folder gives an empty list.
+    /// Lists the recording files, newest first by [`creation_order`]. A missing folder gives an empty list.
     ///
     /// # Errors
     /// [`AppError::Recording`] when the folder exists but cannot be read.
@@ -373,7 +393,7 @@ impl RecordingRegistry {
                 })
             })
             .collect();
-        found.sort_by(|a, b| b.name.cmp(&a.name));
+        found.sort_by(|a, b| creation_order(&b.name).cmp(&creation_order(&a.name)));
         Ok(found)
     }
 
@@ -1001,5 +1021,55 @@ mod tests {
         assert!(!names.contains(&old[1]));
         assert!(names.contains(&old[2]));
         assert_eq!(names.len(), KEPT_RECORDINGS + 1);
+    }
+
+    #[test]
+    fn list_orders_recordings_of_the_same_second_by_creation_newest_first() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in [
+            "20261021-100000.rec",
+            "20261022-100000.rec",
+            "20261022-100000-1.rec",
+            "20261022-100000-2.rec",
+            "20261022-100000-10.rec",
+            "20261023-100000.rec",
+        ] {
+            fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        let registry = RecordingRegistry::new(dir.path().to_path_buf(), true);
+        assert_eq!(
+            listed(&registry),
+            vec![
+                "20261023-100000.rec",
+                "20261022-100000-10.rec",
+                "20261022-100000-2.rec",
+                "20261022-100000-1.rec",
+                "20261022-100000.rec",
+                "20261021-100000.rec",
+            ]
+        );
+    }
+
+    #[test]
+    fn prune_deletes_the_first_recording_of_a_second_before_its_later_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let same_second = [
+            "20190101-000000.rec",
+            "20190101-000000-1.rec",
+            "20190101-000000-2.rec",
+            "20190101-000000-10.rec",
+        ];
+        for name in same_second {
+            fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        let newer = old_recordings(dir.path(), KEPT_RECORDINGS + 1 - same_second.len());
+        let registry = RecordingRegistry::new(dir.path().to_path_buf(), true);
+        registry.prune(newer.last().unwrap());
+        let names = listed(&registry);
+        assert_eq!(names.len(), KEPT_RECORDINGS);
+        assert!(!names.contains(&same_second[0].to_string()), "{names:?}");
+        for later in &same_second[1..] {
+            assert!(names.contains(&later.to_string()), "{later} gone: {names:?}");
+        }
     }
 }

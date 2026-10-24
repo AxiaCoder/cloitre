@@ -10,6 +10,7 @@ import "./styles.css";
 import {
   currentRecording,
   listRecordings,
+  loadRecordingAvailability,
   markRecording,
   readRecording,
   recordingAvailable,
@@ -367,7 +368,7 @@ async function startTab(tabId: number, mode: SpawnMode, folder: string): Promise
     if (pane === activePane()) {
       pane.view.terminal.focus();
     }
-    const name = recordingAvailable() ? await currentRecording(session) : null;
+    const name = await currentRecording(session);
     if (recordingAvailable() && pane.slot.current === session) {
       pane.recording = name === null ? texts.notRecorded : messages.recordingName(name);
       if (pane === activePane()) {
@@ -845,20 +846,23 @@ window.addEventListener(
   { capture: true },
 );
 
-if (!recordingAvailable()) {
-  for (const control of [
-    markButton,
-    recordingText,
-    recordingsSelect.closest("label") ?? recordingsSelect,
-    speedSelect,
-    replayButton,
-    nextMarkButton,
-    stopReplayButton,
-  ]) {
-    control.hidden = true;
-  }
+const recordingControls = [
+  markButton,
+  recordingsSelect.closest("label") ?? recordingsSelect,
+  speedSelect,
+  replayButton,
+  nextMarkButton,
+  stopReplayButton,
+];
+for (const control of [...recordingControls, recordingText]) {
+  control.hidden = true;
 }
-refreshRecordingsOrReport();
+void loadRecordingAvailability().then((available) => {
+  for (const control of recordingControls) {
+    control.hidden = !available;
+  }
+  refreshRecordingsOrReport();
+});
 report(async () => {
   await fontsReady;
   await restoreAllTabs();

@@ -6,16 +6,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
-import { invoke } from "@tauri-apps/api/core";
-
 import {
   Replay,
-  currentRecording,
   decodeRecording,
-  listRecordings,
-  markRecording,
-  readRecording,
-  recordingAvailable,
   type RecordingEvent,
   type ReplayTarget,
 } from "./recording";
@@ -304,27 +297,57 @@ describe("Replay runs", () => {
   });
 });
 
-describe("recording commands outside a development build", () => {
+describe("recording commands", () => {
   afterEach(() => {
-    vi.unstubAllEnvs();
-    vi.mocked(invoke).mockReset();
+    vi.resetModules();
   });
 
-  it("are never sent to Rust", async () => {
-    vi.stubEnv("DEV", false);
+  /** Loads a fresh copy of the module, with `recording_enabled` answering `answer`. */
+  async function freshModule(answer: boolean | Error) {
+    const core = await import("@tauri-apps/api/core");
+    const mocked = vi.mocked(core.invoke);
+    mocked.mockReset();
+    mocked.mockImplementation((command) => {
+      if (command !== "recording_enabled") {
+        return Promise.resolve([]);
+      }
+      return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(answer);
+    });
+    return { invoke: mocked, recording: await import("./recording") };
+  }
+
+  it("are never sent to Rust when Rust says the build records nothing", async () => {
+    const { invoke: sent, recording } = await freshModule(false);
     const session = { id: 1 } as PtySession;
-    expect(recordingAvailable()).toBe(false);
-    await expect(listRecordings()).resolves.toEqual([]);
-    await expect(currentRecording(session)).resolves.toBeNull();
-    await expect(markRecording(session)).resolves.toBeUndefined();
-    await expect(readRecording("20261021-100000.rec")).rejects.toThrow("development build");
-    expect(invoke).not.toHaveBeenCalled();
+    expect(recording.recordingAvailable()).toBe(false);
+    await expect(recording.listRecordings()).resolves.toEqual([]);
+    await expect(recording.currentRecording(session)).resolves.toBeNull();
+    await expect(recording.markRecording(session)).resolves.toBeUndefined();
+    await expect(recording.readRecording("20261021-100000.rec")).rejects.toThrow("development build");
+    expect(recording.recordingAvailable()).toBe(false);
+    expect(sent.mock.calls).toEqual([["recording_enabled"]]);
   });
 
-  it("are sent to Rust in a development build", async () => {
-    vi.stubEnv("DEV", true);
-    vi.mocked(invoke).mockResolvedValue([]);
-    await listRecordings();
-    expect(invoke).toHaveBeenCalledWith("recording_list");
+  it("are sent to Rust when Rust says the build records, after asking it once", async () => {
+    const { invoke: sent, recording } = await freshModule(true);
+    const session = { id: 1 } as PtySession;
+    expect(recording.recordingAvailable()).toBe(false);
+    await recording.listRecordings();
+    await recording.currentRecording(session);
+    await recording.markRecording(session);
+    expect(recording.recordingAvailable()).toBe(true);
+    expect(sent.mock.calls).toEqual([
+      ["recording_enabled"],
+      ["recording_list"],
+      ["recording_current", { id: 1 }],
+      ["recording_mark", { id: 1 }],
+    ]);
+  });
+
+  it("are never sent to Rust when the question fails", async () => {
+    const { invoke: sent, recording } = await freshModule(new Error("unknown command"));
+    await expect(recording.loadRecordingAvailability()).resolves.toBe(false);
+    await expect(recording.listRecordings()).resolves.toEqual([]);
+    expect(sent.mock.calls).toEqual([["recording_enabled"]]);
   });
 });

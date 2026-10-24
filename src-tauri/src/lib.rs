@@ -89,7 +89,7 @@ fn stops_sessions(event: PageLoadEvent) -> bool {
 /// Closing the window while sessions run asks for confirmation first.
 /// In a development build, sessions are recorded in its `recordings` folder,
 /// and their recordings closed whenever they are stopped; a release build
-/// records nothing and does not register the `recording_*` commands.
+/// records nothing and registers no `recording_*` command but `recording_enabled`.
 ///
 /// # Panics
 /// When the Tauri runtime cannot start.
@@ -136,6 +136,7 @@ pub fn run() {
             commands::pty_write,
             commands::pty_resize,
             commands::pty_kill,
+            commands::recording_enabled,
             #[cfg(debug_assertions)]
             commands::recording_mark,
             #[cfg(debug_assertions)]
@@ -237,6 +238,7 @@ mod tests {
             "allow-pty-write",
             "allow-pty-resize",
             "allow-pty-kill",
+            "allow-recording-enabled",
             "allow-recording-mark",
             "allow-recording-current",
             "allow-recording-list",

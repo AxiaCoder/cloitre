@@ -182,25 +182,45 @@ export class Replay {
   }
 }
 
-/** Tells whether this build records sessions: only a development build does. */
-export function recordingAvailable(): boolean {
-  return import.meta.env.DEV;
+/** Rust's answer to `recording_enabled`, once it has come; `undefined` before. */
+let enabled: boolean | undefined;
+/** The single `recording_enabled` question, once asked. */
+let asking: Promise<boolean> | undefined;
+
+/**
+ * Asks Rust once whether this build records sessions; later calls share the
+ * same answer. Resolves `false` when the question fails.
+ */
+export function loadRecordingAvailability(): Promise<boolean> {
+  asking ??= invoke<boolean>("recording_enabled").then(
+    (answer) => (enabled = answer),
+    () => (enabled = false),
+  );
+  return asking;
 }
 
-/** Lists the recording files, newest first. Empty, without asking Rust, outside a development build. */
-export function listRecordings(): Promise<RecordingInfo[]> {
-  if (!recordingAvailable()) {
-    return Promise.resolve([]);
+/**
+ * Tells whether this build records sessions, as Rust answered. `false` until
+ * the answer of {@link loadRecordingAvailability} has come.
+ */
+export function recordingAvailable(): boolean {
+  return enabled === true;
+}
+
+/** Lists the recording files, newest first. Empty, without asking Rust, when the build records nothing. */
+export async function listRecordings(): Promise<RecordingInfo[]> {
+  if (!(await loadRecordingAvailability())) {
+    return [];
   }
   return invoke("recording_list");
 }
 
 /**
  * Reads the raw bytes of recording `name`. Rejects with the Rust refusal
- * message, or, without asking Rust, outside a development build.
+ * message, or, without asking Rust, when the build records nothing.
  */
 export async function readRecording(name: string): Promise<Uint8Array> {
-  if (!recordingAvailable()) {
+  if (!(await loadRecordingAvailability())) {
     throw new Error("recordings exist only in a development build");
   }
   return new Uint8Array(await invoke<ArrayBuffer>("recording_read", { name }));
@@ -208,23 +228,23 @@ export async function readRecording(name: string): Promise<Uint8Array> {
 
 /**
  * Writes a marker in the recording of `session`. Rejects when it is not
- * recorded; does nothing, without asking Rust, outside a development build.
+ * recorded; does nothing, without asking Rust, when the build records nothing.
  */
-export function markRecording(session: PtySession): Promise<void> {
-  if (!recordingAvailable()) {
-    return Promise.resolve();
+export async function markRecording(session: PtySession): Promise<void> {
+  if (!(await loadRecordingAvailability())) {
+    return;
   }
-  return invoke("recording_mark", { id: session.id });
+  await invoke("recording_mark", { id: session.id });
 }
 
 /**
  * Returns the file name of the recording of `session`, or `null` when it is
- * not recorded, which is always the case, without asking Rust, outside a
- * development build.
+ * not recorded, which is always the case, without asking Rust, when the build
+ * records nothing.
  */
-export function currentRecording(session: PtySession): Promise<string | null> {
-  if (!recordingAvailable()) {
-    return Promise.resolve(null);
+export async function currentRecording(session: PtySession): Promise<string | null> {
+  if (!(await loadRecordingAvailability())) {
+    return null;
   }
   return invoke("recording_current", { id: session.id });
 }
