@@ -11,8 +11,17 @@ use crate::error::AppError;
 use crate::launch::TAB_ID_VAR;
 use crate::projects::{ProjectStore, write_file_atomically};
 
-/// The app identifier of `tauri.conf.json`, which names the app data folder.
-pub const IDENTIFIER: &str = "com.cloitre.desktop";
+/// The app identifier of `tauri.conf.json`, kept by a release build.
+pub const RELEASE_IDENTIFIER: &str = "com.cloitre.desktop";
+
+/// The app identifier of this build, which names its app data folder and its
+/// single-instance lock: [`RELEASE_IDENTIFIER`] in a release build, the same
+/// with `.dev` appended in a development build.
+pub const IDENTIFIER: &str = if cfg!(debug_assertions) {
+    "com.cloitre.desktop.dev"
+} else {
+    RELEASE_IDENTIFIER
+};
 
 /// The first argument that starts the app's executable as a `SessionStart` hook
 /// instead of the app.
@@ -102,8 +111,8 @@ pub enum LaunchMode {
 
 /// Returns the app data folder the way Tauri computes it for
 /// `app_data_dir`: the platform data folder joined with [`IDENTIFIER`]
-/// (`%APPDATA%\com.cloitre.desktop` on Windows). `None` when the platform
-/// data folder is unknown.
+/// (`%APPDATA%\com.cloitre.desktop` on Windows for a release build).
+/// `None` when the platform data folder is unknown.
 pub fn app_data_dir() -> Option<PathBuf> {
     dirs::data_dir().map(|dir| dir.join(IDENTIFIER))
 }
@@ -368,10 +377,19 @@ mod tests {
     }
 
     #[test]
-    fn identifier_is_the_one_of_the_tauri_config() {
+    fn release_identifier_is_the_one_of_the_tauri_config() {
         let config: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
-        assert_eq!(config["identifier"], IDENTIFIER);
+        assert_eq!(config["identifier"], RELEASE_IDENTIFIER);
+    }
+
+    #[test]
+    fn development_build_has_its_own_identifier() {
+        if cfg!(debug_assertions) {
+            assert_eq!(IDENTIFIER, "com.cloitre.desktop.dev");
+        } else {
+            assert_eq!(IDENTIFIER, RELEASE_IDENTIFIER);
+        }
     }
 
     #[test]
