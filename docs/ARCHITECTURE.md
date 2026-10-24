@@ -115,7 +115,7 @@ Lists the projects.
 Opens the folder picker and adds the chosen folder as a project.
 
 - **Arguments**: none.
-- **Returns**: the project, as one entry of `project_list`; the existing project when that folder, under any spelling, is already one; `null` when the user cancels.
+- **Returns**: the project, as one entry of `project_list`; the existing project when that folder, under any spelling, is already one; `null` when the user cancels, or at once, without opening a second picker, when a folder picker opened by `project_add` or `project_relocate` is still open.
 - **Refuses**: a chosen path that is not valid Unicode; a read-only project list; a failed save.
 
 ### `project_relocate`
@@ -123,7 +123,7 @@ Opens the folder picker and adds the chosen folder as a project.
 Opens the folder picker to give a project a new folder, typically one whose folder has moved. The name follows the new folder; the id and tabs are kept.
 
 - **Arguments**: `id` (integer, a project id).
-- **Returns**: the updated project, as one entry of `project_list`, or `null` when the user cancels.
+- **Returns**: the updated project, as one entry of `project_list`; `null` when the user cancels, or at once, without opening a second picker, when a folder picker opened by `project_add` or `project_relocate` is still open.
 - **Refuses**: an unknown id, before the picker opens; a folder that is already another project's ("the folder is already the folder of project <name>"); a chosen path that is not valid Unicode; a read-only project list; a failed save.
 
 ### `project_remove`

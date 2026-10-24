@@ -11,6 +11,7 @@ use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager, RunEvent, Runtime, Window, WindowEvent};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
+use crate::commands::PickerGate;
 use crate::projects::ProjectStore;
 use crate::pty::PtyRegistry;
 use crate::recording::RecordingRegistry;
@@ -101,6 +102,7 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .manage(PtyRegistry::default())
+        .manage(PickerGate::default())
         .setup(|app| {
             let data = app.path().app_data_dir()?;
             let projects = ProjectStore::open(data.join("projects.json"));

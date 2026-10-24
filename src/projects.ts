@@ -41,7 +41,8 @@ export function listProjects(): Promise<ProjectList> {
 /**
  * Opens the folder picker and adds the chosen folder as a project.
  * Resolves with that project (the existing one when the folder already is a
- * project), or `null` when the picker is cancelled. Rejects with the Rust
+ * project), or `null` when the picker is cancelled or another folder picker
+ * is already open. Rejects with the Rust
  * refusal message.
  */
 export function addProject(): Promise<Project | null> {
@@ -50,7 +51,8 @@ export function addProject(): Promise<Project | null> {
 
 /**
  * Opens the folder picker and moves project `id` to the chosen folder.
- * Resolves with the moved project, or `null` when the picker is cancelled.
+ * Resolves with the moved project, or `null` when the picker is cancelled or
+ * another folder picker is already open.
  * Rejects with the Rust refusal message, for instance when the folder is
  * already another project's.
  */
