@@ -941,4 +941,65 @@ mod tests {
             })
         );
     }
+
+    #[test]
+    fn read_accepts_a_file_of_exactly_the_size_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = fs::File::create(dir.path().join("20261021-100000.rec")).unwrap();
+        file.set_len(MAX_READ_BYTES).unwrap();
+        drop(file);
+        let registry = RecordingRegistry::new(dir.path().to_path_buf(), true);
+        let bytes = registry.read("20261021-100000.rec").unwrap();
+        assert_eq!(bytes.len() as u64, MAX_READ_BYTES);
+    }
+
+    #[test]
+    fn creating_the_last_kept_recording_deletes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = old_recordings(dir.path(), KEPT_RECORDINGS - 1);
+        let registry = RecordingRegistry::new(dir.path().to_path_buf(), true);
+        registry.create(80, 24).unwrap();
+        let names = listed(&registry);
+        assert_eq!(names.len(), KEPT_RECORDINGS);
+        assert!(names.contains(&old[0]));
+    }
+
+    #[test]
+    fn a_folder_named_like_a_recording_is_neither_deleted_nor_counted() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("20190101-000000.rec");
+        fs::create_dir(&folder).unwrap();
+        let old = old_recordings(dir.path(), KEPT_RECORDINGS);
+        let registry = RecordingRegistry::new(dir.path().to_path_buf(), true);
+        registry.create(80, 24).unwrap();
+        assert!(folder.is_dir());
+        let names = listed(&registry);
+        assert_eq!(names.len(), KEPT_RECORDINGS);
+        assert!(!names.contains(&old[0]));
+        assert!(names.contains(&old[1]));
+    }
+
+    #[test]
+    fn a_spared_running_recording_does_not_cost_a_newer_one_its_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = old_recordings(dir.path(), KEPT_RECORDINGS + 1);
+        let registry = RecordingRegistry::new(dir.path().to_path_buf(), true);
+        registry.attach(
+            1,
+            NewRecording {
+                name: old[0].clone(),
+                recorder: Arc::new(Mutex::new(Recorder::new(
+                    Box::new(SharedSink::default()),
+                    80,
+                    24,
+                ))),
+            },
+        );
+        registry.create(80, 24).unwrap();
+        let names = listed(&registry);
+        assert!(names.contains(&old[0]));
+        assert!(!names.contains(&old[1]));
+        assert!(names.contains(&old[2]));
+        assert_eq!(names.len(), KEPT_RECORDINGS + 1);
+    }
 }
