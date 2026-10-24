@@ -1863,4 +1863,86 @@ mod tests {
         assert_eq!(list.projects[0].color, MARKER_CATALOG.colors[0]);
         assert_eq!(list.projects[0].icon, None);
     }
+
+    #[test]
+    fn with_every_color_shown_a_new_project_takes_the_one_after_the_last_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let colors = &MARKER_CATALOG.colors;
+        let count = colors.len();
+        let added = add_projects(&store, dir.path(), count + 2);
+        assert_eq!(added[count], colors[0]);
+        assert_eq!(added[count + 1], colors[1]);
+
+        let last = store.list().projects.last().unwrap().id;
+        store.set_marker(last, &colors[5], None).unwrap();
+        let next = store.add(&folder(dir.path(), "next")).unwrap();
+        assert_eq!(next.color, colors[6]);
+    }
+
+    #[test]
+    fn a_removed_project_frees_its_color() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        add_projects(&store, dir.path(), 3);
+        let second = store.list().projects[1].id;
+        store.remove(second).unwrap();
+        let next = store.add(&folder(dir.path(), "next")).unwrap();
+        assert_eq!(next.color, MARKER_CATALOG.colors[1]);
+    }
+
+    #[test]
+    fn a_stored_color_outside_the_catalog_counts_as_the_default_it_shows() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = serde_json::json!({
+            "version": 1,
+            "projects": [{ "id": 1, "name": "a", "path": "nowhere", "color": "plaid" }],
+        });
+        fs::write(dir.path().join("projects.json"), file.to_string()).unwrap();
+        let store = store_in(dir.path());
+        let b = store.add(&folder(dir.path(), "b")).unwrap();
+        assert_eq!(b.color, MARKER_CATALOG.colors[1]);
+    }
+
+    #[test]
+    fn a_stored_icon_is_shown_while_the_color_is_unknown() {
+        let dir = tempfile::tempdir().unwrap();
+        let icon = MARKER_CATALOG.icons[2].clone();
+        let file = serde_json::json!({
+            "version": 1,
+            "projects": [
+                { "id": 2, "name": "a", "path": "nowhere", "color": null, "icon": icon },
+            ],
+        });
+        fs::write(dir.path().join("projects.json"), file.to_string()).unwrap();
+        let list = store_in(dir.path()).list();
+        assert_eq!(list.warning, None);
+        assert_eq!(list.projects[0].color, MARKER_CATALOG.colors[1]);
+        assert_eq!(list.projects[0].icon, Some(icon));
+    }
+
+    #[test]
+    fn a_read_only_store_refuses_a_marker_and_keeps_the_old_one() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("projects.json")).unwrap();
+        let store = store_in(dir.path());
+        lock(&store.state).file.projects = vec![Project {
+            id: 1,
+            name: "a".to_owned(),
+            path: "nowhere".to_owned(),
+            tabs: Vec::new(),
+            active_tab: None,
+            color: None,
+            icon: None,
+        }];
+        assert_eq!(
+            store.set_marker(1, &MARKER_CATALOG.colors[4], Some(&MARKER_CATALOG.icons[0])),
+            Err(AppError::ProjectsReadOnly)
+        );
+        let shown = &store.list().projects[0];
+        assert_eq!(
+            (shown.color.as_str(), shown.icon.as_deref()),
+            (MARKER_CATALOG.colors[0].as_str(), None)
+        );
+    }
 }

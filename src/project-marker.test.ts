@@ -1,13 +1,23 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { MARKER_ICON_PATHS } from "./marker-icons";
-import { FALLBACK_ICON, MARKER_COLORS, MARKER_ICONS, projectInitials } from "./project-marker";
+import { FALLBACK_ICON, MARKER_COLORS, MARKER_ICONS, markerColorValue, projectInitials } from "./project-marker";
 
 const TOKENS = readFileSync(new URL("./tokens.css", import.meta.url), "utf8");
 
 /** The value `tokens.css` gives to custom property `--name`. */
 function token(name: string): string | undefined {
   return new RegExp(`--${name}\\s*:\\s*(#[0-9a-f]{6})\\s*;`, "iu").exec(TOKENS)?.[1];
+}
+
+/** The hue of `#rrggbb` color `hex`, in degrees from 0 to 360. */
+function hue(hex: string): number {
+  const [r, g, b] = [1, 3, 5].map((start) => Number.parseInt(hex.slice(start, start + 2), 16));
+  const max = Math.max(r, g, b);
+  const span = max - Math.min(r, g, b);
+  if (span === 0) return 0;
+  const sector = max === r ? (g - b) / span : max === g ? (b - r) / span + 2 : (r - g) / span + 4;
+  return (sector * 60 + 360) % 360;
 }
 
 /** The WCAG relative luminance of `#rrggbb` color `hex`. */
@@ -77,6 +87,25 @@ describe("marker palette", () => {
       expect(value, color).toBeDefined();
       expect(contrast(value ?? "", ink ?? ""), color).toBeGreaterThanOrEqual(4.5);
     }
+  });
+
+  it("has no amber, orange or yellow color", () => {
+    for (const color of MARKER_COLORS) {
+      expect(color).not.toMatch(/amber|orange|yellow|gold/u);
+      const value = token(`marker-${color}`) ?? "";
+      const degrees = hue(value);
+      expect(degrees >= 20 && degrees <= 65, `${color} ${value} hue ${String(degrees)}`).toBe(false);
+    }
+  });
+
+  it("measures hue in degrees", () => {
+    expect(hue("#ff0000")).toBe(0);
+    expect(hue("#ffbf00")).toBeCloseTo(45, 0);
+    expect(hue("#0000ff")).toBe(240);
+  });
+
+  it("names each color by its CSS token", () => {
+    expect(markerColorValue("blue")).toBe("var(--marker-blue)");
   });
 
   it("checks contrast as WCAG does", () => {
