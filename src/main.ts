@@ -604,6 +604,11 @@ function openMarkerMenu(project: Project, anchor: HTMLButtonElement): void {
   menu.setAttribute("role", "dialog");
   menu.setAttribute("aria-label", messages.markerMenu(project.name));
   menu.append(markerGroup(texts.markerColors, colors), markerGroup(texts.markerIcons, [...icons, noIcon]));
+  menu.addEventListener("focusout", (event) => {
+    if (!(event.relatedTarget instanceof Node && menu.contains(event.relatedTarget))) {
+      closeMarkerMenu();
+    }
+  });
   document.body.append(menu);
   const place = anchor.getBoundingClientRect();
   const top = Math.max(0, Math.min(place.bottom, window.innerHeight - menu.offsetHeight));
@@ -959,6 +964,8 @@ document.addEventListener(
   },
   { capture: true },
 );
+
+window.addEventListener("resize", closeMarkerMenu);
 
 window.addEventListener(
   "keydown",
