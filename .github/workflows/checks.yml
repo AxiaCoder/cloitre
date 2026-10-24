@@ -11,7 +11,7 @@ permissions:
 
 concurrency:
   group: checks-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   NODE_VERSION: "26.7.0"
@@ -44,7 +44,8 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - run: pnpm install --frozen-lockfile
+      - id: install
+        run: pnpm install --frozen-lockfile
 
       # Tauri's build script requires the frontendDist folder to exist.
       - run: New-Item -ItemType Directory -Force dist
@@ -53,19 +54,19 @@ jobs:
         run: pnpm lint
 
       - name: pnpm typecheck
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm typecheck
 
       - name: pnpm test
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm test
 
       - name: cargo clippy
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: src-tauri
         run: cargo clippy --all-targets -- -D warnings
 
       - name: cargo test
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: src-tauri
         run: cargo test
