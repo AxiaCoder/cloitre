@@ -50,12 +50,12 @@ jobs:
       # Tauri's build script requires the frontendDist folder to exist.
       - run: New-Item -ItemType Directory -Force dist
 
+      - name: pnpm lint
+        run: pnpm lint
+
       - name: conpty files
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: ./scripts/check-conpty.ps1
-
-      - name: pnpm lint
-        run: pnpm lint
 
       - name: pnpm typecheck
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}

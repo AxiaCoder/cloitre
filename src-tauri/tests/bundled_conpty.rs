@@ -58,7 +58,7 @@ fn vendored_conpty_passes_a_composed_emoji_through_unchanged() {
 }
 
 /// Copies this executable next to the vendored ConPTY files and runs the copy
-/// as the host, failing when the host fails.
+/// as the host, failing when the host fails or runs no test.
 fn rerun_next_to_vendored_conpty() {
     let folder = tempfile::tempdir().unwrap();
     std::fs::create_dir(folder.path().join("x64")).unwrap();
@@ -73,10 +73,10 @@ fn rerun_next_to_vendored_conpty() {
         .env(ROLE, "host")
         .output()
         .unwrap();
+    let printed = String::from_utf8_lossy(&output.stdout);
     assert!(
-        output.status.success(),
-        "host failed:\n{}{}",
-        String::from_utf8_lossy(&output.stdout),
+        output.status.success() && printed.contains("test result: ok. 1 passed"),
+        "host failed:\n{printed}{}",
         String::from_utf8_lossy(&output.stderr)
     );
 }
