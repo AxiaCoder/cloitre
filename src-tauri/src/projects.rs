@@ -1560,4 +1560,53 @@ mod tests {
         assert_eq!(listed_active_tab(&store, 4), Some(2));
         assert_eq!(listed_active_tab(&store, 7), Some(5));
     }
+
+    #[test]
+    fn closing_a_tab_after_the_active_one_keeps_the_active_tab() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let first = store.open_tab(a.id).unwrap().id;
+        let second = store.open_tab(a.id).unwrap().id;
+        store.open_tab(a.id).unwrap();
+        store.activate_tab(first).unwrap();
+        store.close_tab(second).unwrap();
+        assert_eq!(saved_active_tab(dir.path()), first);
+    }
+
+    #[test]
+    fn activating_a_tab_changes_only_its_own_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let b = store.add(&folder(dir.path(), "b")).unwrap();
+        let a_first = store.open_tab(a.id).unwrap().id;
+        store.open_tab(a.id).unwrap();
+        let b_first = store.open_tab(b.id).unwrap().id;
+        store.open_tab(b.id).unwrap();
+
+        store.activate_tab(b_first).unwrap();
+        store.activate_tab(a_first).unwrap();
+
+        let reopened = store_in(dir.path());
+        assert_eq!(listed_active_tab(&reopened, a.id), Some(a_first));
+        assert_eq!(listed_active_tab(&reopened, b.id), Some(b_first));
+    }
+
+    #[test]
+    fn closing_the_active_tab_of_one_project_keeps_the_other_project_s() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let b = store.add(&folder(dir.path(), "b")).unwrap();
+        let a_first = store.open_tab(a.id).unwrap().id;
+        let a_second = store.open_tab(a.id).unwrap().id;
+        let b_only = store.open_tab(b.id).unwrap().id;
+
+        store.close_tab(a_second).unwrap();
+
+        let reopened = store_in(dir.path());
+        assert_eq!(listed_active_tab(&reopened, a.id), Some(a_first));
+        assert_eq!(listed_active_tab(&reopened, b.id), Some(b_only));
+    }
 }
