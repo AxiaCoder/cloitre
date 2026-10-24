@@ -24,15 +24,22 @@
   --crit: #e07a6a;
   --replay: #9db4e0;
 
-  /* Project markers, indexed by project id (no amber, no orange) */
-  --marker-1: #4f7fd9;
-  --marker-2: #3a9e96;
-  --marker-3: #5b9c5f;
-  --marker-4: #8467c9;
-  --marker-5: #b9568f;
-  --marker-6: #3d8fbf;
-  --marker-7: #6670c9;
-  --marker-8: #6b7a99;
+  /* Project markers, one per color of marker-catalog.json (no amber, no orange) */
+  --marker-blue: #3563c2;
+  --marker-teal: #1d7a72;
+  --marker-purple: #8a3fa8;
+  --marker-red: #b83a32;
+  --marker-green: #2b7d3f;
+  --marker-magenta: #a8327e;
+  --marker-sky: #1f6fa3;
+  --marker-violet: #7444c4;
+  --marker-moss: #4f7228;
+  --marker-rose: #b8345a;
+  --marker-cyan: #16748a;
+  --marker-indigo: #4f4fc4;
+  --marker-slate: #566279;
+  --marker-wine: #8c2a4f;
+  --marker-navy: #2c4580;
 
   /* Terminal */
   --term-bg: var(--ink-3);

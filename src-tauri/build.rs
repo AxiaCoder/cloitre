@@ -20,6 +20,7 @@ fn main() {
             "project_relocate",
             "project_remove",
             "project_select",
+            "project_set_marker",
             "tab_open",
             "tab_close",
             "tab_activate",

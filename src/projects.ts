@@ -19,6 +19,10 @@ export interface Project {
   readonly tabs: readonly ProjectTab[];
   /** The tab to bring to the front: the last active one while it exists, else the first tab, else `null` with no tab. */
   readonly activeTab: number | null;
+  /** The marker color, always a name of the marker catalog. */
+  readonly color: string;
+  /** The marker icon, a name of the marker catalog, or `null` for the color marker. */
+  readonly icon: string | null;
 }
 
 /** Every project, with the warning Rust gives when the saved list could not be loaded. */
@@ -65,6 +69,15 @@ export function removeProject(id: number): Promise<void> {
  */
 export function rememberSelection(id: number): Promise<void> {
   return invoke("project_select", { id });
+}
+
+/**
+ * Gives project `id` the marker color `color` and the marker icon `icon`,
+ * `null` for the color marker; both are names of the marker catalog. Resolves
+ * with the updated project; rejects with the Rust refusal message.
+ */
+export function setProjectMarker(id: number, color: string, icon: string | null): Promise<Project> {
+  return invoke<Project>("project_set_marker", { id, color, icon });
 }
 
 /**
