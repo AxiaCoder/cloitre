@@ -1,0 +1,71 @@
+name: Checks
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "26.7.0"
+  PNPM_VERSION: "10.23.0"
+  RUST_VERSION: "1.99.1"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  checks:
+    name: checks
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: pnpm install --frozen-lockfile
+
+      # Tauri's build script requires the frontendDist folder to exist.
+      - run: New-Item -ItemType Directory -Force dist
+
+      - name: pnpm lint
+        run: pnpm lint
+
+      - name: pnpm typecheck
+        if: ${{ !cancelled() }}
+        run: pnpm typecheck
+
+      - name: pnpm test
+        if: ${{ !cancelled() }}
+        run: pnpm test
+
+      - name: cargo clippy
+        if: ${{ !cancelled() }}
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test
+        if: ${{ !cancelled() }}
+        working-directory: src-tauri
+        run: cargo test
