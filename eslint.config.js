@@ -11,7 +11,7 @@ export default defineConfig(
   {
     languageOptions: {
       parserOptions: {
-        projectService: { allowDefaultProject: ["*.js", "*.ts"] },
+        projectService: { allowDefaultProject: ["*.js", "*.ts", "scripts/*.js"] },
         tsconfigRootDir: import.meta.dirname,
       },
     },
@@ -36,7 +36,7 @@ export default defineConfig(
     },
   },
   {
-    files: ["*.js"],
+    files: ["*.js", "scripts/*.js"],
     extends: [tseslint.configs.disableTypeChecked],
   },
 );
