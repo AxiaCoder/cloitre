@@ -41,6 +41,16 @@ import { afterRefusedStart, TabModel, type Tab, type TabState } from "./tabs";
 import { markerIcon } from "./marker-icons";
 import { FALLBACK_ICON, MARKER_COLORS, MARKER_ICONS, markerColorValue, projectInitials } from "./project-marker";
 import {
+  GRID_COLUMNS,
+  gridMove,
+  isMenuKey,
+  MARKER_MODES,
+  markerMode,
+  switchMove,
+  TRASH_PATH,
+  type MarkerMode,
+} from "./project-menu";
+import {
   isRenderer,
   isUnicodeVersion,
   loadTerminalFonts,
@@ -109,6 +119,8 @@ let warning: WarningState = NO_WARNING;
 let replayPane: ReplayPane | undefined;
 /** The open marker menu and the project button it opened from, while one is open. */
 let markerMenu: { element: HTMLDivElement; anchor: HTMLButtonElement } | undefined;
+/** The open remove dialog, its dimmed backdrop, and the project it removes, while one is open. */
+let removeDialog: { element: HTMLDivElement; projectId: number } | undefined;
 /** Keeps a double click on a close button from closing the next tab too. */
 const closeGuard = new CloseGuard();
 /** The ids of the projects whose new tab Rust is still creating. */
@@ -560,11 +572,28 @@ function dismissMarkerMenu(): void {
   }
 }
 
-/** A button of the marker menu showing `content`, named `label`, marked when `current`; runs `pick` on click. */
+/** Returns the rail button of project `projectId`, or `null` when the rail does not list it. */
+function projectButton(projectId: number): HTMLButtonElement | null {
+  return projectList.querySelector<HTMLButtonElement>(`[data-project="${String(projectId)}"]`);
+}
+
+/** Builds a 24×24 outline drawing of path data `path`, drawn like a marker icon. */
+function outlineIcon(path: string): SVGSVGElement {
+  const svg = markerIcon("");
+  svg.querySelector("path")?.setAttribute("d", path);
+  return svg;
+}
+
+/**
+ * A button of the marker menu showing `content`, named `label`, marked when
+ * `current`; runs `pick` on click. It is out of the tab order until its grid
+ * gives it the grid's tab stop.
+ */
 function markerChoice(label: string, current: boolean, content: Node | string, pick: () => void): HTMLButtonElement {
   const choice = document.createElement("button");
   choice.type = "button";
   choice.className = "marker-choice";
+  choice.tabIndex = -1;
   choice.setAttribute("aria-label", label);
   choice.setAttribute("aria-pressed", String(current));
   choice.title = label;
@@ -573,65 +602,313 @@ function markerChoice(label: string, current: boolean, content: Node | string, p
   return choice;
 }
 
-/** A titled group of the marker menu holding `choices`. */
-function markerGroup(title: string, choices: readonly HTMLButtonElement[]): HTMLDivElement {
-  const heading = document.createElement("span");
-  heading.className = "marker-heading";
-  heading.textContent = title;
+/**
+ * A grid of the marker menu holding `choices`, named `label`, with a single
+ * tab stop: the current choice, else the first. The arrow keys, Home and End
+ * move the focus between the choices.
+ */
+function markerGrid(label: string, choices: readonly HTMLButtonElement[]): HTMLDivElement {
   const grid = document.createElement("div");
   grid.className = "marker-grid";
   grid.setAttribute("role", "group");
-  grid.setAttribute("aria-label", title);
+  grid.setAttribute("aria-label", label);
   grid.append(...choices);
-  const group = document.createElement("div");
-  group.append(heading, grid);
-  return group;
+  const start = choices.find((choice) => choice.getAttribute("aria-pressed") === "true") ?? choices[0];
+  if (choices.length > 0) {
+    start.tabIndex = 0;
+  }
+  grid.addEventListener("keydown", (event) => {
+    const index = choices.findIndex((choice) => choice === event.target);
+    const next = index < 0 ? undefined : gridMove(index, choices.length, GRID_COLUMNS, event.key);
+    const target = choices.find((_, position) => position === next);
+    if (!target) {
+      return;
+    }
+    event.preventDefault();
+    for (const choice of choices) {
+      choice.tabIndex = -1;
+    }
+    target.tabIndex = 0;
+    target.focus();
+  });
+  return grid;
 }
 
-/**
- * Opens, under project button `anchor`, the menu that changes the marker of
- * `project`: its colors, its icons and a button back to the color marker.
- * Picking a color also drops the icon. Focuses the current choice.
- */
-function openMarkerMenu(project: Project, anchor: HTMLButtonElement): void {
-  closeMarkerMenu();
-  const pick = (color: string, icon: string | null) => () => {
-    report(() => chooseMarker(project.id, color, icon));
-  };
-  const colors = MARKER_COLORS.map((color) => {
+/** The color grid of the marker menu of `project`: picking a color drops the icon. */
+function colorGrid(project: Project): HTMLDivElement {
+  const choices = MARKER_COLORS.map((color) => {
     const swatch = document.createElement("span");
     swatch.className = "marker-swatch";
     swatch.style.backgroundColor = markerColorValue(color);
-    return markerChoice(
-      messages.markerColor(color),
-      project.icon === null && color === project.color,
-      swatch,
-      pick(color, null),
-    );
+    const current = project.icon === null && color === project.color;
+    const choice = markerChoice(messages.markerColor(color), current, swatch, () => {
+      report(() => chooseMarker(project.id, color, null));
+    });
+    choice.classList.add("color-choice");
+    return choice;
   });
-  const icons = MARKER_ICONS.map((icon) =>
-    markerChoice(messages.markerIcon(icon), icon === project.icon, markerIcon(icon), pick(project.color, icon)),
+  return markerGrid(texts.markerColors, choices);
+}
+
+/** The icon grid of the marker menu of `project`: picking an icon keeps the color for later. */
+function iconGrid(project: Project): HTMLDivElement {
+  const choices = MARKER_ICONS.map((icon) =>
+    markerChoice(messages.markerIcon(icon), icon === project.icon, markerIcon(icon), () => {
+      report(() => chooseMarker(project.id, project.color, icon));
+    }),
   );
-  const noIcon = markerChoice(texts.noIcon, project.icon === null, texts.noIcon, pick(project.color, null));
-  noIcon.classList.add("marker-no-icon");
+  return markerGrid(texts.markerIcons, choices);
+}
+
+/**
+ * The "Show" line of the marker menu: a switch between the color and icon
+ * modes, set on `shown`. A click or an arrow key on it moves the switch and
+ * runs `show` with the chosen mode; the marker itself does not change.
+ */
+function markerSwitch(shown: MarkerMode, show: (mode: MarkerMode) => void): HTMLDivElement {
+  const label = document.createElement("span");
+  label.className = "marker-heading";
+  label.textContent = texts.markerShow;
+  label.setAttribute("aria-hidden", "true");
+  const group = document.createElement("div");
+  group.className = "marker-switch";
+  group.setAttribute("role", "radiogroup");
+  group.setAttribute("aria-label", texts.markerShow);
+  const options = MARKER_MODES.map((mode) => {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.setAttribute("role", "radio");
+    option.dataset.mode = mode;
+    option.textContent = mode === "color" ? texts.markerColors : texts.markerIcons;
+    return option;
+  });
+  const check = (mode: MarkerMode): void => {
+    for (const option of options) {
+      const checked = option.dataset.mode === mode;
+      option.setAttribute("aria-checked", String(checked));
+      option.tabIndex = checked ? 0 : -1;
+    }
+  };
+  const select = (mode: MarkerMode): void => {
+    check(mode);
+    options.find((option) => option.dataset.mode === mode)?.focus();
+    show(mode);
+  };
+  for (const option of options) {
+    option.addEventListener("click", () => {
+      if (option.dataset.mode === "color" || option.dataset.mode === "icon") {
+        select(option.dataset.mode);
+      }
+    });
+  }
+  group.addEventListener("keydown", (event) => {
+    const next = switchMove(event.key);
+    if (next === undefined) {
+      return;
+    }
+    event.preventDefault();
+    select(next);
+  });
+  group.append(...options);
+  check(shown);
+  const line = document.createElement("div");
+  line.className = "marker-show";
+  line.append(label, group);
+  return line;
+}
+
+/**
+ * Opens, under project button `anchor` and inside the window, the menu of
+ * `project`: a switch between its color and icon modes, set on the mode it
+ * shows, the grid of that mode, and an entry that asks to remove the project.
+ * Focuses the current choice.
+ */
+function openMarkerMenu(project: Project, anchor: HTMLButtonElement): void {
+  closeMarkerMenu();
+  const current = markerMode(project.icon);
   const menu = document.createElement("div");
   menu.className = "marker-menu";
   menu.tabIndex = -1;
   menu.setAttribute("role", "dialog");
   menu.setAttribute("aria-label", messages.markerMenu(project.name));
-  menu.append(markerGroup(texts.markerColors, colors), markerGroup(texts.markerIcons, [...icons, noIcon]));
+  const choices = document.createElement("div");
+  choices.className = "marker-choices";
+  const showMode = (mode: MarkerMode): void => {
+    const grid = mode === "color" ? colorGrid(project) : iconGrid(project);
+    if (mode === current) {
+      choices.replaceChildren(grid);
+    } else {
+      const hint = document.createElement("p");
+      hint.className = "marker-hint";
+      hint.textContent = messages.markerHint(current);
+      choices.replaceChildren(hint, grid);
+    }
+    placeMarkerMenu(menu, anchor);
+  };
+  const section = document.createElement("div");
+  section.className = "marker-section";
+  section.append(markerSwitch(current, showMode), choices);
+  const separator = document.createElement("div");
+  separator.className = "marker-separator";
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "marker-remove";
+  remove.append(outlineIcon(TRASH_PATH), texts.removeProjectEntry);
+  remove.addEventListener("click", () => {
+    closeMarkerMenu();
+    openRemoveDialog(project);
+  });
+  menu.append(section, separator, remove);
   menu.addEventListener("focusout", (event) => {
     if (!(event.relatedTarget instanceof Node && menu.contains(event.relatedTarget))) {
       closeMarkerMenu();
     }
   });
+  menu.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+  });
   document.body.append(menu);
+  showMode(current);
+  markerMenu = { element: menu, anchor };
+  choices.querySelector<HTMLButtonElement>(".marker-choice[tabindex='0']")?.focus();
+}
+
+/** Places marker menu `menu` under project button `anchor`, moved up and left as needed to stay inside the window. */
+function placeMarkerMenu(menu: HTMLDivElement, anchor: HTMLButtonElement): void {
   const place = anchor.getBoundingClientRect();
   const top = Math.max(0, Math.min(place.bottom, window.innerHeight - menu.offsetHeight));
-  menu.style.left = `${String(place.left)}px`;
+  const left = Math.max(0, Math.min(place.left, window.innerWidth - menu.offsetWidth));
+  menu.style.left = `${String(left)}px`;
   menu.style.top = `${String(top)}px`;
-  markerMenu = { element: menu, anchor };
-  (menu.querySelector<HTMLButtonElement>("[aria-pressed='true']") ?? colors[0]).focus();
+}
+
+/** Closes the remove dialog, if one is open, without moving the focus. */
+function closeRemoveDialog(): void {
+  const open = removeDialog;
+  removeDialog = undefined;
+  open?.element.remove();
+}
+
+/** Closes the remove dialog, if one is open, changing nothing, and gives focus back to its project. */
+function dismissRemoveDialog(): void {
+  if (removeDialog !== undefined) {
+    const { projectId } = removeDialog;
+    closeRemoveDialog();
+    projectButton(projectId)?.focus();
+  }
+}
+
+/** Keeps Tab and Shift+Tab of keyboard event `event` inside `dialog`, cycling through its enabled buttons. */
+function trapFocus(dialog: HTMLElement, event: KeyboardEvent): void {
+  if (event.key !== "Tab") {
+    return;
+  }
+  const buttons = [...dialog.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
+  if (buttons.length === 0) {
+    event.preventDefault();
+    return;
+  }
+  const first = buttons[0];
+  const last = buttons[buttons.length - 1];
+  const active = document.activeElement;
+  const inside = buttons.some((button) => button === active);
+  if (event.shiftKey && (active === first || !inside)) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && (active === last || !inside)) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+/**
+ * Opens, over a dimmed window, the dialog that confirms the removal of
+ * `project`: it says how many of its tabs close and that its folder stays on
+ * disk, and focuses Cancel. Escape, Cancel or a click on the dimmed area
+ * close it and change nothing.
+ */
+function openRemoveDialog(project: Project): void {
+  closeRemoveDialog();
+  const scrim = document.createElement("div");
+  scrim.className = "dialog-scrim";
+  const dialog = document.createElement("div");
+  dialog.className = "remove-dialog";
+  dialog.tabIndex = -1;
+  dialog.setAttribute("role", "alertdialog");
+  dialog.setAttribute("aria-modal", "true");
+  dialog.setAttribute("aria-labelledby", "remove-title");
+  dialog.setAttribute("aria-describedby", "remove-text");
+  const title = document.createElement("h2");
+  title.id = "remove-title";
+  title.className = "remove-title";
+  title.append(projectMarker(project), messages.removeTitle(project.name));
+  const text = document.createElement("p");
+  text.id = "remove-text";
+  text.textContent = `${messages.removeTabs(tabs.tabsOf(project.id).length)} ${texts.folderStays}`;
+  const path = document.createElement("p");
+  path.className = "remove-path";
+  path.textContent = project.path;
+  const failure = document.createElement("p");
+  failure.className = "remove-error";
+  failure.setAttribute("role", "alert");
+  failure.hidden = true;
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.textContent = texts.cancel;
+  cancel.addEventListener("click", dismissRemoveDialog);
+  const confirm = document.createElement("button");
+  confirm.type = "button";
+  confirm.className = "danger";
+  confirm.textContent = texts.confirmRemove;
+  confirm.addEventListener("click", () => {
+    report(() => confirmRemoval(project, { confirm, failure, details: [text, path] }));
+  });
+  const actions = document.createElement("div");
+  actions.className = "remove-actions";
+  actions.append(cancel, confirm);
+  dialog.append(title, text, path, failure, actions);
+  dialog.addEventListener("keydown", (event) => {
+    trapFocus(dialog, event);
+  });
+  scrim.append(dialog);
+  scrim.addEventListener("click", (event) => {
+    if (event.target === scrim) {
+      dismissRemoveDialog();
+    }
+  });
+  document.body.append(scrim);
+  removeDialog = { element: scrim, projectId: project.id };
+  cancel.focus();
+}
+
+/**
+ * Removes `project` from the remove dialog. On success the dialog closes,
+ * then the project's tabs close and the projects reload. A removal Rust
+ * refuses changes nothing: the dialog stays open and shows the refusal in
+ * `parts.failure` in place of `parts.details`, and `parts.confirm` becomes
+ * Try again.
+ */
+async function confirmRemoval(
+  project: Project,
+  parts: { confirm: HTMLButtonElement; failure: HTMLElement; details: readonly HTMLElement[] },
+): Promise<void> {
+  parts.confirm.disabled = true;
+  try {
+    await dropProject(project);
+  } catch (error: unknown) {
+    parts.failure.textContent = messages.removeFailed(String(error));
+    parts.failure.hidden = false;
+    for (const detail of parts.details) {
+      detail.hidden = true;
+    }
+    parts.confirm.textContent = texts.tryAgain;
+    parts.confirm.disabled = false;
+    parts.confirm.focus();
+    return;
+  }
+  closeRemoveDialog();
+  await afterRemoval(project.id);
+  (projectList.querySelector<HTMLButtonElement>(".project.active") ?? addProjectButton).focus();
 }
 
 /**
@@ -643,7 +920,7 @@ async function chooseMarker(projectId: number, color: string, icon: string | nul
   const updated = await setProjectMarker(projectId, color, icon);
   projects = projects.map((project) => (project.id === updated.id ? updated : project));
   renderProjects();
-  projectList.querySelector<HTMLButtonElement>(`[data-project="${String(projectId)}"]`)?.focus();
+  projectButton(projectId)?.focus();
 }
 
 /** Draws the project rail and the work area from `projects` and `selectedId`. */
@@ -681,6 +958,12 @@ function renderProjects(): void {
       button.addEventListener("contextmenu", (event) => {
         event.preventDefault();
         openMarkerMenu(project, button);
+      });
+      button.addEventListener("keydown", (event) => {
+        if (isMenuKey(event)) {
+          event.preventDefault();
+          openMarkerMenu(project, button);
+        }
       });
       const item = document.createElement("li");
       item.append(button);
@@ -768,21 +1051,39 @@ async function relocateSelected(): Promise<void> {
 }
 
 /**
- * Removes the selected project, closing all its tabs, then selects the project Rust gives, without opening a tab.
- * The displayed project is stored as Rust's selection first, so the neighbour Rust picks is the neighbour of the removed one.
+ * Has Rust remove `project` from its list, its folder left on disk. When it is
+ * the selected project, it is stored as Rust's selection first, so the
+ * neighbour Rust picks is the neighbour of the removed one. Rejects with Rust's
+ * refusal; the project and its tabs are then unchanged.
  */
+async function dropProject(project: Project): Promise<void> {
+  if (project.id === selectedId) {
+    await rememberSelection(project.id);
+  }
+  await removeProject(project.id);
+}
+
+/**
+ * Closes the tabs of project `projectId`, which Rust has just removed, then
+ * reloads the projects; when it was selected, selects the project Rust gives,
+ * without opening a tab.
+ */
+async function afterRemoval(projectId: number): Promise<void> {
+  if (selectedId === projectId) {
+    selectedId = undefined;
+  }
+  await closeProjectTabs(projectId);
+  await refreshProjects();
+}
+
+/** Removes the selected project and closes all its tabs, as {@link dropProject} and {@link afterRemoval} do. */
 async function removeSelected(): Promise<void> {
   const selected = findProject(projects, selectedId);
   if (!selected) {
     return;
   }
-  await rememberSelection(selected.id);
-  await removeProject(selected.id);
-  if (selectedId === selected.id) {
-    selectedId = undefined;
-  }
-  await closeProjectTabs(selected.id);
-  await refreshProjects();
+  await dropProject(selected);
+  await afterRemoval(selected.id);
 }
 
 /**
@@ -965,7 +1266,11 @@ unicodeSelect.addEventListener("change", () => {
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
-    dismissMarkerMenu();
+    if (removeDialog === undefined) {
+      dismissMarkerMenu();
+    } else {
+      dismissRemoveDialog();
+    }
   }
 });
 

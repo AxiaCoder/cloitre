@@ -4,6 +4,8 @@
  * are the functions of {@link messages}.
  */
 
+import type { MarkerMode } from "./project-menu";
+
 /** The fixed texts of the interface, by key. `index.html` names them in `data-text`, `data-label` and `data-title`. */
 export const texts = {
   closeWarning: "Close the warning",
@@ -35,9 +37,13 @@ export const texts = {
   missingFolderHint: "It may have been moved or renamed.",
   chooseAnotherFolder: "Choose another folder",
   removeProject: "Remove the project",
+  markerShow: "Show",
   markerColors: "Color",
   markerIcons: "Icon",
-  noIcon: "No icon",
+  removeProjectEntry: "Remove project…",
+  cancel: "Cancel",
+  confirmRemove: "Remove project",
+  folderStays: "The folder stays on disk:",
   restart: "Restart",
   close: "Close",
   resume: "Resume",
@@ -86,6 +92,23 @@ export const messages = {
   markerColor: (color: string) => `Color ${color}`,
   /** The accessible name of marker icon `icon`. */
   markerIcon: (icon: string) => `Icon ${icon}`,
+  /** The line of the marker menu when its switch shows the other mode than `current`, the one the project shows. */
+  markerHint: (current: MarkerMode) =>
+    current === "color"
+      ? "Showing a color now. Pick an icon to replace it."
+      : "Showing an icon now. Pick a color to replace it.",
+  /** The title of the dialog that removes project `name`. */
+  removeTitle: (name: string) => `Remove ${name}?`,
+  /** What removing a project does to its `count` open tabs. */
+  removeTabs: (count: number) =>
+    count === 0
+      ? "No tab is open for it."
+      : count === 1
+        ? "Its tab will close and its session will stop."
+        : `Its ${String(count)} tabs will close and their sessions will stop.`,
+  /** The error of a removal Rust refused with `reason`; a final period of `reason` is dropped. */
+  removeFailed: (reason: string) =>
+    `The project could not be removed: ${reason.trim().replace(/\.$/u, "")}. Nothing has changed. Try again.`,
   /** The tooltip of project `name` whose folder `path` is gone. */
   missingProjectTitle: (name: string, path: string) => `${name}\nFolder not found: ${path}`,
   /** The recording list entry of `name`, `kilobytes` long. */

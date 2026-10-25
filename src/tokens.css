@@ -22,6 +22,8 @@
   --warn: #e58a4b;
   --warn-bg: #3a2618;
   --crit: #e07a6a;
+  --crit-bg: rgba(224, 122, 106, 0.1);
+  --crit-line: rgba(224, 122, 106, 0.35);
   --replay: #9db4e0;
 
   /* Project markers, one per color of marker-catalog.json (no amber, no orange) */
@@ -50,6 +52,11 @@
   --term-scrollbar: rgba(223, 227, 243, 0.1);
   --term-scrollbar-hover: rgba(223, 227, 243, 0.25);
   --term-scrollbar-active: rgba(223, 227, 243, 0.35);
+
+  /* Overlays */
+  --scrim: rgba(5, 7, 14, 0.66);
+  --shadow-menu: 0 12px 32px rgba(0, 0, 0, 0.45);
+  --shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.55);
 
   /* Type */
   --font-ui: "IBM Plex Sans", system-ui, "Segoe UI", sans-serif;
