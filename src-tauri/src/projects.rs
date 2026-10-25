@@ -2010,6 +2010,67 @@ mod tests {
     }
 
     #[test]
+    fn a_version_1_project_with_an_unknown_icon_keeps_its_color() {
+        let dir = tempfile::tempdir().unwrap();
+        let chosen = MARKER_CATALOG.colors[4].clone();
+        let file = serde_json::json!({
+            "version": 1,
+            "projects": [
+                { "id": 1, "name": "a", "path": "nowhere", "color": chosen, "icon": "unicorn" },
+                { "id": 2, "name": "b", "path": "elsewhere", "icon": "unicorn" },
+            ],
+        });
+        fs::write(dir.path().join("projects.json"), file.to_string()).unwrap();
+        let list = store_in(dir.path()).list();
+        assert_eq!(list.warning, None);
+        assert_eq!(
+            (list.projects[0].color.as_ref(), list.projects[0].icon.as_ref()),
+            (Some(&chosen), None)
+        );
+        assert_eq!(
+            (list.projects[1].color.as_ref(), list.projects[1].icon.as_ref()),
+            (Some(&MARKER_CATALOG.colors[1]), None)
+        );
+    }
+
+    #[test]
+    fn a_version_2_color_absent_null_or_not_a_string_reads_as_no_color() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = serde_json::json!({
+            "version": 2,
+            "projects": [
+                { "id": 1, "name": "a", "path": "nowhere" },
+                { "id": 2, "name": "b", "path": "nowhere", "color": null, "icon": null },
+                { "id": 3, "name": "c", "path": "nowhere", "color": 7, "icon": null },
+            ],
+        });
+        fs::write(dir.path().join("projects.json"), file.to_string()).unwrap();
+        let list = store_in(dir.path()).list();
+        assert_eq!(list.warning, None);
+        for project in &list.projects {
+            assert_eq!(project.color, None, "project {}", project.id);
+        }
+    }
+
+    #[test]
+    fn a_version_2_project_keeps_both_its_color_and_its_icon() {
+        let dir = tempfile::tempdir().unwrap();
+        let color = MARKER_CATALOG.colors[2].clone();
+        let icon = MARKER_CATALOG.icons[1].clone();
+        let file = serde_json::json!({
+            "version": 2,
+            "projects": [{ "id": 1, "name": "a", "path": "nowhere", "color": color, "icon": icon }],
+        });
+        fs::write(dir.path().join("projects.json"), file.to_string()).unwrap();
+        let list = store_in(dir.path()).list();
+        assert_eq!(list.warning, None);
+        assert_eq!(
+            (list.projects[0].color.as_ref(), list.projects[0].icon.as_ref()),
+            (Some(&color), Some(&icon))
+        );
+    }
+
+    #[test]
     fn a_file_without_markers_gives_each_project_a_color_by_id() {
         let dir = tempfile::tempdir().unwrap();
         let file = serde_json::json!({

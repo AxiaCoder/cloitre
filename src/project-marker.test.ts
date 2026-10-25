@@ -89,6 +89,17 @@ describe("marker palette", () => {
     }
   });
 
+  it("keeps the symbol readable on the dark ground of a marker without color, at 4.5:1 at least", () => {
+    const styles = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
+    const rule = /\.project-marker\.no-color\s*\{([^}]*)\}/u.exec(styles)?.[1] ?? "";
+    const ground = /background:\s*var\(--([\w-]+)\)/u.exec(rule)?.[1];
+    const ink = /(?:^|;|\s)color:\s*var\(--([\w-]+)\)/u.exec(rule)?.[1];
+    expect([ground, ink]).toEqual([expect.any(String), expect.any(String)]);
+    const [groundValue, inkValue] = [token(ground ?? ""), token(ink ?? "")];
+    expect([groundValue, inkValue]).toEqual([expect.any(String), expect.any(String)]);
+    expect(contrast(groundValue ?? "", inkValue ?? "")).toBeGreaterThanOrEqual(4.5);
+  });
+
   it("has no amber, orange or yellow color", () => {
     for (const color of MARKER_COLORS) {
       expect(color).not.toMatch(/amber|orange|yellow|gold/u);
