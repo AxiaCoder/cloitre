@@ -10,7 +10,7 @@ export type KeyDecision =
    */
   | "paste"
   /**
-   * Ctrl+C or Ctrl+Shift+C with a selection in the terminal: xterm.js must not send ^C, and the
+   * Ctrl+C with a selection in the terminal: xterm.js must not send ^C, and the
    * default action must not be prevented, so the browser fires its native `copy` event, which
    * xterm.js fills with the selection.
    */
@@ -49,7 +49,7 @@ export function decideKey(event: KeyInput, hasSelection: boolean): KeyDecision {
   if (ctrlWithoutAltOrMeta && event.keyCode === VIRTUAL_KEY_V) {
     return "paste";
   }
-  if (ctrlWithoutAltOrMeta && event.keyCode === VIRTUAL_KEY_C && hasSelection) {
+  if (ctrlWithoutAltOrMeta && !event.shiftKey && event.keyCode === VIRTUAL_KEY_C && hasSelection) {
     return "copy";
   }
   return "terminal";

@@ -90,10 +90,10 @@ describe("decideKey", () => {
     expect(decideKey(key({ code: "KeyI", key: "c", keyCode: 67, ctrlKey: true }), true)).toBe("copy");
   });
 
-  it("copies the selection on Ctrl+Shift+C", () => {
+  it("sends Ctrl+Shift+C to the terminal even with a selection, since the browser copies on Ctrl+C only", () => {
     expect(
       decideKey(key({ code: "KeyC", key: "C", keyCode: 67, ctrlKey: true, shiftKey: true }), true),
-    ).toBe("copy");
+    ).toBe("terminal");
   });
 
   it("sends Ctrl+C with Alt or Meta to the terminal even with a selection", () => {
