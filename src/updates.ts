@@ -42,8 +42,13 @@ export interface UpdatePorts {
   show(notice: UpdateNotice): void;
 }
 
-/** The words of an updater error that point at the signature rather than the download. */
-const SIGNATURE_ERROR = /signature|minisign|different key|algorithm|encoding|base64|signed version/iu;
+/**
+ * The words of an updater error that point at the signature rather than the download:
+ * the updater's own signature errors, those of minisign, and the base64 decoding errors
+ * the updater passes on unchanged.
+ */
+const SIGNATURE_ERROR =
+  /signature|minisign|different key|algorithm|encoding|base64|signed|invalid (?:symbol|last symbol|padding|input length)/iu;
 
 /** Tells why a download failed from updater error `error`: a signature fault, or else a network fault. */
 export function downloadFailure(error: unknown): FailureReason {

@@ -144,6 +144,175 @@ describe("UpdateFlow.install", () => {
   });
 });
 
+describe("UpdateFlow.install, sessions and download", () => {
+  it("stops the sessions only once the download has finished", async () => {
+    const order: string[] = [];
+    const update = fakeUpdate({
+      download: () => {
+        order.push("download");
+        return Promise.resolve();
+      },
+      install: () => {
+        order.push("install");
+        return Promise.resolve();
+      },
+    });
+    const { flow } = flowWith(
+      () => Promise.resolve(update),
+      () => {
+        order.push("stop");
+        return Promise.resolve();
+      },
+    );
+    await flow.checkAtStartup();
+    await flow.install();
+    expect(order).toEqual(["download", "stop", "install"]);
+  });
+
+  it("keeps the sessions running and installs nothing when the download stops", async () => {
+    const stop = vi.fn(() => Promise.resolve());
+    const install = vi.fn(() => Promise.resolve());
+    const update = fakeUpdate({ download: () => Promise.reject(new Error("error sending request")), install });
+    const { flow } = flowWith(() => Promise.resolve(update), stop);
+    await flow.checkAtStartup();
+    await flow.install();
+    expect(flow.notice).toEqual({ kind: "failed", version: "0.4.0", reason: "network" });
+    expect(stop).not.toHaveBeenCalled();
+    expect(install).not.toHaveBeenCalled();
+  });
+
+  it("has stopped the sessions when the installer fails to start", async () => {
+    const stop = vi.fn(() => Promise.resolve());
+    const update = fakeUpdate({ install: () => Promise.reject(new Error("access denied")) });
+    const { flow } = flowWith(() => Promise.resolve(update), stop);
+    await flow.checkAtStartup();
+    await flow.install();
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("does nothing when no update was announced", async () => {
+    const stop = vi.fn(() => Promise.resolve());
+    const { flow, shown } = flowWith(() => Promise.resolve(null), stop);
+    await flow.checkAtStartup();
+    await flow.install();
+    expect(shown).toEqual([]);
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("does nothing when the startup check failed", async () => {
+    const { flow, shown } = flowWith(() => Promise.reject(new Error("error sending request")));
+    await flow.checkAtStartup();
+    await flow.install();
+    expect(shown).toEqual([]);
+  });
+
+  it("starts one download only when asked twice", async () => {
+    let finish: () => void = () => undefined;
+    const download = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const { flow } = flowWith(() => Promise.resolve(fakeUpdate({ download })));
+    await flow.checkAtStartup();
+    const first = flow.install();
+    await flow.install();
+    finish();
+    await first;
+    expect(download).toHaveBeenCalledOnce();
+  });
+
+  it("shows the download from zero, then each chunk", async () => {
+    const update = fakeUpdate({
+      download: (onEvent?: (event: DownloadEvent) => void) => {
+        onEvent?.({ event: "Started", data: { contentLength: 1_000 } });
+        onEvent?.({ event: "Progress", data: { chunkLength: 400 } });
+        onEvent?.({ event: "Progress", data: { chunkLength: 600 } });
+        return Promise.resolve();
+      },
+    });
+    const { flow, shown } = flowWith(() => Promise.resolve(update));
+    await flow.checkAtStartup();
+    await flow.install();
+    expect(shown.filter((notice) => notice.kind === "downloading")).toEqual([
+      { kind: "downloading", version: "0.4.0", received: 0, total: undefined },
+      { kind: "downloading", version: "0.4.0", received: 0, total: 1_000 },
+      { kind: "downloading", version: "0.4.0", received: 400, total: 1_000 },
+      { kind: "downloading", version: "0.4.0", received: 1_000, total: 1_000 },
+    ]);
+  });
+
+  it("keeps the size unknown when the server does not give it", async () => {
+    const update = fakeUpdate({
+      download: (onEvent?: (event: DownloadEvent) => void) => {
+        onEvent?.({ event: "Started", data: { contentLength: undefined } });
+        onEvent?.({ event: "Progress", data: { chunkLength: 250 } });
+        return Promise.resolve();
+      },
+    });
+    const { flow, shown } = flowWith(() => Promise.resolve(update));
+    await flow.checkAtStartup();
+    await flow.install();
+    expect(shown).toContainEqual({ kind: "downloading", version: "0.4.0", received: 250, total: undefined });
+  });
+});
+
+describe("UpdateFlow.dismiss, other states", () => {
+  it("hides a failed update", async () => {
+    const update = fakeUpdate({ download: () => Promise.reject(new Error("error sending request")) });
+    const { flow } = flowWith(() => Promise.resolve(update));
+    await flow.checkAtStartup();
+    await flow.install();
+    flow.dismiss();
+    expect(flow.notice.kind).toBe("none");
+  });
+
+  it("draws nothing when no notice is shown", () => {
+    const { flow, shown } = flowWith(() => Promise.resolve(null));
+    flow.dismiss();
+    expect(shown).toEqual([]);
+  });
+
+  it("does not ask the server again", async () => {
+    const check = vi.fn(() => Promise.resolve(fakeUpdate()));
+    const { flow } = flowWith(check);
+    await flow.checkAtStartup();
+    flow.dismiss();
+    expect(check).toHaveBeenCalledOnce();
+    expect(flow.notice.kind).toBe("none");
+  });
+});
+
+describe("downloadFailure, on the updater's own messages", () => {
+  it.each([
+    "The signature verification failed",
+    "Invalid encoding in minisign data",
+    "Unexpected signature algorithm",
+    "This signature algorithm is not supported by this implementation",
+    "The signature was created with a different key than the one provided",
+    "The signature dW50cnVzdGVk could not be decoded, please check if it is a valid base64 string.",
+    "The update was signed for version 0.3.0 but the update endpoint announced version 0.4.0.",
+    "The update signature does not specify the version it was signed for, which `requireSignedVersion` requires.",
+    "Invalid symbol 45, offset 3.",
+    "Invalid padding",
+  ])("calls %j a signature fault", (message) => {
+    expect(downloadFailure(message)).toBe("signature");
+  });
+
+  it.each([
+    "error sending request for url (https://example.com/app-setup.exe)",
+    "`Download request failed with status: 404 Not Found`",
+    "operation timed out",
+  ])("calls %j a network fault", (message) => {
+    expect(downloadFailure(message)).toBe("network");
+  });
+
+  it("reads an Error object as its message", () => {
+    expect(downloadFailure(new Error("The signature verification failed"))).toBe("signature");
+  });
+});
+
 describe("downloadFailure", () => {
   it("tells a signature fault from a network fault", () => {
     expect(downloadFailure("The signature was created with a different key than the one provided")).toBe("signature");
@@ -156,6 +325,10 @@ describe("runningSessions", () => {
   it("counts started and starting sessions only", () => {
     expect(runningSessions(["running", "starting", "exited", "restored", "failed"])).toBe(2);
   });
+
+  it("counts no session when there is no tab", () => {
+    expect(runningSessions([])).toBe(0);
+  });
 });
 
 describe("update texts", () => {
@@ -163,6 +336,14 @@ describe("update texts", () => {
     expect(messages.updateSessions(0)).toBe("No session is running.");
     expect(messages.updateSessions(1)).toBe("Your running session will stop.");
     expect(messages.updateSessions(3)).toBe("Your 3 running sessions will stop.");
+  });
+
+  it("use the plural from two sessions", () => {
+    expect(messages.updateSessions(2)).toBe("Your 2 running sessions will stop.");
+  });
+
+  it("show a download that has not started", () => {
+    expect(messages.downloadProgress(0, undefined)).toBe("0.0 MB · the app restarts when done");
   });
 
   it("show the download in megabytes", () => {

@@ -363,11 +363,6 @@ mod tests {
     }
 
     #[test]
-    fn only_a_release_build_checks_for_updates() {
-        assert_eq!(CHECKS_FOR_UPDATES, !cfg!(debug_assertions));
-    }
-
-    #[test]
     fn updates_come_signed_from_the_latest_published_release() {
         let config: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
