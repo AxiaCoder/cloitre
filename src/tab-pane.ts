@@ -147,11 +147,16 @@ export class TabPane extends Pane {
       });
     });
     terminal.attachCustomKeyEventHandler((event) => {
-      const decision = decideKey(event);
+      const decision = decideKey(event, terminal.hasSelection());
       if (decision === "terminal") {
         return true;
       }
-      if (decision === "paste") {
+      if (decision === "copy" && event.type === "keydown") {
+        setTimeout(() => {
+          terminal.clearSelection();
+        }, 0);
+      }
+      if (decision === "paste" || decision === "copy") {
         return false;
       }
       event.preventDefault();

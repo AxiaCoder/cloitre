@@ -43,6 +43,7 @@ const fakes = vi.hoisted(() => {
     dataListener: (data: string) => void = () => undefined;
     resizeListener: (size: Size) => void = () => undefined;
     keyHandler: (event: KeyboardEvent) => boolean = () => true;
+    selected = false;
     /** Registers the terminal, with its `options`, so the test can reach it. */
     constructor(readonly options: { disableStdin?: boolean } = {}) {
       state.terminals.push(this);
@@ -62,6 +63,14 @@ const fakes = vi.hoisted(() => {
     /** Keeps the resize listener. */
     onResize(listener: (size: Size) => void): void {
       this.resizeListener = listener;
+    }
+    /** Returns whether the test has set a selection on this terminal. */
+    hasSelection(): boolean {
+      return this.selected;
+    }
+    /** Drops the selection. */
+    clearSelection(): void {
+      this.selected = false;
     }
     /** Keeps the key handler. */
     attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean): void {
@@ -684,6 +693,59 @@ describe("TabPane input", () => {
     expect([press.passed, held.passed, release.passed]).toEqual([false, false, false]);
     expect(press.event.preventDefault).toHaveBeenCalled();
     expect(events).toEqual(["mark"]);
+  });
+
+  it("leaves Ctrl+C to the browser copy with a selection, and sends it to the session without", () => {
+    const { handlers } = recorder();
+    const pane = openPane(1, handlers);
+    const terminal = terminalOf(pane);
+    const ctrlC = () => {
+      const event = {
+        type: "keydown",
+        repeat: false,
+        code: "KeyC",
+        key: "c",
+        keyCode: 67,
+        ctrlKey: true,
+        shiftKey: false,
+        altKey: false,
+        metaKey: false,
+        preventDefault: vi.fn(),
+      };
+      return { event, passed: terminal.keyHandler(event as unknown as KeyboardEvent) };
+    };
+    terminal.selected = true;
+    const copied = ctrlC();
+    terminal.selected = false;
+    const interrupted = ctrlC();
+    expect([copied.passed, interrupted.passed]).toEqual([false, true]);
+    expect(copied.event.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("drops the selection after the browser copy, so the next Ctrl+C interrupts", () => {
+    vi.useFakeTimers();
+    try {
+      const { handlers } = recorder();
+      const terminal = terminalOf(openPane(1, handlers));
+      terminal.selected = true;
+      terminal.keyHandler({
+        type: "keydown",
+        repeat: false,
+        code: "KeyC",
+        key: "c",
+        keyCode: 67,
+        ctrlKey: true,
+        shiftKey: false,
+        altKey: false,
+        metaKey: false,
+        preventDefault: vi.fn(),
+      } as unknown as KeyboardEvent);
+      const selectedDuringCopy = terminal.selected;
+      vi.runAllTimers();
+      expect([selectedDuringCopy, terminal.selected]).toEqual([true, false]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
