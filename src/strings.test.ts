@@ -74,3 +74,41 @@ describe("messages.sessionCount", () => {
     expect(messages.sessionCount(2)).toBe("2 sessions");
   });
 });
+
+describe("messages.removeTitle", () => {
+  it("asks about the project by its name", () => {
+    expect(messages.removeTitle("my-app")).toBe("Remove my-app?");
+  });
+});
+
+describe("messages.removeFailed", () => {
+  it("drops the spaces around Rust's reason before its final period", () => {
+    expect(messages.removeFailed("  the app data could not be saved. \n")).toBe(
+      "The project could not be removed: the app data could not be saved. Nothing has changed. Try again.",
+    );
+  });
+
+  it("keeps a period inside the reason", () => {
+    expect(messages.removeFailed("file a.json is locked")).toBe(
+      "The project could not be removed: file a.json is locked. Nothing has changed. Try again.",
+    );
+  });
+});
+
+describe("messages.removeTabs", () => {
+  it("counts two tabs in the plural", () => {
+    expect(messages.removeTabs(2)).toBe("Its 2 tabs will close and their sessions will stop.");
+  });
+});
+
+describe("the project menu texts", () => {
+  it("name the switch, the remove entry and the dialog buttons", () => {
+    expect([texts.markerShow, texts.removeProjectEntry, texts.cancel, texts.confirmRemove, texts.folderStays]).toEqual([
+      "Show",
+      "Remove project…",
+      "Cancel",
+      "Remove project",
+      "The folder stays on disk:",
+    ]);
+  });
+});

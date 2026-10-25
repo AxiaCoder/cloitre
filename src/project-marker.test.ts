@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
-import { MARKER_ICON_PATHS } from "./marker-icons";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MARKER_ICON_PATHS, markerIcon, outlineDrawing } from "./marker-icons";
 import { FALLBACK_ICON, MARKER_COLORS, MARKER_ICONS, markerColorValue, projectInitials } from "./project-marker";
 
 const TOKENS = readFileSync(new URL("./tokens.css", import.meta.url), "utf8");
@@ -126,3 +126,62 @@ describe("marker icons", () => {
     expect(MARKER_ICONS).toContain(FALLBACK_ICON);
   });
 });
+
+describe("outline drawings", () => {
+  beforeEach(() => {
+    vi.stubGlobal("document", {
+      createElementNS: (namespace: string, tagName: string) => new FakeSvgElement(namespace, tagName),
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("draws the given path data, with the attributes of a marker icon", () => {
+    const drawing = outlineDrawing("M1 1h22") as unknown as FakeSvgElement;
+    const icon = markerIcon(FALLBACK_ICON) as unknown as FakeSvgElement;
+    expect(drawing.tagName).toBe("svg");
+    expect(drawing.namespace).toBe("http://www.w3.org/2000/svg");
+    expect(drawing.attributes).toEqual(icon.attributes);
+    expect(drawing.classes).toEqual(["marker-icon"]);
+    expect(drawing.children.map((child) => [child.tagName, child.attributes])).toEqual([
+      ["path", { d: "M1 1h22" }],
+    ]);
+  });
+
+  it("draws a catalog icon from its path data", () => {
+    const icon = markerIcon(FALLBACK_ICON) as unknown as FakeSvgElement;
+    expect(icon.children.map((child) => child.attributes)).toEqual([{ d: MARKER_ICON_PATHS[FALLBACK_ICON] }]);
+  });
+
+  it("gives an empty drawing for an unknown icon", () => {
+    const icon = markerIcon("no-such-icon") as unknown as FakeSvgElement;
+    expect(icon.children.map((child) => child.attributes)).toEqual([{ d: "" }]);
+  });
+});
+
+/** An SVG element that keeps its attributes, classes and children for inspection. */
+class FakeSvgElement {
+  attributes: Record<string, string> = {};
+  classes: string[] = [];
+  children: FakeSvgElement[] = [];
+  readonly classList = {
+    add: (...names: string[]): void => {
+      this.classes.push(...names);
+    },
+  };
+  /** Creates an element of tag `tagName` in `namespace`. */
+  constructor(
+    readonly namespace: string,
+    readonly tagName: string,
+  ) {}
+  /** Sets attribute `name` to `value`. */
+  setAttribute(name: string, value: string): void {
+    this.attributes[name] = value;
+  }
+  /** Appends `nodes` as children. */
+  append(...nodes: FakeSvgElement[]): void {
+    this.children.push(...nodes);
+  }
+}
