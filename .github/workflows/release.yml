@@ -58,14 +58,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
           $installer = Get-ChildItem src-tauri/target/release/bundle/nsis/Cloitre_*_x64-setup.exe
           if (@($installer).Count -ne 1) { throw "expected one installer, found $(@($installer).Count)" }
           $signature = Get-Item "$($installer.FullName).sig"
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          $notes = gh release view $env:TAG_NAME --json body --jq .body
+          $notes = (gh release view $env:TAG_NAME --json body --jq .body) -join "`n"
+          if ($LASTEXITCODE -ne 0) { throw "reading the release notes failed" }
           $manifest = [ordered]@{
             version = $version
-            notes = ($notes -join "`n")
+            notes = ($notes -split "`n## Checks`n")[0].TrimEnd()
             pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
             platforms = [ordered]@{
               "windows-x86_64" = [ordered]@{
@@ -76,8 +78,11 @@ jobs:
           }
           $manifest | ConvertTo-Json -Depth 4 | Set-Content latest.json -Encoding utf8NoBOM
           gh release upload $env:TAG_NAME $installer.FullName $signature.FullName latest.json --clobber
+          if ($LASTEXITCODE -ne 0) { throw "uploading the release files failed" }
 
       # Exit codes of MpCmdRun -Scan: 0 no threat, 2 threat found.
+      # The runner image excludes C:\ and D:\ from Defender and turns off archive scanning.
+      # The EICAR test file proves the scan inspects files before the installer is scanned.
       - name: scan the installer with Microsoft Defender, publish the checksums and note both in the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -92,6 +97,15 @@ jobs:
           & $mpcmdrun -SignatureUpdate | Out-Host
           if ($LASTEXITCODE -ne 0) { throw "Defender definitions update failed with $LASTEXITCODE" }
           $definitions = (Get-MpComputerStatus).AntivirusSignatureVersion
+
+          Remove-MpPreference -ExclusionPath (Get-MpPreference).ExclusionPath -ErrorAction SilentlyContinue
+          Set-MpPreference -DisableArchiveScanning $false
+          if ((Get-MpPreference).ExclusionPath) { throw "Defender still has path exclusions: $((Get-MpPreference).ExclusionPath -join ', ')" }
+          $eicar = Join-Path $env:RUNNER_TEMP 'eicar.com'
+          [IO.File]::WriteAllBytes($eicar, [Convert]::FromBase64String('WDVPIVAlQEFQWzRcUFpYNTQoUF4pN0NDKTd9JEVJQ0FSLVNUQU5EQVJELUFOVElWSVJVUy1URVNULUZJTEUhJEgrSCo='))
+          & $mpcmdrun -Scan -ScanType 3 -File $eicar -DisableRemediation | Out-Host
+          if ($LASTEXITCODE -ne 2) { throw "Defender did not detect the EICAR test file (exit $LASTEXITCODE): its scan cannot be trusted" }
+
           & $mpcmdrun -Scan -ScanType 3 -File $installer.FullName -DisableRemediation | Out-Host
           $scanExitCode = $LASTEXITCODE
           $verdict = switch ($scanExitCode) {

@@ -12,7 +12,7 @@ Cloître is an independent project, not affiliated with or endorsed by Anthropic
 
 1. Download `Cloitre_<version>_x64-setup.exe` from the [latest release](https://github.com/AxiaCoder/cloitre/releases/latest).
 2. Optionally, [check the download](#check-the-download).
-3. Run it. It installs for your Windows account only, in `%LOCALAPPDATA%\Cloitre`, and asks for no administrator rights. It adds Cloître to the Start menu and the desktop.
+3. Run it. It installs for your Windows account only, in `%LOCALAPPDATA%\Cloitre`, and asks for no administrator rights. It adds Cloitre to the Start menu and the desktop.
 
 The installed app then offers each new release itself.
 
@@ -37,7 +37,7 @@ The result must match the line of `SHA256SUMS.txt` for that file (PowerShell pri
 
 ### Uninstall
 
-Settings, Apps, Installed apps, Cloître, Uninstall. The uninstaller shows a **Delete the application data** box, unticked by default:
+Settings, Apps, Installed apps, Cloitre, Uninstall. The uninstaller shows a **Delete the application data** box, unticked by default:
 
 - unticked, your projects, tabs and settings stay in the [data folder](#data-folder) and come back if you reinstall;
 - ticked, the data folder is deleted too.
