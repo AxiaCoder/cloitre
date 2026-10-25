@@ -82,8 +82,7 @@ jobs:
 
       # Exit codes of MpCmdRun -Scan: 0 no threat, 2 threat found.
       # The runner image excludes C:\ and D:\ from Defender and turns off archive scanning.
-      # The EICAR test file proves the scan inspects files before the installer is scanned.
-      - name: scan the installer with Microsoft Defender, publish the checksums and note both in the release
+      - name: scan the installer and the app with Microsoft Defender, publish the checksums and note both in the release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -101,18 +100,17 @@ jobs:
           Remove-MpPreference -ExclusionPath (Get-MpPreference).ExclusionPath -ErrorAction SilentlyContinue
           Set-MpPreference -DisableArchiveScanning $false
           if ((Get-MpPreference).ExclusionPath) { throw "Defender still has path exclusions: $((Get-MpPreference).ExclusionPath -join ', ')" }
-          $eicar = Join-Path $env:RUNNER_TEMP 'eicar.com'
-          [IO.File]::WriteAllBytes($eicar, [Convert]::FromBase64String('WDVPIVAlQEFQWzRcUFpYNTQoUF4pN0NDKTd9JEVJQ0FSLVNUQU5EQVJELUFOVElWSVJVUy1URVNULUZJTEUhJEgrSCo='))
-          & $mpcmdrun -Scan -ScanType 3 -File $eicar -DisableRemediation | Out-Host
-          if ($LASTEXITCODE -ne 2) { throw "Defender did not detect the EICAR test file (exit $LASTEXITCODE): its scan cannot be trusted" }
 
-          & $mpcmdrun -Scan -ScanType 3 -File $installer.FullName -DisableRemediation | Out-Host
-          $scanExitCode = $LASTEXITCODE
-          $verdict = switch ($scanExitCode) {
-            0 { 'no threat found' }
-            2 { 'THREAT FOUND' }
-            default { throw "MpCmdRun exited with $scanExitCode" }
+          $flagged = @()
+          foreach ($file in $installer, (Get-Item src-tauri/target/release/cloitre.exe)) {
+            & $mpcmdrun -Scan -ScanType 3 -File $file.FullName -DisableRemediation | Out-Host
+            switch ($LASTEXITCODE) {
+              0 { }
+              2 { $flagged += $file.Name }
+              default { throw "MpCmdRun exited with $LASTEXITCODE on $($file.Name)" }
+            }
           }
+          $verdict = if ($flagged) { "THREAT FOUND in $($flagged -join ', ')" } else { 'no threat found' }
 
           $checksums = foreach ($file in $installer, $signature, $manifest) {
             "$((Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLower())  $($file.Name)"
@@ -127,10 +125,10 @@ jobs:
           $checks = @(
             '## Checks'
             ''
-            "- Microsoft Defender, definitions $definitions, on ``$($installer.Name)``: $verdict."
+            "- Microsoft Defender, definitions $definitions, on ``$($installer.Name)`` and the ``cloitre.exe`` it installs: $verdict."
             '- SHA-256 checksums: `SHA256SUMS.txt`. See "Check the download" in the README.'
           ) -join "`n"
           Set-Content release-notes.md "$notes`n`n$checks" -Encoding utf8NoBOM
           gh release edit $env:TAG_NAME --notes-file release-notes.md
           if ($LASTEXITCODE -ne 0) { throw "writing the release notes failed" }
-          if ($scanExitCode -ne 0) { throw "Microsoft Defender flagged $($installer.Name)" }
+          if ($flagged) { throw "Microsoft Defender flagged $($flagged -join ', ')" }

@@ -31,7 +31,11 @@ The installer is not signed with a code signing certificate, so Microsoft Defend
 
 Once the download is kept, the installer runs without a further warning. With another browser, Windows may stop the installer when it starts instead, with a blue **Windows protected your PC** window: click **More info**, then **Run anyway**.
 
-The warning comes from the missing signature, not from something found in the file. Each release's notes give the result of a Microsoft Defender scan of its installer, and you can check that your download is the file that was scanned.
+The warning comes from the missing signature, not from something found in the file. Each release's notes give the result of a Microsoft Defender scan of its installer and of the app it installs, and you can check that your download is the file that was scanned.
+
+### If Microsoft Defender removes Cloitre
+
+Version 0.3.0 is detected by Microsoft Defender as `Trojan:Win32/Bearfoos.A!ml` once installed: Defender removes `cloitre.exe`, its shortcuts and its uninstall entry, sometimes with no visible notice. The `!ml` suffix marks a machine-learning verdict, not a known malware signature. It is a false positive and has been submitted to Microsoft for review. Your projects and tabs are not touched: they stay in the [data folder](#data-folder).
 
 ### Check the download
 
