@@ -10,7 +10,8 @@
     "tauri": "tauri",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "bump-version": "node scripts/bump-version.js"
   },
   "dependencies": {
     "@fontsource/ibm-plex-sans": "^5.3.0",

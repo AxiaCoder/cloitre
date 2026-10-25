@@ -77,11 +77,14 @@ fn stops_sessions(event: PageLoadEvent) -> bool {
 }
 
 /// Gives `config` the identity of this build: its [`session::IDENTIFIER`],
-/// and in a development build ` (dev)` after every window title.
+/// the app version after every window title, and in a development build
+/// ` (dev)` after that.
 fn apply_build_identity(config: &mut tauri::Config) {
     config.identifier = session::IDENTIFIER.to_owned();
-    if cfg!(debug_assertions) {
-        for window in &mut config.app.windows {
+    for window in &mut config.app.windows {
+        window.title.push(' ');
+        window.title.push_str(env!("CARGO_PKG_VERSION"));
+        if cfg!(debug_assertions) {
             window.title.push_str(" (dev)");
         }
     }
@@ -187,17 +190,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn build_identity_sets_the_identifier_and_marks_development_titles() {
+    fn build_identity_sets_the_identifier_versions_and_marks_development_titles() {
         let mut config: tauri::Config =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         apply_build_identity(&mut config);
         assert_eq!(config.identifier, session::IDENTIFIER);
+        let version = env!("CARGO_PKG_VERSION");
         let expected = if cfg!(debug_assertions) {
-            "Cloître (dev)"
+            format!("Cloître {version} (dev)")
         } else {
-            "Cloître"
+            format!("Cloître {version}")
         };
         assert_eq!(config.app.windows[0].title, expected);
+    }
+
+    #[test]
+    fn cargo_version_matches_package_json() {
+        let package: serde_json::Value =
+            serde_json::from_str(include_str!("../../package.json")).unwrap();
+        assert_eq!(
+            package["version"].as_str(),
+            Some(env!("CARGO_PKG_VERSION")),
+            "src-tauri/Cargo.toml and package.json disagree on the version: run `pnpm bump-version <X.Y.Z>`"
+        );
+    }
+
+    #[test]
+    fn tauri_config_takes_its_version_from_package_json() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(config["version"], "../package.json");
     }
 
     #[test]
