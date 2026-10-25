@@ -6,7 +6,7 @@ export const MARKER_COLORS: readonly string[] = catalog.colors;
 /** The marker icons a project may take. */
 export const MARKER_ICONS: readonly string[] = catalog.icons;
 
-/** The icon a color marker shows when the project name has no letter to show. */
+/** The icon a marker shows instead of the initials when the project name has no letter. */
 export const FALLBACK_ICON = "folder";
 
 /** The CSS value of marker color `color`, a name of {@link MARKER_COLORS}. */

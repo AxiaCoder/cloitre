@@ -186,7 +186,7 @@ impl ProjectStore {
     /// Opens the store saved at `file`.
     ///
     /// A missing file gives an empty list. A file that cannot be read or parsed,
-    /// or that has another format version, is copied aside (see
+    /// or that has a format version other than 1 or 2, is copied aside (see
     /// [`unreadable_copy_path`]) and the store starts empty, with a warning
     /// returned by [`ProjectStore::list`]. When that copy fails too, the store
     /// also refuses every change until the app restarts, so the file is never

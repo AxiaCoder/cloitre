@@ -1109,7 +1109,8 @@ function openUpdateDialog(version: string): Promise<boolean> {
 /**
  * Gives project `projectId` marker color `color`, `null` for no color, and
  * marker icon `icon`, `null` for the initials, then redraws the rail with the
- * project Rust returns and opens its marker menu again, focused on grid `grid`.
+ * project Rust returns and, when its menu is still open and no remove dialog
+ * is, opens it again, focused on grid `grid`.
  */
 async function chooseMarker(
   projectId: number,
@@ -1117,9 +1118,14 @@ async function chooseMarker(
   icon: string | null,
   grid: MarkerGridName,
 ): Promise<void> {
+  const menu = markerMenu;
   const updated = await setProjectMarker(projectId, color, icon);
+  const reopen = menu !== undefined && markerMenu === menu && removeDialog === undefined;
   projects = projects.map((project) => (project.id === updated.id ? updated : project));
   renderProjects();
+  if (!reopen) {
+    return;
+  }
   const button = projectButton(projectId);
   if (button === null) {
     return;
