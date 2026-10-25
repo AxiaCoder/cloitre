@@ -83,12 +83,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
           $installer = Get-ChildItem src-tauri/target/release/bundle/nsis/Cloitre_*_x64-setup.exe
           $signature = Get-Item "$($installer.FullName).sig"
           $manifest = Get-Item latest.json
 
           $mpcmdrun = Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe'
           & $mpcmdrun -SignatureUpdate | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw "Defender definitions update failed with $LASTEXITCODE" }
           $definitions = (Get-MpComputerStatus).AntivirusSignatureVersion
           & $mpcmdrun -Scan -ScanType 3 -File $installer.FullName -DisableRemediation | Out-Host
           $scanExitCode = $LASTEXITCODE
@@ -103,8 +105,11 @@ jobs:
           }
           Set-Content SHA256SUMS.txt (($checksums -join "`n") + "`n") -NoNewline -Encoding utf8NoBOM
           gh release upload $env:TAG_NAME SHA256SUMS.txt --clobber
+          if ($LASTEXITCODE -ne 0) { throw "uploading SHA256SUMS.txt failed" }
 
           $notes = (gh release view $env:TAG_NAME --json body --jq .body) -join "`n"
+          if ($LASTEXITCODE -ne 0) { throw "reading the release notes failed" }
+          $notes = ($notes -split "`n## Checks`n")[0].TrimEnd()
           $checks = @(
             '## Checks'
             ''
@@ -113,4 +118,5 @@ jobs:
           ) -join "`n"
           Set-Content release-notes.md "$notes`n`n$checks" -Encoding utf8NoBOM
           gh release edit $env:TAG_NAME --notes-file release-notes.md
+          if ($LASTEXITCODE -ne 0) { throw "writing the release notes failed" }
           if ($scanExitCode -ne 0) { throw "Microsoft Defender flagged $($installer.Name)" }
