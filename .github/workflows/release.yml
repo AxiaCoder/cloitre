@@ -81,7 +81,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "uploading the release files failed" }
 
       # Exit codes of MpCmdRun -Scan: 0 no threat, 2 threat found.
-      # The runner image excludes C:\ and D:\ from Defender and turns off archive scanning.
+      # The runner image excludes C:\ and D:\ from Defender and turns off archive scanning and cloud protection.
       - name: scan the installer and the app with Microsoft Defender, publish the checksums and note both in the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -98,7 +98,7 @@ jobs:
           $definitions = (Get-MpComputerStatus).AntivirusSignatureVersion
 
           Remove-MpPreference -ExclusionPath (Get-MpPreference).ExclusionPath -ErrorAction SilentlyContinue
-          Set-MpPreference -DisableArchiveScanning $false
+          Set-MpPreference -DisableArchiveScanning $false -MAPSReporting Advanced -SubmitSamplesConsent NeverSend -DisableBlockAtFirstSeen $false
           if ((Get-MpPreference).ExclusionPath) { throw "Defender still has path exclusions: $((Get-MpPreference).ExclusionPath -join ', ')" }
 
           $flagged = @()
