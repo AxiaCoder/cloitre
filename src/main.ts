@@ -36,6 +36,8 @@ import type { SpawnMode } from "./pty";
 import { ReplayDeck, type LoadedReplay } from "./replay-deck";
 import { fillTexts, messages, texts } from "./strings";
 import { closeWarning, NO_WARNING, warningText as shownWarning, type WarningState } from "./warning-bar";
+import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
+import { runningSessions, UpdateFlow, type UpdateNotice } from "./updates";
 import { ReplayPane, TabPane } from "./tab-pane";
 import { afterRefusedStart, TabModel, type Tab, type TabState } from "./tabs";
 import { markerIcon, outlineDrawing } from "./marker-icons";
@@ -74,6 +76,8 @@ const warningText = element("warning-text", HTMLSpanElement);
 const warningClose = element("warning-close", HTMLButtonElement);
 const projectList = element("project-list", HTMLUListElement);
 const addProjectButton = element("add-project", HTMLButtonElement);
+const updateNotice = element("update-notice", HTMLDivElement);
+const updateCompact = element("update-compact", HTMLButtonElement);
 const emptyState = element("empty-state", HTMLElement);
 const emptyOpenButton = element("empty-open", HTMLButtonElement);
 const missingState = element("missing-state", HTMLElement);
@@ -121,12 +125,16 @@ let replayPane: ReplayPane | undefined;
 let markerMenu: { element: HTMLDivElement; anchor: HTMLButtonElement } | undefined;
 /** The open remove dialog, its dimmed backdrop, and the project it removes, while one is open. */
 let removeDialog: { element: HTMLDivElement; projectId: number } | undefined;
+/** The open update dialog and the button it opened from, while one is open. */
+let updateDialog: { element: HTMLDivElement; opener: HTMLButtonElement } | undefined;
 /** Keeps a double click on a close button from closing the next tab too. */
 const closeGuard = new CloseGuard();
 /** The ids of the projects whose new tab Rust is still creating. */
 const opening = new Set<number>();
 /** Settles once the terminal fonts are loaded, or failed to load; a terminal opened before would measure the fallback font. */
 const fontsReady = loadTerminalFonts();
+/** The update offered at startup, from the notice to the install. */
+const updateFlow = new UpdateFlow({ check: () => checkForUpdate(), stopSessions: stopAllSessions, show: renderUpdate });
 
 /** Returns the active tab of the selected project, if any. */
 function activeTab(): Tab | undefined {
@@ -904,6 +912,209 @@ async function confirmRemoval(
   (projectList.querySelector<HTMLButtonElement>(".project.active") ?? addProjectButton).focus();
 }
 
+/** The path data of the update notice's arrow, a 24×24 outline like the marker icons. */
+const UPDATE_PATH = "M12 19V5M5 12l7-7 7 7";
+/** The path data of the warning drawing of a failed update. */
+const WARNING_PATH = "M12 3 2 20h20zM12 10v4M12 17v.01";
+
+/** Returns how many session tabs, of every project, run a session now. */
+function runningSessionCount(): number {
+  const states = projects.flatMap((project) =>
+    tabs.tabsOf(project.id).flatMap((tab) => (tab.kind === "session" ? [tab.state] : [])),
+  );
+  return runningSessions(states);
+}
+
+/** Stops the session of every session tab, keeping the tabs saved for the next run. */
+async function stopAllSessions(): Promise<void> {
+  const stops = [...panes.values()].flatMap((pane) => (pane instanceof TabPane ? [pane.slot.stop()] : []));
+  await Promise.all(stops);
+}
+
+/** The text under the title of update notice `notice`, which is not `"none"`. */
+function updateDetail(notice: Exclude<UpdateNotice, { kind: "none" }>): string {
+  switch (notice.kind) {
+    case "available":
+      return messages.updateCurrent(notice.current);
+    case "downloading":
+      return messages.downloadProgress(notice.received, notice.total);
+    case "failed":
+      switch (notice.reason) {
+        case "signature":
+          return texts.updateSignatureFailed;
+        case "network":
+          return texts.updateNetworkFailed;
+        case "install":
+          return texts.updateInstallFailed;
+      }
+  }
+}
+
+/** The title of update notice `notice`, which is not `"none"`. */
+function updateTitle(notice: Exclude<UpdateNotice, { kind: "none" }>): string {
+  switch (notice.kind) {
+    case "available":
+      return messages.updateAvailable(notice.version);
+    case "downloading":
+      return messages.downloadingUpdate(notice.version);
+    case "failed":
+      return texts.updateFailedTitle;
+  }
+}
+
+/** Draws update notice `notice` in the rail, wide and narrow; `"none"` hides both. */
+function renderUpdate(notice: UpdateNotice): void {
+  updateNotice.replaceChildren();
+  updateCompact.replaceChildren();
+  updateNotice.hidden = notice.kind === "none";
+  updateCompact.hidden = notice.kind === "none";
+  if (notice.kind === "none") {
+    return;
+  }
+  const failed = notice.kind === "failed";
+  updateNotice.classList.toggle("failed", failed);
+  updateCompact.classList.toggle("failed", failed);
+  const icon = document.createElement("span");
+  icon.className = "update-icon";
+  icon.append(outlineDrawing(failed ? WARNING_PATH : UPDATE_PATH));
+  const title = document.createElement("p");
+  title.className = "update-title";
+  title.textContent = updateTitle(notice);
+  const detail = document.createElement("p");
+  detail.className = "update-detail";
+  detail.textContent = updateDetail(notice);
+  const text = document.createElement("div");
+  text.className = "update-text";
+  text.append(title, detail);
+  const head = document.createElement("div");
+  head.className = "update-head";
+  head.append(icon, text);
+  if (notice.kind !== "downloading") {
+    const hide = document.createElement("button");
+    hide.type = "button";
+    hide.className = "update-hide";
+    hide.textContent = "×";
+    hide.setAttribute("aria-label", texts.updateHide);
+    hide.title = texts.updateHide;
+    hide.addEventListener("click", () => {
+      updateFlow.dismiss();
+      addProjectButton.focus();
+    });
+    head.append(hide);
+  }
+  updateNotice.append(head);
+  if (notice.kind === "downloading") {
+    const percent = notice.total ? Math.min(100, Math.round((notice.received / notice.total) * 100)) : 0;
+    const bar = document.createElement("div");
+    bar.className = "update-bar";
+    bar.setAttribute("role", "progressbar");
+    bar.setAttribute("aria-label", title.textContent);
+    bar.setAttribute("aria-valuemin", "0");
+    bar.setAttribute("aria-valuemax", "100");
+    bar.setAttribute("aria-valuenow", String(percent));
+    const fill = document.createElement("div");
+    fill.className = "update-fill";
+    fill.style.width = `${String(percent)}%`;
+    bar.append(fill);
+    updateNotice.append(bar);
+  } else {
+    const action = document.createElement("button");
+    action.type = "button";
+    action.className = "update-action";
+    action.textContent = failed ? texts.tryAgain : texts.installUpdate;
+    action.addEventListener("click", () => {
+      if (failed) {
+        void updateFlow.install();
+      } else {
+        openUpdateDialog(notice.version, action);
+      }
+    });
+    updateNotice.append(action);
+  }
+  const label =
+    notice.kind === "available" ? messages.updateCompact(notice.version) : `${title.textContent}. ${detail.textContent}`;
+  updateCompact.setAttribute("aria-label", label);
+  updateCompact.title = label;
+  updateCompact.setAttribute("aria-disabled", String(notice.kind === "downloading"));
+  updateCompact.append(outlineDrawing(failed ? WARNING_PATH : UPDATE_PATH));
+}
+
+/** Closes the update dialog, if one is open, without moving the focus. */
+function closeUpdateDialog(): void {
+  const open = updateDialog;
+  updateDialog = undefined;
+  open?.element.remove();
+}
+
+/** Closes the update dialog, if one is open, changing nothing, and gives focus back to the button it opened from. */
+function dismissUpdateDialog(): void {
+  if (updateDialog !== undefined) {
+    const { opener } = updateDialog;
+    closeUpdateDialog();
+    opener.focus();
+  }
+}
+
+/**
+ * Opens, over a dimmed window, the dialog that confirms the install of
+ * `version`: it says the app restarts and how many running sessions stop,
+ * and focuses Cancel. Escape, Cancel or a click on the dimmed area close it,
+ * change nothing and give focus back to `opener`.
+ */
+function openUpdateDialog(version: string, opener: HTMLButtonElement): void {
+  closeUpdateDialog();
+  const running = runningSessionCount();
+  const scrim = document.createElement("div");
+  scrim.className = "dialog-scrim";
+  const dialog = document.createElement("div");
+  dialog.className = "remove-dialog";
+  dialog.tabIndex = -1;
+  dialog.setAttribute("role", "alertdialog");
+  dialog.setAttribute("aria-modal", "true");
+  dialog.setAttribute("aria-labelledby", "update-dialog-title");
+  dialog.setAttribute("aria-describedby", "update-dialog-text");
+  const title = document.createElement("h2");
+  title.id = "update-dialog-title";
+  title.className = "remove-title";
+  title.textContent = messages.installTitle(version);
+  const text = document.createElement("p");
+  text.id = "update-dialog-text";
+  const sessions = document.createElement("strong");
+  sessions.textContent = messages.updateSessions(running);
+  text.append(`${texts.updateRestarts} `, sessions);
+  if (running > 0) {
+    text.append(` ${texts.updateTabsComeBack}`);
+  }
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.textContent = texts.cancel;
+  cancel.addEventListener("click", dismissUpdateDialog);
+  const confirm = document.createElement("button");
+  confirm.type = "button";
+  confirm.className = "info";
+  confirm.textContent = texts.installAndRestart;
+  confirm.addEventListener("click", () => {
+    closeUpdateDialog();
+    void updateFlow.install();
+  });
+  const actions = document.createElement("div");
+  actions.className = "remove-actions";
+  actions.append(cancel, confirm);
+  dialog.append(title, text, actions);
+  dialog.addEventListener("keydown", (event) => {
+    trapFocus(dialog, event);
+  });
+  scrim.append(dialog);
+  scrim.addEventListener("click", (event) => {
+    if (event.target === scrim) {
+      dismissUpdateDialog();
+    }
+  });
+  document.body.append(scrim);
+  updateDialog = { element: scrim, opener };
+  cancel.focus();
+}
+
 /**
  * Gives project `projectId` marker `color` and `icon`, `null` for the color
  * marker, then redraws the rail with the project Rust returns.
@@ -1257,9 +1468,20 @@ unicodeSelect.addEventListener("change", () => {
   }
 });
 
+updateCompact.addEventListener("click", () => {
+  const notice = updateFlow.notice;
+  if (notice.kind === "available") {
+    openUpdateDialog(notice.version, updateCompact);
+  } else if (notice.kind === "failed") {
+    void updateFlow.install();
+  }
+});
+
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
-    if (removeDialog === undefined) {
+    if (updateDialog !== undefined) {
+      dismissUpdateDialog();
+    } else if (removeDialog === undefined) {
       dismissMarkerMenu();
     } else {
       dismissRemoveDialog();
@@ -1315,3 +1537,4 @@ report(async () => {
   await fontsReady;
   await restoreAllTabs();
 });
+void updateFlow.checkAtStartup();

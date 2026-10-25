@@ -46,14 +46,33 @@ jobs:
       - name: conpty files
         run: ./scripts/check-conpty.ps1
 
-      - name: build the NSIS installer
+      - name: build the signed NSIS installer
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm tauri build --bundles nsis
 
-      - name: attach the installer to the draft release
+      # The installed apps read latest.json from the latest published release.
+      - name: attach the installer, its signature and latest.json to the draft release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           $installer = Get-ChildItem src-tauri/target/release/bundle/nsis/Cloitre_*_x64-setup.exe
           if (@($installer).Count -ne 1) { throw "expected one installer, found $(@($installer).Count)" }
-          gh release upload $env:TAG_NAME $installer.FullName --clobber
+          $signature = Get-Item "$($installer.FullName).sig"
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $notes = gh release view $env:TAG_NAME --json body --jq .body
+          $manifest = [ordered]@{
+            version = $version
+            notes = ($notes -join "`n")
+            pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            platforms = [ordered]@{
+              "windows-x86_64" = [ordered]@{
+                signature = (Get-Content $signature.FullName -Raw).Trim()
+                url = "https://github.com/$env:GH_REPO/releases/download/$env:TAG_NAME/$($installer.Name)"
+              }
+            }
+          }
+          $manifest | ConvertTo-Json -Depth 4 | Set-Content latest.json -Encoding utf8NoBOM
+          gh release upload $env:TAG_NAME $installer.FullName $signature.FullName latest.json --clobber

@@ -6,8 +6,19 @@ Releases are cut by [Release Please](https://github.com/googleapis/release-pleas
 
 1. Every pull request title follows [Conventional Commits](https://www.conventionalcommits.org/) (`feat: …`, `fix: …`, `feat!: …`). Pull requests are squash-merged, so the title becomes the commit on `main`. `pr-title.yml` checks it.
 2. On each push to `main`, `release.yml` opens or updates a release pull request. It bumps the version in `package.json`, `src-tauri/Cargo.toml` and `src-tauri/Cargo.lock`, and writes `CHANGELOG.md`. Before 1.0.0, `feat` bumps the minor version and `fix` the patch version.
-3. Merging the release pull request creates the tag `vX.Y.Z` and a **draft** GitHub release. The `build` job then builds the NSIS installer from that tag and attaches it to the draft.
+3. Merging the release pull request creates the tag `vX.Y.Z` and a **draft** GitHub release. The `build` job then builds the NSIS installer from that tag, signs it with the updater key, and attaches to the draft the installer, its signature (`.exe.sig`) and `latest.json`, the file the installed apps read to find an update.
 4. Check the draft by hand: download the installer, install it, run it. If it works, publish the release from the GitHub interface.
+
+The installed apps look at `releases/latest`, which ignores drafts: they offer the update only once the release is published.
+
+## The updater signing key
+
+The installed apps install an update only when its signature matches the public key they were built with (`plugins.updater.pubkey` in `src-tauri/tauri.conf.json`).
+
+- The maintainer generates the key pair once with `pnpm tauri signer generate`, with a password.
+- The private key and its password exist in two copies: the Actions secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, and the maintainer's password manager. GitHub never shows a secret again, so the password manager copy is the only one that can be read back.
+- If the private key is lost, updates signed with a new key cannot be verified by the installed apps: every user reinstalls once by hand, from an installer downloaded from the release page.
+- Rotating the key means a release whose `pubkey` is the new public key, installed by hand by every user; the releases after it are signed with the new key.
 
 ## The `RELEASE_PLEASE_TOKEN` secret
 
