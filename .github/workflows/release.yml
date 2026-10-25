@@ -76,3 +76,41 @@ jobs:
           }
           $manifest | ConvertTo-Json -Depth 4 | Set-Content latest.json -Encoding utf8NoBOM
           gh release upload $env:TAG_NAME $installer.FullName $signature.FullName latest.json --clobber
+
+      # Exit codes of MpCmdRun -Scan: 0 no threat, 2 threat found.
+      - name: scan the installer with Microsoft Defender, publish the checksums and note both in the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $installer = Get-ChildItem src-tauri/target/release/bundle/nsis/Cloitre_*_x64-setup.exe
+          $signature = Get-Item "$($installer.FullName).sig"
+          $manifest = Get-Item latest.json
+
+          $mpcmdrun = Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe'
+          & $mpcmdrun -SignatureUpdate | Out-Host
+          $definitions = (Get-MpComputerStatus).AntivirusSignatureVersion
+          & $mpcmdrun -Scan -ScanType 3 -File $installer.FullName -DisableRemediation | Out-Host
+          $scanExitCode = $LASTEXITCODE
+          $verdict = switch ($scanExitCode) {
+            0 { 'no threat found' }
+            2 { 'THREAT FOUND' }
+            default { throw "MpCmdRun exited with $scanExitCode" }
+          }
+
+          $checksums = foreach ($file in $installer, $signature, $manifest) {
+            "$((Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLower())  $($file.Name)"
+          }
+          Set-Content SHA256SUMS.txt (($checksums -join "`n") + "`n") -NoNewline -Encoding utf8NoBOM
+          gh release upload $env:TAG_NAME SHA256SUMS.txt --clobber
+
+          $notes = (gh release view $env:TAG_NAME --json body --jq .body) -join "`n"
+          $checks = @(
+            '## Checks'
+            ''
+            "- Microsoft Defender, definitions $definitions, on ``$($installer.Name)``: $verdict."
+            '- SHA-256 checksums: `SHA256SUMS.txt`. See "Check the download" in the README.'
+          ) -join "`n"
+          Set-Content release-notes.md "$notes`n`n$checks" -Encoding utf8NoBOM
+          gh release edit $env:TAG_NAME --notes-file release-notes.md
+          if ($scanExitCode -ne 0) { throw "Microsoft Defender flagged $($installer.Name)" }
