@@ -1,0 +1,29 @@
+# Changelog
+
+## [0.2.0](https://github.com/AxiaCoder/cloitre/compare/v0.1.0...v0.2.0) (2026-10-25)
+
+
+### Features
+
+* **app:** a development build runs beside the installed app, with its own data folder and a (dev) title ([#45](https://github.com/AxiaCoder/cloitre/issues/45)) ([14013aa](https://github.com/AxiaCoder/cloitre/commit/14013aa729172caadbb48ebe3ce1cfadcf2f3224))
+* **app:** launching the app while it runs focuses the running window instead of starting a second instance ([#32](https://github.com/AxiaCoder/cloitre/issues/32)) ([080a62a](https://github.com/AxiaCoder/cloitre/commit/080a62a3d011caa8e535ae7c2bc3011cc9978cbb))
+* Claude Code runs in an xterm.js window, and the status line corruption is traced to emoji widths ([#13](https://github.com/AxiaCoder/cloitre/issues/13)) ([6db0168](https://github.com/AxiaCoder/cloitre/commit/6db0168fbef7aab6e618c4f3b8e3b017f73dd257))
+* **launch:** claude is found outside a terminal PATH, and the permission list is a tested guarantee ([#21](https://github.com/AxiaCoder/cloitre/issues/21)) ([78aeae3](https://github.com/AxiaCoder/cloitre/commit/78aeae35f0456ee7d24f35f997afc4e214c52024))
+* **projects:** a project is always selected when one exists, and the last one comes back on reopen ([#29](https://github.com/AxiaCoder/cloitre/issues/29)) ([7a8efd5](https://github.com/AxiaCoder/cloitre/commit/7a8efd518a6010033d480900df828ff18d2ac538))
+* **projects:** claude starts only in a registered project folder, and the list survives a restart ([#22](https://github.com/AxiaCoder/cloitre/issues/22)) ([4de5bdd](https://github.com/AxiaCoder/cloitre/commit/4de5bdd5b24277434a437680c4208ba6b1e4d07d))
+* **projects:** each project shows a stored color or an icon, chosen from a right-click menu ([#34](https://github.com/AxiaCoder/cloitre/issues/34)) ([4947b35](https://github.com/AxiaCoder/cloitre/commit/4947b35ecae91017a8082fd1f0b48b5ea1cc37df))
+* **projects:** only one folder picker opens at a time ([#36](https://github.com/AxiaCoder/cloitre/issues/36)) ([3ef67f6](https://github.com/AxiaCoder/cloitre/commit/3ef67f6803a49e8bb3033dea177ea61673be940c))
+* **projects:** the project menu shows whether a color or an icon is in use, and removes the project ([#50](https://github.com/AxiaCoder/cloitre/issues/50)) ([0fb29b2](https://github.com/AxiaCoder/cloitre/commit/0fb29b282ba9063cf371c0e61dd3c92e12a78110))
+* **recordings:** sessions are recorded in development builds only, the 20 newest kept, reads capped at 64 MiB ([#33](https://github.com/AxiaCoder/cloitre/issues/33)) ([1f0f2bd](https://github.com/AxiaCoder/cloitre/commit/1f0f2bd2d1a5926596a180c6979255891b8d943f))
+* **sessions:** tabs come back on reopen and resume their own conversation, even after /clear ([#25](https://github.com/AxiaCoder/cloitre/issues/25)) ([9490924](https://github.com/AxiaCoder/cloitre/commit/9490924b230729c63dcfe50e3ab4959feff601ca))
+* **shell:** the window follows the mockup, and a session that cannot start shows its full error ([#26](https://github.com/AxiaCoder/cloitre/issues/26)) ([5ddfc40](https://github.com/AxiaCoder/cloitre/commit/5ddfc40517c105403642e652e80531d4015ea4e7))
+* **tabs:** each project reopens on the tab that was in front ([#31](https://github.com/AxiaCoder/cloitre/issues/31)) ([90c9c4f](https://github.com/AxiaCoder/cloitre/commit/90c9c4fd275e970275d162a989cddd0584a196ba))
+* **tabs:** several tabs per project, each with its own session, and switching stops none ([#24](https://github.com/AxiaCoder/cloitre/issues/24)) ([8c73bb3](https://github.com/AxiaCoder/cloitre/commit/8c73bb3db4dd210a865f73208b3999378a27fd7e))
+* **version:** package.json holds the only version number, and the window title shows it ([#55](https://github.com/AxiaCoder/cloitre/issues/55)) ([394ae86](https://github.com/AxiaCoder/cloitre/commit/394ae86d983057b133cdfd0bf52362900af2fd16))
+
+
+### Bug Fixes
+
+* **keys:** Ctrl+C copies the terminal selection instead of interrupting the session ([#48](https://github.com/AxiaCoder/cloitre/issues/48)) ([fe3ca86](https://github.com/AxiaCoder/cloitre/commit/fe3ca86d7e8ec3e860312a5733ee581776261b8b))
+* **pty:** composed emoji reach xterm.js unchanged, through Microsoft's ConPTY 1.25 shipped with the Windows build ([#39](https://github.com/AxiaCoder/cloitre/issues/39)) ([d47442d](https://github.com/AxiaCoder/cloitre/commit/d47442d560ea8492392d7572dc2d0ad7e2361944))
+* **pty:** stopping a session left alive the processes claude started in their own console ([#23](https://github.com/AxiaCoder/cloitre/issues/23)) ([0687187](https://github.com/AxiaCoder/cloitre/commit/06871872775557d9a5ee0102d5b6cefa1c6214c7))
