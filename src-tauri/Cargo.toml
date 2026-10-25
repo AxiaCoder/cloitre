@@ -1,6 +1,6 @@
 [package]
 name = "cloitre"
-version = "0.2.0"
+version = "0.3.0"
 description = "A desktop terminal that runs only Claude Code"
 edition = "2024"
 
