@@ -151,6 +151,11 @@ export class TabPane extends Pane {
       if (decision === "terminal") {
         return true;
       }
+      if (decision === "copy" && event.type === "keydown") {
+        setTimeout(() => {
+          terminal.clearSelection();
+        }, 0);
+      }
       if (decision === "paste" || decision === "copy") {
         return false;
       }

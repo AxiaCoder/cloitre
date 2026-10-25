@@ -68,6 +68,10 @@ const fakes = vi.hoisted(() => {
     hasSelection(): boolean {
       return this.selected;
     }
+    /** Drops the selection. */
+    clearSelection(): void {
+      this.selected = false;
+    }
     /** Keeps the key handler. */
     attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean): void {
       this.keyHandler = handler;
@@ -716,6 +720,32 @@ describe("TabPane input", () => {
     const interrupted = ctrlC();
     expect([copied.passed, interrupted.passed]).toEqual([false, true]);
     expect(copied.event.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("drops the selection after the browser copy, so the next Ctrl+C interrupts", () => {
+    vi.useFakeTimers();
+    try {
+      const { handlers } = recorder();
+      const terminal = terminalOf(openPane(1, handlers));
+      terminal.selected = true;
+      terminal.keyHandler({
+        type: "keydown",
+        repeat: false,
+        code: "KeyC",
+        key: "c",
+        keyCode: 67,
+        ctrlKey: true,
+        shiftKey: false,
+        altKey: false,
+        metaKey: false,
+        preventDefault: vi.fn(),
+      } as unknown as KeyboardEvent);
+      const selectedDuringCopy = terminal.selected;
+      vi.runAllTimers();
+      expect([selectedDuringCopy, terminal.selected]).toEqual([true, false]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
