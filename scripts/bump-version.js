@@ -14,18 +14,18 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const tauriDir = join(root, "src-tauri");
 
 /**
- * Replaces the first match of `pattern` in the file at `path` with `replacement`.
- * @param {string} path Absolute path of the file to rewrite.
- * @param {RegExp} pattern Pattern whose first match is replaced; the file keeps its line endings.
- * @param {string} replacement Text written in place of the match.
- * @throws {Error} When `pattern` matches nothing in the file.
+ * Returns `content` with the first match of `pattern` replaced by `replacement`; line endings are kept.
+ * @param {string} content Text of the file at `path`.
+ * @param {string} path Path of the file, named in the error.
+ * @param {RegExp} pattern Pattern whose first match is replaced.
+ * @param {string} replacement Text put in place of the match.
+ * @throws {Error} When `pattern` matches nothing in `content`.
  */
-function replaceFirst(path, pattern, replacement) {
-  const content = readFileSync(path, "utf8");
+function replaceFirst(content, path, pattern, replacement) {
   if (!pattern.test(content)) {
     throw new Error(`no version field found in ${path}`);
   }
-  writeFileSync(path, content.replace(pattern, replacement));
+  return content.replace(pattern, replacement);
 }
 
 const version = process.argv[2];
@@ -34,8 +34,24 @@ if (process.argv.length !== 3 || version === undefined || !SEMVER.test(version))
   process.exit(1);
 }
 
-replaceFirst(join(root, "package.json"), /"version": "[^"]*"/, `"version": "${version}"`);
-replaceFirst(join(tauriDir, "Cargo.toml"), /^version = "[^"]*"/m, `version = "${version}"`);
-execFileSync("cargo", ["update", "--workspace"], { cwd: tauriDir, stdio: "inherit" });
+const packagePath = join(root, "package.json");
+const cargoPath = join(tauriDir, "Cargo.toml");
+const lockPath = join(tauriDir, "Cargo.lock");
+const originals = new Map([packagePath, cargoPath, lockPath].map((path) => [path, readFileSync(path, "utf8")]));
+
+const bumpedPackage = replaceFirst(originals.get(packagePath), packagePath, /"version": "[^"]*"/, `"version": "${version}"`);
+const bumpedCargo = replaceFirst(originals.get(cargoPath), cargoPath, /^version = "[^"]*"/m, `version = "${version}"`);
+
+writeFileSync(packagePath, bumpedPackage);
+writeFileSync(cargoPath, bumpedCargo);
+try {
+  execFileSync("cargo", ["update", "--workspace"], { cwd: tauriDir, stdio: "inherit" });
+} catch (error) {
+  for (const [path, content] of originals) {
+    writeFileSync(path, content);
+  }
+  process.stderr.write("cargo update failed; package.json, Cargo.toml and Cargo.lock are back to their previous content.\n");
+  throw error;
+}
 
 process.stdout.write(`Version set to ${version} in package.json, src-tauri/Cargo.toml and src-tauri/Cargo.lock.\n`);

@@ -89,12 +89,13 @@ describe("bump-version", () => {
     expect(result.stdout).toContain("Version set to 1.2.3");
   }, 60_000);
 
-  it("rewrites only the package version, not a dependency version further down Cargo.toml", () => {
+  it("rewrites only the package version, not a version line further down Cargo.toml", () => {
     rmSync(root, { recursive: true, force: true });
-    makeRepo(PACKAGE_JSON, `${CARGO_TOML}\n[dependencies.local]\nversion = "9.9.9"\npath = "local"\n`);
+    makeRepo(PACKAGE_JSON, `${CARGO_TOML}\n[package.metadata.demo]\nversion = "9.9.9"\n`);
 
-    bump("2.0.0");
+    const result = bump("2.0.0");
 
+    expect(result.status).toBe(0);
     const cargo = read("src-tauri/Cargo.toml");
     expect(cargo).toContain('[package]\nname = "demo"\nversion = "2.0.0"');
     expect(cargo).toContain('version = "9.9.9"');
@@ -155,5 +156,19 @@ describe("bump-version", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("no version field found in");
     expect(read("src-tauri/Cargo.lock")).toBe(STALE_LOCK);
+    expect(read("package.json")).toBe(PACKAGE_JSON);
   });
+
+  it("leaves package.json, Cargo.toml and Cargo.lock untouched when cargo update fails", () => {
+    rmSync(root, { recursive: true, force: true });
+    const brokenCargo = `${CARGO_TOML}\n[dependencies]\nmissing = { path = "does-not-exist" }\n`;
+    makeRepo(PACKAGE_JSON, brokenCargo);
+
+    const result = bump("1.2.3");
+
+    expect(result.status).not.toBe(0);
+    expect(read("package.json")).toBe(PACKAGE_JSON);
+    expect(read("src-tauri/Cargo.toml")).toBe(brokenCargo);
+    expect(read("src-tauri/Cargo.lock")).toBe(STALE_LOCK);
+  }, 60_000);
 });
