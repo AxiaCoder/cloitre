@@ -102,9 +102,17 @@ describe("messages.removeTabs", () => {
 });
 
 describe("the project menu texts", () => {
-  it("name the switch, the remove entry and the dialog buttons", () => {
-    expect([texts.markerShow, texts.removeProjectEntry, texts.cancel, texts.confirmRemove, texts.folderStays]).toEqual([
-      "Show",
+  it("name the two grids, the remove entry and the dialog buttons", () => {
+    expect([
+      texts.markerColors,
+      texts.markerSymbols,
+      texts.removeProjectEntry,
+      texts.cancel,
+      texts.confirmRemove,
+      texts.folderStays,
+    ]).toEqual([
+      "Color",
+      "Symbol",
       "Remove project…",
       "Cancel",
       "Remove project",

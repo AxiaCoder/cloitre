@@ -41,16 +41,15 @@ import { runningSessions, UpdateFlow, type UpdateNotice } from "./updates";
 import { ReplayPane, TabPane } from "./tab-pane";
 import { afterRefusedStart, TabModel, type Tab, type TabState } from "./tabs";
 import { markerIcon, outlineDrawing } from "./marker-icons";
-import { FALLBACK_ICON, MARKER_COLORS, MARKER_ICONS, markerColorValue, projectInitials } from "./project-marker";
+import { markerColorValue, markerLook, projectInitials } from "./project-marker";
 import {
+  COLOR_CHOICES,
+  currentSymbol,
   GRID_COLUMNS,
   gridMove,
   isMenuKey,
-  MARKER_MODES,
-  markerMode,
-  switchMove,
+  symbolChoices,
   TRASH_PATH,
-  type MarkerMode,
 } from "./project-menu";
 import {
   isRenderer,
@@ -549,25 +548,24 @@ function renderSessionCounts(): void {
 }
 
 /**
- * Builds the marker square of `project`: its icon on a plain square when it has
- * one, else its initials on its color, or the fallback icon when its name has
- * no letter.
+ * Builds the marker square of `project`: its icon, or its initials, or the
+ * fallback icon when its name has no letter, on its color, or on a dark ground
+ * with a border when it has no color.
  */
 function projectMarker(project: Project): HTMLSpanElement {
   const marker = document.createElement("span");
   marker.className = "project-marker";
   marker.setAttribute("aria-hidden", "true");
-  if (project.icon !== null) {
-    marker.classList.add("with-icon");
-    marker.append(markerIcon(project.icon));
-    return marker;
-  }
-  marker.style.backgroundColor = markerColorValue(project.color);
-  const initials = projectInitials(project.name);
-  if (initials === "") {
-    marker.append(markerIcon(FALLBACK_ICON));
+  const look = markerLook(project.color, project.icon, project.name);
+  if (look.ground === null) {
+    marker.classList.add("no-color");
   } else {
-    marker.textContent = initials;
+    marker.style.backgroundColor = look.ground;
+  }
+  if (look.icon === null) {
+    marker.textContent = look.initials;
+  } else {
+    marker.append(markerIcon(look.icon));
   }
   return marker;
 }
@@ -612,15 +610,25 @@ function markerChoice(label: string, current: boolean, content: Node | string, p
 }
 
 /**
- * A grid of the marker menu holding `choices`, named `label`, with a single
- * tab stop: the current choice, else the first. The arrow keys, Home and End
- * move the focus between the choices.
+ * A grid of the marker menu holding `choices`, named `label`, under a heading
+ * that reads `label` and `current`, the name of the current choice. The grid
+ * has a single tab stop: the current choice, else the first. The arrow keys,
+ * Home and End move the focus between the choices.
  */
-function markerGrid(label: string, choices: readonly HTMLButtonElement[]): HTMLDivElement {
+function markerGrid(label: string, current: string, choices: readonly HTMLButtonElement[]): HTMLDivElement {
+  const heading = document.createElement("div");
+  heading.className = "marker-heading";
+  heading.setAttribute("aria-hidden", "true");
+  const name = document.createElement("span");
+  name.textContent = label;
+  const value = document.createElement("span");
+  value.className = "marker-current";
+  value.textContent = current;
+  heading.append(name, value);
   const grid = document.createElement("div");
   grid.className = "marker-grid";
   grid.setAttribute("role", "group");
-  grid.setAttribute("aria-label", label);
+  grid.setAttribute("aria-label", `${label}: ${current}`);
   grid.append(...choices);
   const start = choices.find((choice) => choice.getAttribute("aria-pressed") === "true") ?? choices[0];
   if (choices.length > 0) {
@@ -640,123 +648,73 @@ function markerGrid(label: string, choices: readonly HTMLButtonElement[]): HTMLD
     target.tabIndex = 0;
     target.focus();
   });
-  return grid;
+  const block = document.createElement("div");
+  block.className = "marker-block";
+  block.append(heading, grid);
+  return block;
 }
 
-/** The color grid of the marker menu of `project`: picking a color drops the icon. */
+/** The color grid of the marker menu of `project`: picking a color keeps the symbol. */
 function colorGrid(project: Project): HTMLDivElement {
-  const choices = MARKER_COLORS.map((color) => {
+  const choices = COLOR_CHOICES.map((color) => {
     const swatch = document.createElement("span");
     swatch.className = "marker-swatch";
-    swatch.style.backgroundColor = markerColorValue(color);
-    const current = project.icon === null && color === project.color;
-    const choice = markerChoice(messages.markerColor(color), current, swatch, () => {
-      report(() => chooseMarker(project.id, color, null));
+    if (color === null) {
+      swatch.classList.add("no-color");
+    } else {
+      swatch.style.backgroundColor = markerColorValue(color);
+    }
+    const choice = markerChoice(messages.markerColorName(color), color === project.color, swatch, () => {
+      report(() => chooseMarker(project.id, color, project.icon, "color"));
     });
     choice.classList.add("color-choice");
     return choice;
   });
-  return markerGrid(texts.markerColors, choices);
-}
-
-/** The icon grid of the marker menu of `project`: picking an icon keeps the color for later. */
-function iconGrid(project: Project): HTMLDivElement {
-  const choices = MARKER_ICONS.map((icon) =>
-    markerChoice(messages.markerIcon(icon), icon === project.icon, markerIcon(icon), () => {
-      report(() => chooseMarker(project.id, project.color, icon));
-    }),
-  );
-  return markerGrid(texts.markerIcons, choices);
+  return markerGrid(texts.markerColors, messages.markerColorName(project.color), choices);
 }
 
 /**
- * The "Show" line of the marker menu: a switch between the color and icon
- * modes, set on `shown`. A click or an arrow key on it moves the switch and
- * runs `show` with the chosen mode; the marker itself does not change.
+ * The symbol grid of the marker menu of `project`, each symbol drawn on its
+ * color: picking a symbol keeps the color.
  */
-function markerSwitch(shown: MarkerMode, show: (mode: MarkerMode) => void): HTMLDivElement {
-  const label = document.createElement("span");
-  label.className = "marker-heading";
-  label.textContent = texts.markerShow;
-  label.setAttribute("aria-hidden", "true");
-  const group = document.createElement("div");
-  group.className = "marker-switch";
-  group.setAttribute("role", "radiogroup");
-  group.setAttribute("aria-label", texts.markerShow);
-  const options = MARKER_MODES.map((mode) => {
-    const option = document.createElement("button");
-    option.type = "button";
-    option.setAttribute("role", "radio");
-    option.dataset.mode = mode;
-    option.textContent = mode === "color" ? texts.markerColors : texts.markerIcons;
-    return option;
-  });
-  const check = (mode: MarkerMode): void => {
-    for (const option of options) {
-      const checked = option.dataset.mode === mode;
-      option.setAttribute("aria-checked", String(checked));
-      option.tabIndex = checked ? 0 : -1;
-    }
-  };
-  const select = (mode: MarkerMode): void => {
-    check(mode);
-    options.find((option) => option.dataset.mode === mode)?.focus();
-    show(mode);
-  };
-  for (const option of options) {
-    option.addEventListener("click", () => {
-      if (option.dataset.mode === "color" || option.dataset.mode === "icon") {
-        select(option.dataset.mode);
-      }
+function symbolGrid(project: Project): HTMLDivElement {
+  const current = currentSymbol(project.icon, project.name);
+  const choices = symbolChoices(project.name).map((icon) => {
+    const content = icon === null ? projectInitials(project.name) : markerIcon(icon);
+    const choice = markerChoice(messages.markerSymbolName(icon), icon === current, content, () => {
+      report(() => chooseMarker(project.id, project.color, icon, "symbol"));
     });
-  }
-  group.addEventListener("keydown", (event) => {
-    const next = switchMove(event.key);
-    if (next === undefined) {
-      return;
+    choice.classList.add("symbol-choice");
+    if (project.color === null) {
+      choice.classList.add("no-color");
+    } else {
+      choice.style.backgroundColor = markerColorValue(project.color);
     }
-    event.preventDefault();
-    select(next);
+    return choice;
   });
-  group.append(...options);
-  check(shown);
-  const line = document.createElement("div");
-  line.className = "marker-show";
-  line.append(label, group);
-  return line;
+  return markerGrid(texts.markerSymbols, messages.markerSymbolName(current), choices);
 }
+
+/** The grid of the marker menu that takes the focus when it opens. */
+type MarkerGridName = "color" | "symbol";
 
 /**
  * Opens, under project button `anchor` and inside the window, the menu of
- * `project`: a switch between its color and icon modes, set on the mode it
- * shows, the grid of that mode, and an entry that asks to remove the project.
- * Focuses the current choice.
+ * `project`: its color grid, its symbol grid, and an entry that asks to remove
+ * the project. Focuses the current choice of grid `focus`.
  */
-function openMarkerMenu(project: Project, anchor: HTMLButtonElement): void {
+function openMarkerMenu(project: Project, anchor: HTMLButtonElement, focus: MarkerGridName = "color"): void {
   closeMarkerMenu();
-  const current = markerMode(project.icon);
   const menu = document.createElement("div");
   menu.className = "marker-menu";
   menu.tabIndex = -1;
   menu.setAttribute("role", "dialog");
   menu.setAttribute("aria-label", messages.markerMenu(project.name));
-  const choices = document.createElement("div");
-  choices.className = "marker-choices";
-  const showMode = (mode: MarkerMode): void => {
-    const grid = mode === "color" ? colorGrid(project) : iconGrid(project);
-    if (mode === current) {
-      choices.replaceChildren(grid);
-    } else {
-      const hint = document.createElement("p");
-      hint.className = "marker-hint";
-      hint.textContent = messages.markerHint(current);
-      choices.replaceChildren(hint, grid);
-    }
-    placeMarkerMenu(menu, anchor);
-  };
+  const colors = colorGrid(project);
+  const symbols = symbolGrid(project);
   const section = document.createElement("div");
   section.className = "marker-section";
-  section.append(markerSwitch(current, showMode), choices);
+  section.append(colors, symbols);
   const separator = document.createElement("div");
   separator.className = "marker-separator";
   const remove = document.createElement("button");
@@ -777,9 +735,10 @@ function openMarkerMenu(project: Project, anchor: HTMLButtonElement): void {
     event.preventDefault();
   });
   document.body.append(menu);
-  showMode(current);
+  placeMarkerMenu(menu, anchor);
   markerMenu = { element: menu, anchor };
-  choices.querySelector<HTMLButtonElement>(".marker-choice[tabindex='0']")?.focus();
+  const focused = focus === "color" ? colors : symbols;
+  focused.querySelector<HTMLButtonElement>(".marker-choice[tabindex='0']")?.focus();
 }
 
 /** Places marker menu `menu` under project button `anchor`, moved up and left as needed to stay inside the window. */
@@ -1148,15 +1107,30 @@ function openUpdateDialog(version: string): Promise<boolean> {
 }
 
 /**
- * Gives project `projectId` marker `color` and `icon`, `null` for the color
- * marker, then redraws the rail with the project Rust returns.
+ * Gives project `projectId` marker color `color`, `null` for no color, and
+ * marker icon `icon`, `null` for the initials, then redraws the rail with the
+ * project Rust returns and, when its menu is still open and no remove dialog
+ * is, opens it again, focused on grid `grid`.
  */
-async function chooseMarker(projectId: number, color: string, icon: string | null): Promise<void> {
-  closeMarkerMenu();
+async function chooseMarker(
+  projectId: number,
+  color: string | null,
+  icon: string | null,
+  grid: MarkerGridName,
+): Promise<void> {
+  const menu = markerMenu;
   const updated = await setProjectMarker(projectId, color, icon);
+  const reopen = menu !== undefined && markerMenu === menu && removeDialog === undefined;
   projects = projects.map((project) => (project.id === updated.id ? updated : project));
   renderProjects();
-  projectButton(projectId)?.focus();
+  if (!reopen) {
+    return;
+  }
+  const button = projectButton(projectId);
+  if (button === null) {
+    return;
+  }
+  openMarkerMenu(updated, button, grid);
 }
 
 /** Draws the project rail and the work area from `projects` and `selectedId`. */

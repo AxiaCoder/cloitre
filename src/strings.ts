@@ -4,8 +4,6 @@
  * are the functions of {@link messages}.
  */
 
-import type { MarkerMode } from "./project-menu";
-
 /** The fixed texts of the interface, by key. `index.html` names them in `data-text`, `data-label` and `data-title`. */
 export const texts = {
   closeWarning: "Close the warning",
@@ -37,9 +35,8 @@ export const texts = {
   missingFolderHint: "It may have been moved or renamed.",
   chooseAnotherFolder: "Choose another folder",
   removeProject: "Remove the project",
-  markerShow: "Show",
   markerColors: "Color",
-  markerIcons: "Icon",
+  markerSymbols: "Symbol",
   removeProjectEntry: "Remove project…",
   cancel: "Cancel",
   confirmRemove: "Remove project",
@@ -97,15 +94,10 @@ export const messages = {
   projectTitle: (name: string, path: string) => `${name}\n${path}`,
   /** The accessible name of the marker menu of project `name`. */
   markerMenu: (name: string) => `Marker of ${name}`,
-  /** The accessible name of marker color `color`. */
-  markerColor: (color: string) => `Color ${color}`,
-  /** The accessible name of marker icon `icon`. */
-  markerIcon: (icon: string) => `Icon ${icon}`,
-  /** The line of the marker menu when its switch shows the other mode than `current`, the one the project shows. */
-  markerHint: (current: MarkerMode) =>
-    current === "color"
-      ? "Showing a color now. Pick an icon to replace it."
-      : "Showing an icon now. Pick a color to replace it.",
+  /** The name in words of marker color `color`, a catalog name, or `null` for no color. */
+  markerColorName: (color: string | null) => (color === null ? "No color" : capitalized(color)),
+  /** The name in words of marker symbol `icon`, a catalog icon name, or `null` for the initials. */
+  markerSymbolName: (icon: string | null) => (icon === null ? "Initials" : capitalized(icon)),
   /** The title of the dialog that removes project `name`. */
   removeTitle: (name: string) => `Remove ${name}?`,
   /** What removing a project does to its `count` open tabs. */
@@ -209,4 +201,9 @@ export function fillTexts(root: TextRoot): void {
       }
     }
   }
+}
+
+/** `word` with its first letter upper-cased. */
+function capitalized(word: string): string {
+  return word.charAt(0).toUpperCase() + word.slice(1);
 }
