@@ -366,7 +366,15 @@ mod tests {
     fn updates_come_signed_from_the_latest_published_release() {
         let config: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
-        assert_eq!(config["bundle"]["createUpdaterArtifacts"], true);
+        assert!(config["bundle"].get("createUpdaterArtifacts").is_none());
+        let release: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.release.conf.json")).unwrap();
+        assert_eq!(
+            release,
+            serde_json::json!({ "bundle": { "createUpdaterArtifacts": true } })
+        );
+        assert!(include_str!("../../.github/workflows/release.yml")
+            .contains("pnpm tauri build --bundles nsis --config src-tauri/tauri.release.conf.json"));
         let updater = &config["plugins"]["updater"];
         assert_eq!(
             updater["endpoints"],

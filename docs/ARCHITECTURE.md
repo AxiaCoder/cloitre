@@ -248,10 +248,10 @@ When the main window is asked to close, Rust counts the sessions whose process s
 A release build looks for a newer version once, at startup, through the updater plugin (`tauri-plugin-updater`). A development build (`pnpm tauri dev`, `pnpm tauri build --debug`) never does: Rust registers the plugin only when `debug_assertions` is off (`CHECKS_FOR_UPDATES` in `src-tauri/src/lib.rs`), so the webview's check is refused and shows nothing.
 
 - **Where**: `plugins.updater.endpoints` in `tauri.conf.json` names `https://github.com/AxiaCoder/cloitre/releases/latest/download/latest.json`, the `latest.json` of the latest published release. A draft is not seen.
-- **Signature**: every installer is signed with the maintainer's key at release time (see `docs/RELEASING.md`); the public key is `plugins.updater.pubkey` in `tauri.conf.json`. The plugin refuses a file whose signature is missing or does not match, and nothing is installed.
-- **Consent**: the startup check downloads nothing. A newer version shows a notice in the rail; a failed check shows nothing. Installing asks first, saying how many running sessions will stop.
+- **Signature**: every installer is signed with the maintainer's key at release time (see `docs/RELEASING.md`); the public key is `plugins.updater.pubkey` in `tauri.conf.json`. Only the release build makes the signed update files: `release.yml` merges `src-tauri/tauri.release.conf.json`, which sets `bundle.createUpdaterArtifacts`, so a local build needs no private key. The plugin refuses a file whose signature is missing or does not match, and nothing is installed.
+- **Consent**: the startup check downloads nothing. A newer version shows a notice in the rail; a failed check shows nothing. Every install attempt, Try again included, asks first, saying how many sessions run at that moment and will stop; Cancel changes nothing.
 - **Order**: the update downloads while the sessions keep running. Then the webview stops every session through `pty_kill`, and only then asks the plugin to install. On Windows the plugin starts the NSIS installer and exits the app without asking the window to close, so the confirmation of [Closing the window](#closing-the-window) is not shown; the installer starts the app again. The tabs come back, each offering `"resume"` or `"new"`.
-- **Failure**: a download or a signature that fails leaves the sessions running and shows why, with Try again.
+- **Failure**: a download or a signature that fails leaves the sessions running and shows why, with Try again. An installer that fails to start comes after the sessions were stopped: the tabs that ran one show as ended, each offering `"resume"` or `"new"`.
 
 ## Recordings
 

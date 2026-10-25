@@ -25,7 +25,9 @@ function flowWith(check: () => Promise<PendingUpdate | null>, stopSessions = () 
   const shown: UpdateNotice[] = [];
   const flow = new UpdateFlow({
     check,
+    confirmInstall: () => Promise.resolve(true),
     stopSessions,
+    sessionsStopped: () => undefined,
     show: (notice) => shown.push(notice),
   });
   return { flow, shown };
@@ -137,6 +139,9 @@ describe("UpdateFlow.install", () => {
     const { flow } = flowWith(() => Promise.resolve(update));
     await flow.checkAtStartup();
     const installing = flow.install();
+    await vi.waitFor(() => {
+      expect(flow.notice.kind).toBe("downloading");
+    });
     flow.dismiss();
     expect(flow.notice.kind).toBe("downloading");
     finish();
@@ -357,5 +362,74 @@ describe("update texts", () => {
     expect(messages.installTitle("0.4.0")).toBe("Install version 0.4.0?");
     expect(messages.updateCompact("0.4.0")).toBe("Version 0.4.0 is available · Install…");
     expect(texts.updateHide).toBe("Hide until next start");
+  });
+});
+
+/**
+ * An update flow on `update` with every port, the confirmation and the
+ * stopped-sessions notice included, recording each port call in `calls`.
+ * `answers` are the answers of the successive confirmations; past them, it confirms.
+ */
+function flowWithConfirmation(update: PendingUpdate, answers: boolean[] = []) {
+  const calls: string[] = [];
+  const confirmInstall = vi.fn((version: string) => {
+    calls.push(`confirm ${version}`);
+    return Promise.resolve(answers.shift() ?? true);
+  });
+  const sessionsStopped = vi.fn(() => {
+    calls.push("sessions stopped");
+  });
+  const ports = {
+    check: () => Promise.resolve(update),
+    stopSessions: () => {
+      calls.push("stop");
+      return Promise.resolve();
+    },
+    show: () => undefined,
+    confirmInstall,
+    sessionsStopped,
+  };
+  const flow = new UpdateFlow(ports);
+  return { flow, calls, confirmInstall, sessionsStopped };
+}
+
+describe("UpdateFlow.install, confirmation of every attempt", () => {
+  it("asks for confirmation again before trying a failed download again", async () => {
+    const download = vi
+      .fn<(onEvent?: (event: DownloadEvent) => void) => Promise<void>>()
+      .mockRejectedValueOnce(new Error("error sending request"))
+      .mockResolvedValueOnce(undefined);
+    const { flow, confirmInstall } = flowWithConfirmation(fakeUpdate({ download }));
+    await flow.checkAtStartup();
+    await flow.install();
+    expect(flow.notice).toEqual({ kind: "failed", version: "0.4.0", reason: "network" });
+    await flow.install();
+    expect(confirmInstall).toHaveBeenCalledTimes(2);
+    expect(confirmInstall).toHaveBeenLastCalledWith("0.4.0");
+  });
+
+  it("stops no session and downloads no more when the retry is cancelled", async () => {
+    const download = vi
+      .fn<(onEvent?: (event: DownloadEvent) => void) => Promise<void>>()
+      .mockRejectedValue(new Error("error sending request"));
+    const update = fakeUpdate({ download });
+    const { flow, calls } = flowWithConfirmation(update, [true, false]);
+    await flow.checkAtStartup();
+    await flow.install();
+    await flow.install();
+    expect(download).toHaveBeenCalledOnce();
+    expect(calls).not.toContain("stop");
+  });
+});
+
+describe("UpdateFlow.install, sessions after a failed install", () => {
+  it("reports the stopped sessions once the installer fails to start", async () => {
+    const update = fakeUpdate({ install: () => Promise.reject(new Error("access denied")) });
+    const { flow, calls, sessionsStopped } = flowWithConfirmation(update);
+    await flow.checkAtStartup();
+    await flow.install();
+    expect(flow.notice).toEqual({ kind: "failed", version: "0.4.0", reason: "install" });
+    expect(sessionsStopped).toHaveBeenCalledOnce();
+    expect(calls.indexOf("sessions stopped")).toBeGreaterThan(calls.indexOf("stop"));
   });
 });

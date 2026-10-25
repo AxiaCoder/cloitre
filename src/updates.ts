@@ -36,8 +36,12 @@ export interface PendingUpdate {
 export interface UpdatePorts {
   /** Asks the update server for a newer version: `null` when there is none. Rejects when the updater is missing (a development build) or the server cannot be reached. */
   check(): Promise<PendingUpdate | null>;
+  /** Asks the user to confirm installing `version`, which stops every running session: `true` once confirmed, `false` once cancelled. Never rejects. */
+  confirmInstall(version: string): Promise<boolean>;
   /** Stops every running `claude` session; never rejects. */
   stopSessions(): Promise<void>;
+  /** Tells the app that the sessions {@link UpdatePorts.stopSessions} stopped stay stopped, the installer having failed to start. */
+  sessionsStopped(): void;
   /** Draws `notice`. */
   show(notice: UpdateNotice): void;
 }
@@ -69,12 +73,13 @@ export function runningSessions(states: Iterable<string>): number {
 /**
  * Follows one update from the startup check to the install: a newer version
  * shows a notice, and nothing is downloaded until {@link UpdateFlow.install}.
- * Installing downloads first, sessions still running, then stops every
+ * Installing asks for confirmation, downloads, sessions still running, then stops every
  * session and installs, which restarts the app.
  */
 export class UpdateFlow {
   private update: PendingUpdate | undefined;
   private shown: UpdateNotice = NO_UPDATE;
+  private confirming = false;
 
   /** Uses `ports` to check, stop sessions and draw. */
   constructor(private readonly ports: UpdatePorts) {}
@@ -107,17 +112,28 @@ export class UpdateFlow {
   }
 
   /**
-   * Downloads the update, showing progress, then stops every session and
-   * installs it. A download or an install that fails shows why; calling
-   * again starts over from the download. Does nothing with no update, or
-   * while a download is under way.
+   * Asks for confirmation, then downloads the update, showing progress, then
+   * stops every session and installs it. A cancelled confirmation changes
+   * nothing. A download or an install that fails shows why; calling again
+   * asks again and starts over from the download. Does nothing with no
+   * update, while a confirmation is open, or while a download is under way.
    */
   async install(): Promise<void> {
     const update = this.update;
-    if (update === undefined || this.shown.kind === "downloading") {
+    if (update === undefined || this.confirming || this.shown.kind === "downloading") {
       return;
     }
     const { version } = update;
+    this.confirming = true;
+    let confirmed: boolean;
+    try {
+      confirmed = await this.ports.confirmInstall(version);
+    } finally {
+      this.confirming = false;
+    }
+    if (!confirmed) {
+      return;
+    }
     let received = 0;
     let total: number | undefined;
     this.set({ kind: "downloading", version, received, total });
@@ -138,6 +154,7 @@ export class UpdateFlow {
     try {
       await update.install();
     } catch {
+      this.ports.sessionsStopped();
       this.set({ kind: "failed", version, reason: "install" });
     }
   }

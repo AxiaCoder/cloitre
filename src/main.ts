@@ -125,8 +125,10 @@ let replayPane: ReplayPane | undefined;
 let markerMenu: { element: HTMLDivElement; anchor: HTMLButtonElement } | undefined;
 /** The open remove dialog, its dimmed backdrop, and the project it removes, while one is open. */
 let removeDialog: { element: HTMLDivElement; projectId: number } | undefined;
-/** The open update dialog and the button it opened from, while one is open. */
-let updateDialog: { element: HTMLDivElement; opener: HTMLButtonElement } | undefined;
+/** The open update dialog, the element it opened from, and how it answers the update flow, while one is open. */
+let updateDialog: { element: HTMLDivElement; opener: HTMLElement; answer: (confirmed: boolean) => void } | undefined;
+/** The ids of the session tabs the last install stopped while they ran or started. */
+let stoppedForUpdate: number[] = [];
 /** Keeps a double click on a close button from closing the next tab too. */
 const closeGuard = new CloseGuard();
 /** The ids of the projects whose new tab Rust is still creating. */
@@ -134,7 +136,13 @@ const opening = new Set<number>();
 /** Settles once the terminal fonts are loaded, or failed to load; a terminal opened before would measure the fallback font. */
 const fontsReady = loadTerminalFonts();
 /** The update offered at startup, from the notice to the install. */
-const updateFlow = new UpdateFlow({ check: () => checkForUpdate(), stopSessions: stopAllSessions, show: renderUpdate });
+const updateFlow = new UpdateFlow({
+  check: () => checkForUpdate(),
+  confirmInstall: openUpdateDialog,
+  stopSessions: stopAllSessions,
+  sessionsStopped: offerStoppedSessions,
+  show: renderUpdate,
+});
 
 /** Returns the active tab of the selected project, if any. */
 function activeTab(): Tab | undefined {
@@ -925,10 +933,30 @@ function runningSessionCount(): number {
   return runningSessions(states);
 }
 
-/** Stops the session of every session tab, keeping the tabs saved for the next run. */
+/** Stops the session of every session tab, keeping the tabs saved for the next run, and records which tabs ran or started a session. */
 async function stopAllSessions(): Promise<void> {
+  stoppedForUpdate = projects.flatMap((project) =>
+    tabs
+      .tabsOf(project.id)
+      .flatMap((tab) => (tab.kind === "session" && (tab.state === "running" || tab.state === "starting") ? [tab.id] : [])),
+  );
   const stops = [...panes.values()].flatMap((pane) => (pane instanceof TabPane ? [pane.slot.stop()] : []));
   await Promise.all(stops);
+}
+
+/** Marks the tabs the last install stopped as exited, each offering Resume and New session. */
+function offerStoppedSessions(): void {
+  for (const tabId of stoppedForUpdate) {
+    const pane = panes.get(tabId);
+    if (pane instanceof TabPane) {
+      tabs.setState(tabId, "exited");
+      pane.recording = undefined;
+      pane.showOffer("resume");
+    }
+  }
+  stoppedForUpdate = [];
+  renderTabs();
+  refreshRecordingsOrReport();
 }
 
 /** The text under the title of update notice `notice`, which is not `"none"`. */
@@ -1023,11 +1051,7 @@ function renderUpdate(notice: UpdateNotice): void {
     action.className = "update-action";
     action.textContent = failed ? texts.tryAgain : texts.installUpdate;
     action.addEventListener("click", () => {
-      if (failed) {
-        void updateFlow.install();
-      } else {
-        openUpdateDialog(notice.version, action);
-      }
+      void updateFlow.install();
     });
     updateNotice.append(action);
   }
@@ -1039,30 +1063,35 @@ function renderUpdate(notice: UpdateNotice): void {
   updateCompact.append(outlineDrawing(failed ? WARNING_PATH : UPDATE_PATH));
 }
 
-/** Closes the update dialog, if one is open, without moving the focus. */
-function closeUpdateDialog(): void {
+/** Closes the update dialog, if one is open, answering `confirmed` to the update flow, without moving the focus. */
+function closeUpdateDialog(confirmed: boolean): void {
   const open = updateDialog;
   updateDialog = undefined;
   open?.element.remove();
+  open?.answer(confirmed);
 }
 
-/** Closes the update dialog, if one is open, changing nothing, and gives focus back to the button it opened from. */
+/** Closes the update dialog, if one is open, cancelling the install, and gives focus back to the element it opened from. */
 function dismissUpdateDialog(): void {
   if (updateDialog !== undefined) {
     const { opener } = updateDialog;
-    closeUpdateDialog();
+    closeUpdateDialog(false);
     opener.focus();
   }
 }
 
 /**
  * Opens, over a dimmed window, the dialog that confirms the install of
- * `version`: it says the app restarts and how many running sessions stop,
- * and focuses Cancel. Escape, Cancel or a click on the dimmed area close it,
- * change nothing and give focus back to `opener`.
+ * `version`: it says the app restarts and how many running sessions stop
+ * now, and focuses Cancel. Resolves `true` on Install and restart, which
+ * gives focus to the active project or the add-project button. Resolves
+ * `false` on Escape, Cancel or a click on the dimmed area, which give focus
+ * back to the element focused at opening. Never rejects.
  */
-function openUpdateDialog(version: string, opener: HTMLButtonElement): void {
-  closeUpdateDialog();
+function openUpdateDialog(version: string): Promise<boolean> {
+  closeUpdateDialog(false);
+  const focused = document.activeElement;
+  const opener = focused instanceof HTMLElement && focused !== document.body ? focused : addProjectButton;
   const running = runningSessionCount();
   const scrim = document.createElement("div");
   scrim.className = "dialog-scrim";
@@ -1094,8 +1123,8 @@ function openUpdateDialog(version: string, opener: HTMLButtonElement): void {
   confirm.className = "info";
   confirm.textContent = texts.installAndRestart;
   confirm.addEventListener("click", () => {
-    closeUpdateDialog();
-    void updateFlow.install();
+    closeUpdateDialog(true);
+    (projectList.querySelector<HTMLButtonElement>(".project.active") ?? addProjectButton).focus();
   });
   const actions = document.createElement("div");
   actions.className = "remove-actions";
@@ -1110,9 +1139,12 @@ function openUpdateDialog(version: string, opener: HTMLButtonElement): void {
       dismissUpdateDialog();
     }
   });
+  const answered = new Promise<boolean>((resolve) => {
+    updateDialog = { element: scrim, opener, answer: resolve };
+  });
   document.body.append(scrim);
-  updateDialog = { element: scrim, opener };
   cancel.focus();
+  return answered;
 }
 
 /**
@@ -1469,10 +1501,8 @@ unicodeSelect.addEventListener("change", () => {
 });
 
 updateCompact.addEventListener("click", () => {
-  const notice = updateFlow.notice;
-  if (notice.kind === "available") {
-    openUpdateDialog(notice.version, updateCompact);
-  } else if (notice.kind === "failed") {
+  const { kind } = updateFlow.notice;
+  if (kind === "available" || kind === "failed") {
     void updateFlow.install();
   }
 });

@@ -6,7 +6,7 @@ Releases are cut by [Release Please](https://github.com/googleapis/release-pleas
 
 1. Every pull request title follows [Conventional Commits](https://www.conventionalcommits.org/) (`feat: …`, `fix: …`, `feat!: …`). Pull requests are squash-merged, so the title becomes the commit on `main`. `pr-title.yml` checks it.
 2. On each push to `main`, `release.yml` opens or updates a release pull request. It bumps the version in `package.json`, `src-tauri/Cargo.toml` and `src-tauri/Cargo.lock`, and writes `CHANGELOG.md`. Before 1.0.0, `feat` bumps the minor version and `fix` the patch version.
-3. Merging the release pull request creates the tag `vX.Y.Z` and a **draft** GitHub release. The `build` job then builds the NSIS installer from that tag, signs it with the updater key, and attaches to the draft the installer, its signature (`.exe.sig`) and `latest.json`, the file the installed apps read to find an update.
+3. Merging the release pull request creates the tag `vX.Y.Z` and a **draft** GitHub release. The `build` job then builds the NSIS installer from that tag with `src-tauri/tauri.release.conf.json` merged in, which turns on the update files, signs it with the updater key, and attaches to the draft the installer, its signature (`.exe.sig`) and `latest.json`, the file the installed apps read to find an update.
 4. Check the draft by hand: download the installer, install it, run it. If it works, publish the release from the GitHub interface.
 
 The installed apps look at `releases/latest`, which ignores drafts: they offer the update only once the release is published.
