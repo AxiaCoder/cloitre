@@ -58,6 +58,15 @@ export const texts = {
   replayStopped: "Replay stopped",
   webglLost: "WebGL context lost, back to the DOM renderer",
   webglUnavailable: "WebGL is not available, DOM renderer kept",
+  updateHide: "Hide until next start",
+  installUpdate: "Install update…",
+  installAndRestart: "Install and restart",
+  updateRestarts: "The app will restart once the update is downloaded.",
+  updateTabsComeBack: "Your tabs come back after the restart, each with Resume or New session.",
+  updateFailedTitle: "Update not installed",
+  updateSignatureFailed: "The file's signature does not match. Nothing changed and your sessions are still running.",
+  updateNetworkFailed: "The download stopped. Check your connection.",
+  updateInstallFailed: "The installer could not start. Reopen your tabs with Resume.",
 } as const;
 
 /** The key of a fixed text. */
@@ -125,6 +134,30 @@ export const messages = {
   endOfRecording: (name: string) => `${name}: end of recording`,
   /** The status of recording `name` paused at marker number `marker`. */
   pausedAtMarker: (name: string, marker: number) => `${name}: paused at marker ${String(marker)}`,
+  /** The title of the update notice for `version`. */
+  updateAvailable: (version: string) => `Version ${version} is available`,
+  /** The line under the update notice title, naming the `current` version. */
+  updateCurrent: (current: string) => `You have ${current}`,
+  /** The label of the update button of a narrow rail, for `version`. */
+  updateCompact: (version: string) => `Version ${version} is available · Install…`,
+  /** The title of the dialog that installs `version`. */
+  installTitle: (version: string) => `Install version ${version}?`,
+  /** What installing an update does to the `count` running sessions. */
+  updateSessions: (count: number) =>
+    count === 0
+      ? "No session is running."
+      : count === 1
+        ? "Your running session will stop."
+        : `Your ${String(count)} running sessions will stop.`,
+  /** The title of the update notice while `version` downloads. */
+  downloadingUpdate: (version: string) => `Downloading ${version}`,
+  /** The progress line of a download: `received` of `total` bytes, in megabytes; `total` may be unknown. */
+  downloadProgress: (received: number, total: number | undefined) => {
+    const megabytes = (bytes: number) => (bytes / 1_000_000).toFixed(1);
+    const amount =
+      total === undefined ? `${megabytes(received)} MB` : `${megabytes(received)} of ${megabytes(total)} MB`;
+    return `${amount} · the app restarts when done`;
+  },
   /** The status of recording `name` replayed to its end looking for a marker. */
   noMarkerLeft: (name: string) => `${name}: no marker left, end of recording`,
 } as const;

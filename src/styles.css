@@ -477,6 +477,109 @@ button.danger:hover {
   color: var(--text);
 }
 
+/* Update notice */
+
+.update-notice {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  gap: var(--sp-4);
+  margin: var(--sp-4) var(--sp-4) 0;
+  padding: var(--sp-5);
+  border: 1px solid var(--info-line);
+  border-radius: var(--radius);
+  background: var(--info-bg);
+}
+
+.update-notice.failed {
+  border-color: var(--crit-line);
+  background: var(--crit-bg);
+}
+
+.update-notice[hidden],
+.update-compact[hidden] {
+  display: none;
+}
+
+.update-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-4);
+}
+
+.update-icon {
+  display: flex;
+  flex-shrink: 0;
+  padding-top: var(--sp-1);
+  color: var(--info);
+}
+
+.update-notice.failed .update-icon {
+  color: var(--crit);
+}
+
+.update-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.update-text p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.update-title {
+  font-weight: 600;
+}
+
+.update-detail {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.update-hide {
+  flex-shrink: 0;
+  padding: 0 var(--sp-3);
+  border: 0;
+  background: none;
+  color: var(--muted);
+}
+
+.update-hide:hover {
+  color: var(--text);
+}
+
+.update-action {
+  width: 100%;
+}
+
+.update-bar {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--ink-3);
+}
+
+.update-fill {
+  height: 100%;
+  background: var(--info);
+}
+
+.update-compact {
+  display: none;
+}
+
+button.info {
+  border-color: var(--info);
+  background: var(--info);
+  color: var(--info-ink);
+}
+
+button.info:hover {
+  filter: brightness(1.1);
+}
+
 /* Work area */
 
 .work {
@@ -834,5 +937,30 @@ button.danger:hover {
   #add-project {
     margin: var(--sp-4) var(--sp-2);
     padding: var(--sp-2) 0;
+  }
+
+  .update-notice:not([hidden]) {
+    display: none;
+  }
+
+  .update-compact:not([hidden]) {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    width: 36px;
+    height: 36px;
+    margin: var(--sp-4) auto 0;
+    padding: 0;
+    border-color: var(--info-line);
+    background: var(--info-bg);
+    color: var(--info);
+  }
+
+  .update-compact.failed:not([hidden]) {
+    border-color: var(--crit-line);
+    background: var(--crit-bg);
+    color: var(--crit);
   }
 }

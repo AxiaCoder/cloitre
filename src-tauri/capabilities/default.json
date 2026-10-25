@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-window",
-  "description": "What the main window may call: the session, recording, project and tab commands.",
+  "description": "What the main window may call: the session, recording, project and tab commands, and checking, downloading and installing an update.",
   "windows": ["main"],
   "permissions": [
     "allow-pty-spawn",
@@ -21,6 +21,9 @@
     "allow-project-set-marker",
     "allow-tab-open",
     "allow-tab-close",
-    "allow-tab-activate"
+    "allow-tab-activate",
+    "updater:allow-check",
+    "updater:allow-download",
+    "updater:allow-install"
   ]
 }

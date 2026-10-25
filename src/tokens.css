@@ -26,6 +26,12 @@
   --crit-line: rgba(224, 122, 106, 0.35);
   --replay: #9db4e0;
 
+  /* Info: an update is available */
+  --info: #8ec5f2;
+  --info-ink: #0b1a2b;
+  --info-bg: rgba(142, 197, 242, 0.08);
+  --info-line: rgba(142, 197, 242, 0.35);
+
   /* Project markers, one per color of marker-catalog.json (no amber, no orange) */
   --marker-blue: #3563c2;
   --marker-teal: #1d7a72;

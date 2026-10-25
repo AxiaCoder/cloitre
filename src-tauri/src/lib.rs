@@ -90,6 +90,11 @@ fn apply_build_identity(config: &mut tauri::Config) {
     }
 }
 
+/// Whether this build checks for updates: a release build only. A development
+/// build does not register the updater plugin, so the webview's check fails
+/// and nothing is ever asked of the update server.
+const CHECKS_FOR_UPDATES: bool = !cfg!(debug_assertions);
+
 /// Builds and runs the app until its last window closes, then stops every session.
 ///
 /// Only one instance of a build runs: launched while another runs, the app brings that
@@ -105,6 +110,7 @@ fn apply_build_identity(config: &mut tauri::Config) {
 /// In a development build, sessions are recorded in its `recordings` folder,
 /// and their recordings closed whenever they are stopped; a release build
 /// records nothing and registers no `recording_*` command but `recording_enabled`.
+/// Only a release build registers the updater plugin (see [`CHECKS_FOR_UPDATES`]).
 ///
 /// # Panics
 /// When the Tauri runtime cannot start.
@@ -112,11 +118,15 @@ fn apply_build_identity(config: &mut tauri::Config) {
 pub fn run() {
     let mut context = tauri::generate_context!();
     apply_build_identity(context.config_mut());
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             focus_main_window(app);
         }))
-        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_dialog::init());
+    if CHECKS_FOR_UPDATES {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
+    builder
         .manage(PtyRegistry::default())
         .manage(PickerGate::default())
         .setup(|app| {
@@ -344,9 +354,36 @@ mod tests {
             "allow-tab-open",
             "allow-tab-close",
             "allow-tab-activate",
+            "updater:allow-check",
+            "updater:allow-download",
+            "updater:allow-install",
         ];
         expected.sort_unstable();
         assert_eq!(granted, expected);
+    }
+
+    #[test]
+    fn updates_come_signed_from_the_latest_published_release() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert!(config["bundle"].get("createUpdaterArtifacts").is_none());
+        let release: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.release.conf.json")).unwrap();
+        assert_eq!(
+            release,
+            serde_json::json!({ "bundle": { "createUpdaterArtifacts": true } })
+        );
+        assert!(include_str!("../../.github/workflows/release.yml")
+            .contains("pnpm tauri build --bundles nsis --config src-tauri/tauri.release.conf.json"));
+        let updater = &config["plugins"]["updater"];
+        assert_eq!(
+            updater["endpoints"],
+            serde_json::json!([
+                "https://github.com/AxiaCoder/cloitre/releases/latest/download/latest.json"
+            ])
+        );
+        assert!(updater["pubkey"].as_str().is_some_and(|key| !key.is_empty()));
+        assert!(updater.get("dangerousInsecureTransportProtocol").is_none());
     }
 
     #[test]
