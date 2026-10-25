@@ -38,7 +38,7 @@ import { fillTexts, messages, texts } from "./strings";
 import { closeWarning, NO_WARNING, warningText as shownWarning, type WarningState } from "./warning-bar";
 import { ReplayPane, TabPane } from "./tab-pane";
 import { afterRefusedStart, TabModel, type Tab, type TabState } from "./tabs";
-import { markerIcon } from "./marker-icons";
+import { markerIcon, outlineDrawing } from "./marker-icons";
 import { FALLBACK_ICON, MARKER_COLORS, MARKER_ICONS, markerColorValue, projectInitials } from "./project-marker";
 import {
   GRID_COLUMNS,
@@ -577,12 +577,6 @@ function projectButton(projectId: number): HTMLButtonElement | null {
   return projectList.querySelector<HTMLButtonElement>(`[data-project="${String(projectId)}"]`);
 }
 
-/** Builds a 24×24 outline drawing of path data `path`, drawn like a marker icon. */
-function outlineIcon(path: string): SVGSVGElement {
-  const svg = markerIcon("");
-  svg.querySelector("path")?.setAttribute("d", path);
-  return svg;
-}
 
 /**
  * A button of the marker menu showing `content`, named `label`, marked when
@@ -753,7 +747,7 @@ function openMarkerMenu(project: Project, anchor: HTMLButtonElement): void {
   const remove = document.createElement("button");
   remove.type = "button";
   remove.className = "marker-remove";
-  remove.append(outlineIcon(TRASH_PATH), texts.removeProjectEntry);
+  remove.append(outlineDrawing(TRASH_PATH), texts.removeProjectEntry);
   remove.addEventListener("click", () => {
     closeMarkerMenu();
     openRemoveDialog(project);

@@ -23,10 +23,11 @@ export const MARKER_ICON_PATHS: Readonly<Partial<Record<string, string>>> = {
 const SVG = "http://www.w3.org/2000/svg";
 
 /**
- * Builds the drawing of icon `name` as an `<svg>` element sized by CSS, hidden
- * from assistive technology. An unknown name gives an empty drawing.
+ * Builds a 24×24 outline drawing of path data `path` as an `<svg>` element sized
+ * by CSS, stroked with the current text color and hidden from assistive
+ * technology. An empty `path` gives an empty drawing.
  */
-export function markerIcon(name: string): SVGSVGElement {
+export function outlineDrawing(path: string): SVGSVGElement {
   const svg = document.createElementNS(SVG, "svg");
   svg.setAttribute("viewBox", "0 0 24 24");
   svg.setAttribute("fill", "none");
@@ -36,8 +37,16 @@ export function markerIcon(name: string): SVGSVGElement {
   svg.setAttribute("stroke-linejoin", "round");
   svg.setAttribute("aria-hidden", "true");
   svg.classList.add("marker-icon");
-  const path = document.createElementNS(SVG, "path");
-  path.setAttribute("d", MARKER_ICON_PATHS[name] ?? "");
-  svg.append(path);
+  const pathElement = document.createElementNS(SVG, "path");
+  pathElement.setAttribute("d", path);
+  svg.append(pathElement);
   return svg;
+}
+
+/**
+ * Builds the drawing of icon `name`, as `outlineDrawing` does. An unknown name
+ * gives an empty drawing.
+ */
+export function markerIcon(name: string): SVGSVGElement {
+  return outlineDrawing(MARKER_ICON_PATHS[name] ?? "");
 }
