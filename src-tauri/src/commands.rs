@@ -344,8 +344,9 @@ pub fn project_select(projects: State<'_, ProjectStore>, id: u32) -> Result<(), 
     projects.select(id)
 }
 
-/// Gives project `id` the marker color `color` and the marker icon `icon`,
-/// `None` for the color marker, and returns the updated project.
+/// Gives project `id` the marker color `color`, `None` for no color, and the
+/// marker icon `icon`, `None` for the initials, and returns the updated
+/// project. The two choices are independent.
 ///
 /// # Errors
 /// A color or icon the marker catalog lacks; an unknown id; a read-only
@@ -354,10 +355,10 @@ pub fn project_select(projects: State<'_, ProjectStore>, id: u32) -> Result<(), 
 pub fn project_set_marker(
     projects: State<'_, ProjectStore>,
     id: u32,
-    color: String,
+    color: Option<String>,
     icon: Option<String>,
 ) -> Result<ProjectView, AppError> {
-    projects.set_marker(id, &color, icon.as_deref())
+    projects.set_marker(id, color.as_deref(), icon.as_deref())
 }
 
 /// Remembers tab `tab_id` as the active tab of its project, for the next run.

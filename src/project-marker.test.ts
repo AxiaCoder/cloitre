@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MARKER_ICON_PATHS, markerIcon, outlineDrawing } from "./marker-icons";
-import { FALLBACK_ICON, MARKER_COLORS, MARKER_ICONS, markerColorValue, projectInitials } from "./project-marker";
+import { FALLBACK_ICON, MARKER_COLORS, MARKER_ICONS, markerColorValue, markerLook, projectInitials } from "./project-marker";
 
 const TOKENS = readFileSync(new URL("./tokens.css", import.meta.url), "utf8");
 
@@ -79,7 +79,7 @@ describe("marker palette", () => {
     expect([...defined].sort()).toEqual([...MARKER_COLORS].sort());
   });
 
-  it("keeps the initials readable on every color, at 4.5:1 at least", () => {
+  it("keeps the initials and icons readable on every color, at 4.5:1 at least", () => {
     const ink = token("on-marker");
     expect(ink).toBeDefined();
     for (const color of MARKER_COLORS) {
@@ -111,6 +111,26 @@ describe("marker palette", () => {
   it("checks contrast as WCAG does", () => {
     expect(contrast("#ffffff", "#000000")).toBeCloseTo(21, 5);
     expect(contrast("#777777", "#ffffff")).toBeCloseTo(4.48, 2);
+  });
+});
+
+describe("markerLook", () => {
+  it("shows the initials on the color", () => {
+    expect(markerLook("teal", null, "web site")).toEqual({ ground: "var(--marker-teal)", initials: "WS", icon: null });
+  });
+
+  it("shows the icon on the color, in the same ink as the initials", () => {
+    expect(markerLook("teal", "globe", "web site")).toEqual({ ground: "var(--marker-teal)", initials: "", icon: "globe" });
+  });
+
+  it("shows the symbol on the dark ground without a color", () => {
+    expect(markerLook(null, "globe", "web site")).toEqual({ ground: null, initials: "", icon: "globe" });
+    expect(markerLook(null, null, "web site")).toEqual({ ground: null, initials: "WS", icon: null });
+  });
+
+  it("shows the fallback icon for a name without a letter", () => {
+    expect(markerLook("teal", null, "2048")).toEqual({ ground: "var(--marker-teal)", initials: "", icon: FALLBACK_ICON });
+    expect(markerLook(null, null, "2048")).toEqual({ ground: null, initials: "", icon: FALLBACK_ICON });
   });
 });
 

@@ -30,3 +30,27 @@ export function projectInitials(name: string): string {
   const letters = words.length >= 2 ? words.slice(0, 2).map((word) => word[0]) : (words[0] ?? []).slice(0, 2);
   return letters.join("").toUpperCase();
 }
+
+/** What a project's marker draws: a ground, and either initials or an icon on it. */
+export interface MarkerLook {
+  /** The CSS value of the colored ground, or `null` for the dark ground with a border. */
+  readonly ground: string | null;
+  /** The initials to show, `""` when the marker shows {@link MarkerLook.icon} instead. */
+  readonly initials: string;
+  /** The icon to show, `null` when the marker shows {@link MarkerLook.initials} instead. */
+  readonly icon: string | null;
+}
+
+/**
+ * The marker of a project named `name` with marker color `color`, `null` for
+ * no color, and marker icon `icon`, `null` for the initials. Without an icon
+ * and without a letter in the name, the marker shows {@link FALLBACK_ICON}.
+ */
+export function markerLook(color: string | null, icon: string | null, name: string): MarkerLook {
+  const ground = color === null ? null : markerColorValue(color);
+  if (icon !== null) {
+    return { ground, initials: "", icon };
+  }
+  const initials = projectInitials(name);
+  return initials === "" ? { ground, initials, icon: FALLBACK_ICON } : { ground, initials, icon: null };
+}

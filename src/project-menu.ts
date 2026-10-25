@@ -1,8 +1,4 @@
-/** What a project's marker shows: its color with its initials, or an icon. */
-export type MarkerMode = "color" | "icon";
-
-/** The two marker modes, in the order the menu's switch shows them. */
-export const MARKER_MODES: readonly MarkerMode[] = ["color", "icon"];
+import { FALLBACK_ICON, MARKER_COLORS, MARKER_ICONS, projectInitials } from "./project-marker";
 
 /** How many choices a row of the menu's grid holds; the stylesheet lays the grid out with as many columns. */
 export const GRID_COLUMNS = 6;
@@ -10,28 +6,25 @@ export const GRID_COLUMNS = 6;
 /** The path data of the trash drawing of the menu's remove entry, a 24×24 outline like the marker icons. */
 export const TRASH_PATH = "M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3";
 
-/** The mode of a project whose marker icon is `icon`, `null` for none. */
-export function markerMode(icon: string | null): MarkerMode {
-  return icon === null ? "color" : "icon";
+/** The choices of the menu's color grid, in order: `null` for no color, then every marker color. */
+export const COLOR_CHOICES: readonly (string | null)[] = [null, ...MARKER_COLORS];
+
+/**
+ * The choices of the menu's symbol grid for a project named `name`, in order:
+ * `null` for the initials, then every marker icon. A name without a letter has
+ * no initials, so its grid starts with the icons.
+ */
+export function symbolChoices(name: string): readonly (string | null)[] {
+  return projectInitials(name) === "" ? MARKER_ICONS : [null, ...MARKER_ICONS];
 }
 
 /**
- * The mode the switch moves to on key `key`: left, up and Home give the first
- * mode, right, down and End the second. Any other key gives `undefined`.
+ * The symbol choice the menu marks as current for a project named `name`
+ * whose marker icon is `icon`, `null` for the initials: the icon, else the
+ * initials, else, for a name without a letter, the fallback icon it shows.
  */
-export function switchMove(key: string): MarkerMode | undefined {
-  switch (key) {
-    case "ArrowLeft":
-    case "ArrowUp":
-    case "Home":
-      return "color";
-    case "ArrowRight":
-    case "ArrowDown":
-    case "End":
-      return "icon";
-    default:
-      return undefined;
-  }
+export function currentSymbol(icon: string | null, name: string): string | null {
+  return icon ?? (projectInitials(name) === "" ? FALLBACK_ICON : null);
 }
 
 /**

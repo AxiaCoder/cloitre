@@ -10,8 +10,11 @@ use crate::folder::validate_folder;
 use crate::pty::lock;
 use crate::session::{LaunchMode, SessionId};
 
-/// The format version this app reads and writes in `projects.json`.
-pub const FORMAT_VERSION: u64 = 1;
+/// The format version this app writes in `projects.json`.
+pub const FORMAT_VERSION: u64 = 2;
+
+/// The older format version this app still reads, migrating it on load.
+const LEGACY_VERSION: u64 = 1;
 
 /// One project as stored in the file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -29,12 +32,12 @@ pub struct Project {
     /// then reads as `None`. May name a tab that is gone; see [`active_tab`].
     #[serde(default)]
     pub active_tab: Option<u32>,
-    /// The marker color, a name of the catalog. Absent from older files. Kept
+    /// The marker color, a name of the catalog, or `None` for no color. Kept
     /// as written: a name the catalog lacks shows as the default color.
     #[serde(default, deserialize_with = "lenient_name")]
     pub color: Option<String>,
-    /// The marker icon, a name of the catalog, or `None` for the color
-    /// marker. Kept as written: a name the catalog lacks shows no icon.
+    /// The marker icon, a name of the catalog, or `None` for the initials.
+    /// Kept as written: a name the catalog lacks shows no icon.
     #[serde(default, deserialize_with = "lenient_name")]
     pub icon: Option<String>,
 }
@@ -133,9 +136,9 @@ pub struct ProjectView {
     /// else the first tab, else `None` when the project has no tab.
     #[serde(rename = "activeTab")]
     pub active_tab: Option<u32>,
-    /// The marker color: the stored one while the catalog has it, else the
-    /// project's default color.
-    pub color: String,
+    /// The marker color: `None` for no color, else the stored one while the
+    /// catalog has it, else the project's default color.
+    pub color: Option<String>,
     /// The marker icon: the stored one while the catalog has it, else `None`.
     pub icon: Option<String>,
 }
@@ -320,8 +323,9 @@ impl ProjectStore {
         self.commit(&mut state, next)
     }
 
-    /// Gives project `id` the marker color `color` and the marker icon `icon`,
-    /// `None` for the color marker, saves it and returns the project.
+    /// Gives project `id` the marker color `color`, `None` for no color, and
+    /// the marker icon `icon`, `None` for the initials, saves both and returns
+    /// the project. The two choices are independent.
     ///
     /// # Errors
     /// [`AppError::UnknownMarker`] for a color or icon the catalog lacks; an
@@ -329,10 +333,12 @@ impl ProjectStore {
     pub fn set_marker(
         &self,
         id: u32,
-        color: &str,
+        color: Option<&str>,
         icon: Option<&str>,
     ) -> Result<ProjectView, AppError> {
-        if !MARKER_CATALOG.colors.iter().any(|known| known == color) {
+        if let Some(color) = color
+            && !MARKER_CATALOG.colors.iter().any(|known| known == color)
+        {
             return Err(AppError::UnknownMarker(color.to_owned()));
         }
         if let Some(icon) = icon
@@ -343,7 +349,7 @@ impl ProjectStore {
         let mut state = lock(&self.state);
         let index = position(&state.file, id)?;
         let mut next = state.file.clone();
-        next.projects[index].color = Some(color.to_owned());
+        next.projects[index].color = color.map(str::to_owned);
         next.projects[index].icon = icon.map(str::to_owned);
         self.commit(&mut state, next)?;
         Ok(view(&state.file.projects[index]))
@@ -488,15 +494,16 @@ fn load(file: &Path) -> Loaded {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Loaded::Missing,
         Err(error) => return Loaded::Unreadable(format!("it could not be read: {error}")),
     };
-    let value: serde_json::Value = match serde_json::from_str(&text) {
+    let mut value: serde_json::Value = match serde_json::from_str(&text) {
         Ok(value) => value,
         Err(error) => return Loaded::Unreadable(format!("it is not valid JSON: {error}")),
     };
     match value.get("version").and_then(serde_json::Value::as_u64) {
         Some(FORMAT_VERSION) => {}
+        Some(LEGACY_VERSION) => migrate_legacy(&mut value),
         Some(other) => {
             return Loaded::Unreadable(format!(
-                "it has format version {other}, this app reads version {FORMAT_VERSION}"
+                "it has format version {other}, this app reads versions {LEGACY_VERSION} and {FORMAT_VERSION}"
             ));
         }
         None => return Loaded::Unreadable("it has no format version".to_owned()),
@@ -510,6 +517,43 @@ fn load(file: &Path) -> Loaded {
     match invalid_tab(&content) {
         Some(id) => Loaded::Unreadable(format!("it has a tab id of 0 or used twice: {id}")),
         None => Loaded::Ready(content),
+    }
+}
+
+/// Turns the version 1 content `value` into version 2, in place. A project
+/// with a catalog icon gets no color, the dark ground version 1 showed behind icons;
+/// a project without an icon whose color is absent or not a string gets the
+/// color it showed, the catalog color its id falls on. Anything that is not
+/// a version 1 project list is left for deserialization to refuse.
+fn migrate_legacy(value: &mut serde_json::Value) {
+    value["version"] = FORMAT_VERSION.into();
+    let Some(projects) = value
+        .get_mut("projects")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    for project in projects
+        .iter_mut()
+        .filter_map(serde_json::Value::as_object_mut)
+    {
+        let known_icon = project
+            .get("icon")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|icon| MARKER_CATALOG.icons.iter().any(|known| known == icon));
+        if known_icon {
+            project.insert("color".to_owned(), serde_json::Value::Null);
+        } else if !project
+            .get("color")
+            .is_some_and(serde_json::Value::is_string)
+        {
+            let id = project
+                .get("id")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|id| u32::try_from(id).ok())
+                .unwrap_or_default();
+            project.insert("color".to_owned(), default_color(id).into());
+        }
     }
 }
 
@@ -725,15 +769,23 @@ fn active_tab(project: &Project) -> Option<u32> {
         .or_else(|| project.tabs.first().map(|tab| tab.id))
 }
 
-/// Returns the marker color `project` shows: its stored color while the
-/// catalog has it, else the catalog color its id falls on.
-fn marker_color(project: &Project) -> &'static str {
+/// Returns the catalog color project id `id` falls on, its default color.
+fn default_color(id: u32) -> &'static str {
     let colors = &MARKER_CATALOG.colors;
-    project
-        .color
-        .as_deref()
-        .and_then(|stored| colors.iter().find(|known| *known == stored))
-        .unwrap_or_else(|| &colors[(project.id.saturating_sub(1) as usize) % colors.len()])
+    &colors[(id.saturating_sub(1) as usize) % colors.len()]
+}
+
+/// Returns the marker color `project` shows: `None` for no color, else its
+/// stored color while the catalog has it, else its [`default_color`].
+fn marker_color(project: &Project) -> Option<&'static str> {
+    let stored = project.color.as_deref()?;
+    Some(
+        MARKER_CATALOG
+            .colors
+            .iter()
+            .find(|known| *known == stored)
+            .map_or_else(|| default_color(project.id), String::as_str),
+    )
 }
 
 /// Returns the marker icon `project` shows: its stored icon while the catalog
@@ -749,10 +801,10 @@ fn marker_icon(project: &Project) -> Option<&'static str> {
 
 /// Returns the color a new project of `file` takes: the first catalog color no
 /// project shows, else, all being shown, the one after the color of the last
-/// project of the list.
+/// project of the list that shows a color.
 fn new_color(file: &ProjectsFile) -> String {
     let colors = &MARKER_CATALOG.colors;
-    let shown: Vec<&str> = file.projects.iter().map(marker_color).collect();
+    let shown: Vec<&str> = file.projects.iter().filter_map(marker_color).collect();
     let free = colors.iter().find(|color| !shown.contains(&color.as_str()));
     let chosen = free.unwrap_or_else(|| {
         let last = shown.last().copied().unwrap_or_default();
@@ -778,7 +830,7 @@ fn view(project: &Project) -> ProjectView {
             .map(|tab| TabView { id: tab.id })
             .collect(),
         active_tab: active_tab(project),
-        color: marker_color(project).to_owned(),
+        color: marker_color(project).map(str::to_owned),
         icon: marker_icon(project).map(str::to_owned),
     }
 }
@@ -839,7 +891,7 @@ mod tests {
         assert_eq!(reopened.list(), store.list());
         let text = fs::read_to_string(dir.path().join("projects.json")).unwrap();
         let value: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(value["version"], 1);
+        assert_eq!(value["version"], 2);
         assert_eq!(value["projects"][0]["tabs"], serde_json::json!([]));
     }
 
@@ -1025,13 +1077,13 @@ mod tests {
     fn an_unknown_version_is_copied_aside_and_the_list_starts_empty() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("projects.json");
-        let future = r#"{ "version": 2, "projects": [] }"#;
+        let future = r#"{ "version": 3, "projects": [] }"#;
         fs::write(&file, future).unwrap();
         fs::write(dir.path().join("projects.json.unreadable"), "older").unwrap();
         let list = store_in(dir.path()).list();
         assert!(list.projects.is_empty());
         let warning = list.warning.unwrap();
-        assert!(warning.contains("format version 2"), "{warning}");
+        assert!(warning.contains("format version 3"), "{warning}");
         assert!(warning.contains("projects.json.unreadable-2"), "{warning}");
         assert_eq!(
             fs::read_to_string(dir.path().join("projects.json.unreadable-2")).unwrap(),
@@ -1175,7 +1227,7 @@ mod tests {
         assert_eq!(store.add(&folder(dir.path(), "b")).unwrap().id, 5);
         let text = fs::read_to_string(&file).unwrap();
         let value: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(value["version"], 1);
+        assert_eq!(value["version"], 2);
         assert_eq!(value["next_id"], 6);
     }
 
@@ -1735,7 +1787,13 @@ mod tests {
     /// Adds `count` projects to `store`, folders `p1`… in `dir`, and returns their colors.
     fn add_projects(store: &ProjectStore, dir: &Path, count: usize) -> Vec<String> {
         (1..=count)
-            .map(|n| store.add(&folder(dir, &format!("p{n}"))).unwrap().color)
+            .map(|n| {
+                store
+                    .add(&folder(dir, &format!("p{n}")))
+                    .unwrap()
+                    .color
+                    .unwrap()
+            })
             .collect()
     }
 
@@ -1755,11 +1813,11 @@ mod tests {
         let store = store_in(dir.path());
         let a = store.add(&folder(dir.path(), "a")).unwrap();
         let second = MARKER_CATALOG.colors[1].clone();
-        store.set_marker(a.id, &second, None).unwrap();
+        store.set_marker(a.id, Some(&second), None).unwrap();
         let b = store.add(&folder(dir.path(), "b")).unwrap();
-        assert_eq!(b.color, MARKER_CATALOG.colors[0]);
+        assert_eq!(b.color.as_ref(), Some(&MARKER_CATALOG.colors[0]));
         let c = store.add(&folder(dir.path(), "c")).unwrap();
-        assert_eq!(c.color, MARKER_CATALOG.colors[2]);
+        assert_eq!(c.color.as_ref(), Some(&MARKER_CATALOG.colors[2]));
     }
 
     #[test]
@@ -1781,32 +1839,107 @@ mod tests {
         let a = store.add(&folder(dir.path(), "a")).unwrap();
         let color = MARKER_CATALOG.colors[3].clone();
         let icon = MARKER_CATALOG.icons[1].clone();
-        let set = store.set_marker(a.id, &color, Some(&icon)).unwrap();
+        let set = store.set_marker(a.id, Some(&color), Some(&icon)).unwrap();
         assert_eq!(
-            (set.color.as_str(), set.icon.as_deref()),
-            (color.as_str(), Some(icon.as_str()))
+            (set.color.as_deref(), set.icon.as_deref()),
+            (Some(color.as_str()), Some(icon.as_str()))
         );
         let reopened = store_in(dir.path()).list().projects;
-        assert_eq!(reopened[0].color, color);
+        assert_eq!(reopened[0].color, Some(color.clone()));
         assert_eq!(reopened[0].icon, Some(icon.clone()));
         let text = fs::read_to_string(dir.path().join("projects.json")).unwrap();
         let value: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(value["projects"][0]["color"], color.as_str());
         assert_eq!(value["projects"][0]["icon"], icon.as_str());
+        assert_eq!(value["version"], FORMAT_VERSION);
     }
 
     #[test]
-    fn removing_the_icon_keeps_the_color() {
+    fn color_and_icon_are_set_independently() {
         let dir = tempfile::tempdir().unwrap();
         let store = store_in(dir.path());
         let a = store.add(&folder(dir.path(), "a")).unwrap();
         let color = MARKER_CATALOG.colors[4].clone();
-        store
-            .set_marker(a.id, &color, Some(&MARKER_CATALOG.icons[0]))
-            .unwrap();
-        let cleared = store.set_marker(a.id, &color, None).unwrap();
-        assert_eq!((cleared.color, cleared.icon), (color, None));
-        assert_eq!(store_in(dir.path()).list().projects[0].icon, None);
+        let icon = MARKER_CATALOG.icons[0].clone();
+        store.set_marker(a.id, Some(&color), Some(&icon)).unwrap();
+        let initials = store.set_marker(a.id, Some(&color), None).unwrap();
+        assert_eq!((initials.color, initials.icon), (Some(color.clone()), None));
+        let no_color = store.set_marker(a.id, None, Some(&icon)).unwrap();
+        assert_eq!((no_color.color, no_color.icon), (None, Some(icon.clone())));
+        let plain = store.set_marker(a.id, None, None).unwrap();
+        assert_eq!((plain.color, plain.icon), (None, None));
+    }
+
+    #[test]
+    fn no_color_survives_a_reopen_as_null() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let icon = MARKER_CATALOG.icons[3].clone();
+        store.set_marker(a.id, None, Some(&icon)).unwrap();
+        let text = fs::read_to_string(dir.path().join("projects.json")).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["version"], 2);
+        assert!(value["projects"][0]["color"].is_null());
+        let reopened = store_in(dir.path()).list();
+        assert_eq!(reopened.warning, None);
+        assert_eq!(reopened.projects[0].color, None);
+        assert_eq!(reopened.projects[0].icon, Some(icon));
+    }
+
+    #[test]
+    fn a_version_1_project_with_an_icon_loads_without_color() {
+        let dir = tempfile::tempdir().unwrap();
+        let icon = MARKER_CATALOG.icons[2].clone();
+        let blue = MARKER_CATALOG.colors[0].clone();
+        let file = serde_json::json!({
+            "version": 1,
+            "projects": [
+                { "id": 1, "name": "a", "path": "nowhere", "color": blue, "icon": icon },
+                { "id": 2, "name": "b", "path": "elsewhere", "icon": icon },
+            ],
+        });
+        fs::write(dir.path().join("projects.json"), file.to_string()).unwrap();
+        let list = store_in(dir.path()).list();
+        assert_eq!(list.warning, None);
+        for project in &list.projects {
+            assert_eq!(
+                (project.color.as_ref(), project.icon.as_ref()),
+                (None, Some(&icon))
+            );
+        }
+    }
+
+    #[test]
+    fn a_version_1_project_without_an_icon_keeps_its_color() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = folder(dir.path(), "a");
+        let teal = MARKER_CATALOG.colors[1].clone();
+        let file = serde_json::json!({
+            "version": 1,
+            "projects": [
+                { "id": 1, "name": "a", "path": path.to_str().unwrap(), "color": teal, "icon": null },
+                { "id": 2, "name": "b", "path": "elsewhere" },
+            ],
+        });
+        fs::write(dir.path().join("projects.json"), file.to_string()).unwrap();
+        let store = store_in(dir.path());
+        let list = store.list();
+        assert_eq!(list.warning, None);
+        assert_eq!(list.projects[0].color, Some(teal.clone()));
+        assert_eq!(
+            list.projects[1].color,
+            Some(MARKER_CATALOG.colors[1].clone())
+        );
+        store.select(2).unwrap();
+        let text = fs::read_to_string(dir.path().join("projects.json")).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["version"], 2);
+        assert_eq!(value["projects"][0]["color"], teal.as_str());
+        assert_eq!(
+            value["projects"][1]["color"],
+            MARKER_CATALOG.colors[1].as_str()
+        );
     }
 
     #[test]
@@ -1816,15 +1949,19 @@ mod tests {
         let a = store.add(&folder(dir.path(), "a")).unwrap();
         let color = MARKER_CATALOG.colors[0].clone();
         assert_eq!(
-            store.set_marker(a.id, "plaid", None),
+            store.set_marker(a.id, Some("plaid"), None),
             Err(AppError::UnknownMarker("plaid".to_owned()))
         );
         assert_eq!(
-            store.set_marker(a.id, &color, Some("unicorn")),
+            store.set_marker(a.id, Some(&color), Some("unicorn")),
             Err(AppError::UnknownMarker("unicorn".to_owned()))
         );
         assert_eq!(
-            store.set_marker(9, &color, None),
+            store.set_marker(a.id, None, Some("unicorn")),
+            Err(AppError::UnknownMarker("unicorn".to_owned()))
+        );
+        assert_eq!(
+            store.set_marker(9, Some(&color), None),
             Err(AppError::UnknownProject(9))
         );
         assert_eq!(store.list().projects[0], a);
@@ -1844,10 +1981,32 @@ mod tests {
         fs::write(dir.path().join("projects.json"), file.to_string()).unwrap();
         let list = store_in(dir.path()).list();
         assert_eq!(list.warning, None);
-        assert_eq!(list.projects[0].color, MARKER_CATALOG.colors[2]);
+        assert_eq!(
+            list.projects[0].color,
+            Some(MARKER_CATALOG.colors[2].clone())
+        );
         assert_eq!(list.projects[0].icon, None);
-        assert_eq!(list.projects[1].color, MARKER_CATALOG.colors[3]);
+        assert_eq!(
+            list.projects[1].color,
+            Some(MARKER_CATALOG.colors[3].clone())
+        );
         assert_eq!(list.projects[1].icon, None);
+    }
+
+    #[test]
+    fn an_unknown_color_in_a_version_2_file_shows_the_default_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = serde_json::json!({
+            "version": 2,
+            "projects": [{ "id": 3, "name": "a", "path": "nowhere", "color": "plaid", "icon": null }],
+        });
+        fs::write(dir.path().join("projects.json"), file.to_string()).unwrap();
+        let list = store_in(dir.path()).list();
+        assert_eq!(list.warning, None);
+        assert_eq!(
+            list.projects[0].color,
+            Some(MARKER_CATALOG.colors[2].clone())
+        );
     }
 
     #[test]
@@ -1860,7 +2019,10 @@ mod tests {
         fs::write(dir.path().join("projects.json"), file.to_string()).unwrap();
         let list = store_in(dir.path()).list();
         assert_eq!(list.warning, None);
-        assert_eq!(list.projects[0].color, MARKER_CATALOG.colors[0]);
+        assert_eq!(
+            list.projects[0].color,
+            Some(MARKER_CATALOG.colors[0].clone())
+        );
         assert_eq!(list.projects[0].icon, None);
     }
 
@@ -1875,9 +2037,9 @@ mod tests {
         assert_eq!(added[count + 1], colors[1]);
 
         let last = store.list().projects.last().unwrap().id;
-        store.set_marker(last, &colors[5], None).unwrap();
+        store.set_marker(last, Some(&colors[5]), None).unwrap();
         let next = store.add(&folder(dir.path(), "next")).unwrap();
-        assert_eq!(next.color, colors[6]);
+        assert_eq!(next.color.as_ref(), Some(&colors[6]));
     }
 
     #[test]
@@ -1888,7 +2050,17 @@ mod tests {
         let second = store.list().projects[1].id;
         store.remove(second).unwrap();
         let next = store.add(&folder(dir.path(), "next")).unwrap();
-        assert_eq!(next.color, MARKER_CATALOG.colors[1]);
+        assert_eq!(next.color.as_ref(), Some(&MARKER_CATALOG.colors[1]));
+    }
+
+    #[test]
+    fn a_project_without_color_frees_its_color() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        store.set_marker(a.id, None, None).unwrap();
+        let b = store.add(&folder(dir.path(), "b")).unwrap();
+        assert_eq!(b.color.as_ref(), Some(&MARKER_CATALOG.colors[0]));
     }
 
     #[test]
@@ -1901,11 +2073,11 @@ mod tests {
         fs::write(dir.path().join("projects.json"), file.to_string()).unwrap();
         let store = store_in(dir.path());
         let b = store.add(&folder(dir.path(), "b")).unwrap();
-        assert_eq!(b.color, MARKER_CATALOG.colors[1]);
+        assert_eq!(b.color.as_ref(), Some(&MARKER_CATALOG.colors[1]));
     }
 
     #[test]
-    fn a_stored_icon_is_shown_while_the_color_is_unknown() {
+    fn a_version_1_icon_is_shown_without_color_whatever_its_stored_color() {
         let dir = tempfile::tempdir().unwrap();
         let icon = MARKER_CATALOG.icons[2].clone();
         let file = serde_json::json!({
@@ -1917,7 +2089,7 @@ mod tests {
         fs::write(dir.path().join("projects.json"), file.to_string()).unwrap();
         let list = store_in(dir.path()).list();
         assert_eq!(list.warning, None);
-        assert_eq!(list.projects[0].color, MARKER_CATALOG.colors[1]);
+        assert_eq!(list.projects[0].color, None);
         assert_eq!(list.projects[0].icon, Some(icon));
     }
 
@@ -1932,17 +2104,21 @@ mod tests {
             path: "nowhere".to_owned(),
             tabs: Vec::new(),
             active_tab: None,
-            color: None,
+            color: Some(MARKER_CATALOG.colors[0].clone()),
             icon: None,
         }];
         assert_eq!(
-            store.set_marker(1, &MARKER_CATALOG.colors[4], Some(&MARKER_CATALOG.icons[0])),
+            store.set_marker(
+                1,
+                Some(&MARKER_CATALOG.colors[4]),
+                Some(&MARKER_CATALOG.icons[0])
+            ),
             Err(AppError::ProjectsReadOnly)
         );
         let shown = &store.list().projects[0];
         assert_eq!(
-            (shown.color.as_str(), shown.icon.as_deref()),
-            (MARKER_CATALOG.colors[0].as_str(), None)
+            (shown.color.as_deref(), shown.icon.as_deref()),
+            (Some(MARKER_CATALOG.colors[0].as_str()), None)
         );
     }
 }

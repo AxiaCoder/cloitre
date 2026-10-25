@@ -1,30 +1,33 @@
 import { describe, expect, it } from "vitest";
-import { GRID_COLUMNS, MARKER_MODES, gridMove, isMenuKey, markerMode, switchMove } from "./project-menu";
-import { MARKER_COLORS, MARKER_ICONS } from "./project-marker";
+import { COLOR_CHOICES, GRID_COLUMNS, currentSymbol, gridMove, isMenuKey, symbolChoices } from "./project-menu";
+import { FALLBACK_ICON, MARKER_COLORS, MARKER_ICONS } from "./project-marker";
 import { messages } from "./strings";
 
-describe("markerMode", () => {
-  it("is color without an icon and icon with one", () => {
-    expect(markerMode(null)).toBe("color");
-    expect(markerMode("star")).toBe("icon");
+describe("COLOR_CHOICES", () => {
+  it("starts with no color, then every palette color in order", () => {
+    expect(COLOR_CHOICES).toEqual([null, ...MARKER_COLORS]);
   });
 });
 
-describe("MARKER_MODES", () => {
-  it("lists color before icon, the order the switch keys move in", () => {
-    expect(MARKER_MODES).toEqual(["color", "icon"]);
+describe("symbolChoices", () => {
+  it("starts with the initials, then every icon in order", () => {
+    expect(symbolChoices("web site")).toEqual([null, ...MARKER_ICONS]);
+  });
+
+  it("has no initials for a name without a letter", () => {
+    expect(symbolChoices("2048")).toEqual(MARKER_ICONS);
   });
 });
 
-describe("switchMove", () => {
-  it("goes to color on left, up and Home, to icon on right, down and End", () => {
-    expect(["ArrowLeft", "ArrowUp", "Home"].map(switchMove)).toEqual(["color", "color", "color"]);
-    expect(["ArrowRight", "ArrowDown", "End"].map(switchMove)).toEqual(["icon", "icon", "icon"]);
+describe("currentSymbol", () => {
+  it("is the icon when there is one, else the initials", () => {
+    expect(currentSymbol("globe", "web site")).toBe("globe");
+    expect(currentSymbol(null, "web site")).toBeNull();
   });
 
-  it("ignores other keys", () => {
-    expect(switchMove("Enter")).toBeUndefined();
-    expect(switchMove("a")).toBeUndefined();
+  it("is the fallback icon the marker shows for a name without a letter", () => {
+    expect(currentSymbol(null, "2048")).toBe(FALLBACK_ICON);
+    expect(currentSymbol("star", "2048")).toBe("star");
   });
 });
 
@@ -119,8 +122,16 @@ describe("the removal texts", () => {
     expect(messages.removeFailed("the app data could not be saved.")).toBe(expected);
   });
 
-  it("name the mode the project shows when the switch shows the other", () => {
-    expect(messages.markerHint("color")).toBe("Showing a color now. Pick an icon to replace it.");
-    expect(messages.markerHint("icon")).toBe("Showing an icon now. Pick a color to replace it.");
+});
+
+describe("the marker choice names", () => {
+  it("name a color in words, or no color", () => {
+    expect(messages.markerColorName("teal")).toBe("Teal");
+    expect(messages.markerColorName(null)).toBe("No color");
+  });
+
+  it("name a symbol in words, or the initials", () => {
+    expect(messages.markerSymbolName("globe")).toBe("Globe");
+    expect(messages.markerSymbolName(null)).toBe("Initials");
   });
 });

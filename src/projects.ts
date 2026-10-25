@@ -19,9 +19,9 @@ export interface Project {
   readonly tabs: readonly ProjectTab[];
   /** The tab to bring to the front: the last active one while it exists, else the first tab, else `null` with no tab. */
   readonly activeTab: number | null;
-  /** The marker color, always a name of the marker catalog. */
-  readonly color: string;
-  /** The marker icon, a name of the marker catalog, or `null` for the color marker. */
+  /** The marker color, a name of the marker catalog, or `null` for no color. */
+  readonly color: string | null;
+  /** The marker icon, a name of the marker catalog, or `null` for the initials. */
   readonly icon: string | null;
 }
 
@@ -74,11 +74,12 @@ export function rememberSelection(id: number): Promise<void> {
 }
 
 /**
- * Gives project `id` the marker color `color` and the marker icon `icon`,
- * `null` for the color marker; both are names of the marker catalog. Resolves
- * with the updated project; rejects with the Rust refusal message.
+ * Gives project `id` the marker color `color`, `null` for no color, and the
+ * marker icon `icon`, `null` for the initials; both are names of the marker
+ * catalog, chosen independently. Resolves with the updated project; rejects
+ * with the Rust refusal message.
  */
-export function setProjectMarker(id: number, color: string, icon: string | null): Promise<Project> {
+export function setProjectMarker(id: number, color: string | null, icon: string | null): Promise<Project> {
   return invoke<Project>("project_set_marker", { id, color, icon });
 }
 
