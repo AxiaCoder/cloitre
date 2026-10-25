@@ -577,7 +577,6 @@ function projectButton(projectId: number): HTMLButtonElement | null {
   return projectList.querySelector<HTMLButtonElement>(`[data-project="${String(projectId)}"]`);
 }
 
-
 /**
  * A button of the marker menu showing `content`, named `label`, marked when
  * `current`; runs `pick` on click. It is out of the tab order until its grid
