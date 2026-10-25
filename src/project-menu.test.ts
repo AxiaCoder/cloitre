@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GRID_COLUMNS, gridMove, isMenuKey, markerMode, switchMove } from "./project-menu";
+import { GRID_COLUMNS, MARKER_MODES, gridMove, isMenuKey, markerMode, switchMove } from "./project-menu";
 import { MARKER_COLORS, MARKER_ICONS } from "./project-marker";
 import { messages } from "./strings";
 
@@ -7,6 +7,12 @@ describe("markerMode", () => {
   it("is color without an icon and icon with one", () => {
     expect(markerMode(null)).toBe("color");
     expect(markerMode("star")).toBe("icon");
+  });
+});
+
+describe("MARKER_MODES", () => {
+  it("lists color before icon, the order the switch keys move in", () => {
+    expect(MARKER_MODES).toEqual(["color", "icon"]);
   });
 });
 
@@ -48,6 +54,23 @@ describe("gridMove", () => {
     expect(MARKER_ICONS).toHaveLength(11);
   });
 
+  it("wraps up from the first row to the same column of a full last row", () => {
+    expect(gridMove(2, 12, 6, "ArrowUp")).toBe(8);
+    expect(gridMove(8, 12, 6, "ArrowDown")).toBe(2);
+  });
+
+  it("stays in place up and down in a grid of a single row", () => {
+    expect(gridMove(2, 4, 6, "ArrowUp")).toBe(2);
+    expect(gridMove(2, 4, 6, "ArrowDown")).toBe(2);
+    expect(gridMove(3, 4, 6, "ArrowRight")).toBe(0);
+  });
+
+  it("stays on the only choice of a one-choice grid", () => {
+    expect(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].map((key) => gridMove(0, 1, 6, key))).toEqual([
+      0, 0, 0, 0, 0, 0,
+    ]);
+  });
+
   it("goes to the first and last choice on Home and End", () => {
     expect(gridMove(7, 15, 6, "Home")).toBe(0);
     expect(gridMove(7, 15, 6, "End")).toBe(14);
@@ -78,6 +101,8 @@ describe("isMenuKey", () => {
     expect(isMenuKey(key("F10"))).toBe(false);
     expect(isMenuKey(key("F10", { shiftKey: true, ctrlKey: true }))).toBe(false);
     expect(isMenuKey(key("Enter", { shiftKey: true }))).toBe(false);
+    expect(isMenuKey(key("F10", { shiftKey: true, altKey: true }))).toBe(false);
+    expect(isMenuKey(key("F10", { shiftKey: true, metaKey: true }))).toBe(false);
   });
 });
 
