@@ -14,9 +14,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: "26.7.0"
-  PNPM_VERSION: "10.23.0"
-  RUST_VERSION: "1.99.1"
   CARGO_TERM_COLOR: always
 
 jobs:
@@ -24,31 +21,14 @@ jobs:
     name: checks
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
-
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          version: ${{ env.PNPM_VERSION }}
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
-          components: clippy
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
+          persist-credentials: false
 
       - id: install
-        run: pnpm install --frozen-lockfile
-
-      # Tauri's build script requires the frontendDist folder to exist.
-      - run: New-Item -ItemType Directory -Force dist
+        uses: ./.github/actions/setup-toolchain
+        with:
+          rust-components: clippy
 
       - name: pnpm lint
         run: pnpm lint

@@ -46,7 +46,7 @@ From the repository root:
 - `pnpm tauri dev`: run the app
 - `pnpm lint`, `pnpm typecheck`, `pnpm test`
 - `pnpm tauri build --debug`
-- `pnpm bump-version <X.Y.Z>`: set the app version. `package.json` holds it; the command also writes `src-tauri/Cargo.toml` and refreshes `src-tauri/Cargo.lock`, and `tauri.conf.json` reads it from `package.json`. Never edit a version by hand: `cargo test` fails when `Cargo.toml` and `package.json` disagree.
+- `pnpm bump-version <X.Y.Z>`: set the app version, for repairs only. Release Please bumps the version in its release pull request. `package.json` holds it; the command also writes `.release-please-manifest.json` and `src-tauri/Cargo.toml` and refreshes `src-tauri/Cargo.lock`, and `tauri.conf.json` reads it from `package.json`. Never edit a version by hand: `cargo test` fails when `Cargo.toml` and `package.json` disagree.
 
 From `src-tauri`:
 

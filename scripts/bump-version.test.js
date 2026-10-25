@@ -39,15 +39,21 @@ const STALE_LOCK = [
   "",
 ].join("\n");
 
+const MANIFEST = `{
+  ".": "0.1.0"
+}
+`;
+
 let root = "";
 
-/** Builds a throwaway repository holding a copy of the script, package.json and src-tauri/Cargo.toml. */
+/** Builds a throwaway repository holding a copy of the script, package.json, .release-please-manifest.json and src-tauri/Cargo.toml. */
 function makeRepo(packageJson = PACKAGE_JSON, cargoToml = CARGO_TOML) {
   root = mkdtempSync(join(tmpdir(), "bump-version-"));
   mkdirSync(join(root, "scripts"));
   mkdirSync(join(root, "src-tauri"));
   copyFileSync(script, join(root, "scripts", "bump-version.js"));
   writeFileSync(join(root, "package.json"), packageJson);
+  writeFileSync(join(root, ".release-please-manifest.json"), MANIFEST);
   writeFileSync(join(root, "src-tauri", "Cargo.toml"), cargoToml);
   writeFileSync(join(root, "src-tauri", "Cargo.lock"), STALE_LOCK);
   writeFileSync(join(root, "src-tauri", "lib.rs"), "");
@@ -89,6 +95,13 @@ describe("bump-version", () => {
     expect(result.stdout).toContain("Version set to 1.2.3");
   }, 60_000);
 
+  it("writes the version into .release-please-manifest.json", () => {
+    const result = bump("0.2.0");
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(read(".release-please-manifest.json"))).toEqual({ ".": "0.2.0" });
+  }, 60_000);
+
   it("rewrites only the package version, not a version line further down Cargo.toml", () => {
     rmSync(root, { recursive: true, force: true });
     makeRepo(PACKAGE_JSON, `${CARGO_TOML}\n[package.metadata.demo]\nversion = "9.9.9"\n`);
@@ -127,6 +140,7 @@ describe("bump-version", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Usage: pnpm bump-version <X.Y.Z>");
     expect(read("package.json")).toBe(PACKAGE_JSON);
+    expect(read(".release-please-manifest.json")).toBe(MANIFEST);
     expect(read("src-tauri/Cargo.toml")).toBe(CARGO_TOML);
     expect(read("src-tauri/Cargo.lock")).toBe(STALE_LOCK);
   });
@@ -159,7 +173,7 @@ describe("bump-version", () => {
     expect(read("package.json")).toBe(PACKAGE_JSON);
   });
 
-  it("leaves package.json, Cargo.toml and Cargo.lock untouched when cargo update fails", () => {
+  it("leaves package.json, the release manifest, Cargo.toml and Cargo.lock untouched when cargo update fails", () => {
     rmSync(root, { recursive: true, force: true });
     const brokenCargo = `${CARGO_TOML}\n[dependencies]\nmissing = { path = "does-not-exist" }\n`;
     makeRepo(PACKAGE_JSON, brokenCargo);
@@ -168,6 +182,7 @@ describe("bump-version", () => {
 
     expect(result.status).not.toBe(0);
     expect(read("package.json")).toBe(PACKAGE_JSON);
+    expect(read(".release-please-manifest.json")).toBe(MANIFEST);
     expect(read("src-tauri/Cargo.toml")).toBe(brokenCargo);
     expect(read("src-tauri/Cargo.lock")).toBe(STALE_LOCK);
   }, 60_000);
