@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/AxiaCoder/cloitre/compare/v0.2.0...v0.3.0) (2026-10-25)
+
+
+### Features
+
+* **updates:** the app offers newer releases and installs them from signed update files ([#59](https://github.com/AxiaCoder/cloitre/issues/59)) ([d6beb70](https://github.com/AxiaCoder/cloitre/commit/d6beb707ae26c0e9497c08c34dc60cbca050a8df))
+
 ## [0.2.0](https://github.com/AxiaCoder/cloitre/compare/v0.1.0...v0.2.0) (2026-10-25)
 
 
