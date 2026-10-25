@@ -216,6 +216,46 @@ mod tests {
     }
 
     #[test]
+    fn release_please_manifest_matches_cargo_version() {
+        let manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../../.release-please-manifest.json")).unwrap();
+        assert_eq!(
+            manifest["."].as_str(),
+            Some(env!("CARGO_PKG_VERSION")),
+            ".release-please-manifest.json disagrees with src-tauri/Cargo.toml on the version"
+        );
+    }
+
+    #[test]
+    fn release_please_bumps_the_cargo_manifest_and_this_crate_in_the_lockfile() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../../release-please-config.json")).unwrap();
+        let extra_files: Vec<(&str, &str, &str)> = config["packages"]["."]["extra-files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|file| {
+                (
+                    file["type"].as_str().unwrap(),
+                    file["path"].as_str().unwrap(),
+                    file["jsonpath"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        let lock_jsonpath = format!(
+            "$.package[?(@.name.value=='{}')].version",
+            env!("CARGO_PKG_NAME")
+        );
+        assert_eq!(
+            extra_files,
+            [
+                ("toml", "src-tauri/Cargo.toml", "$.package.version"),
+                ("toml", "src-tauri/Cargo.lock", lock_jsonpath.as_str()),
+            ]
+        );
+    }
+
+    #[test]
     fn tauri_config_takes_its_version_from_package_json() {
         let config: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
