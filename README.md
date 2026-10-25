@@ -16,12 +16,20 @@ Cloître is an independent project, not affiliated with or endorsed by Anthropic
 
 The installed app then offers each new release itself.
 
-### The "Windows protected your PC" warning
+### The "isn't commonly downloaded" warning
 
-The installer is not signed with a code signing certificate, so Microsoft Defender SmartScreen does not know its publisher and stops it the first time:
+The installer is not signed with a code signing certificate, so Microsoft Defender SmartScreen does not know its publisher. In Microsoft Edge, it holds the download:
 
-1. A blue window says **Windows protected your PC**. Click **More info**.
-2. The window shows `Publisher: Unknown publisher`. Click **Run anyway**.
+1. The downloads panel says the installer **isn't commonly downloaded**.
+
+   ![Edge downloads panel: the installer is not commonly downloaded](docs/images/edge-download-warning.png)
+
+2. Point at the download, click **…**, then **Keep**.
+3. A window asks you to make sure you trust the file, with `Publisher: Unknown`. Open the arrow next to **Delete** and choose **Keep anyway**.
+
+   ![Edge window: make sure you trust the file before you open it](docs/images/edge-keep-anyway.png)
+
+Once the download is kept, the installer runs without a further warning. With another browser, Windows may stop the installer when it starts instead, with a blue **Windows protected your PC** window: click **More info**, then **Run anyway**.
 
 The warning comes from the missing signature, not from something found in the file. Each release's notes give the result of a Microsoft Defender scan of its installer, and you can check that your download is the file that was scanned.
 
