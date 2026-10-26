@@ -42,6 +42,7 @@ const fakes = vi.hoisted(() => {
     disposed = false;
     dataListener: (data: string) => void = () => undefined;
     resizeListener: (size: Size) => void = () => undefined;
+    titleListener: (title: string) => void = () => undefined;
     keyHandler: (event: KeyboardEvent) => boolean = () => true;
     selected = false;
     /** Registers the terminal, with its `options`, so the test can reach it. */
@@ -63,6 +64,10 @@ const fakes = vi.hoisted(() => {
     /** Keeps the resize listener. */
     onResize(listener: (size: Size) => void): void {
       this.resizeListener = listener;
+    }
+    /** Keeps the title listener. */
+    onTitleChange(listener: (title: string) => void): void {
+      this.titleListener = listener;
     }
     /** Returns whether the test has set a selection on this terminal. */
     hasSelection(): boolean {
@@ -204,6 +209,7 @@ function recorder() {
     onResume: () => events.push("resume"),
     onClose: () => events.push("close"),
     onRetry: (mode) => events.push(`retry ${mode}`),
+    onTitle: (title) => events.push(`title ${title}`),
   };
   return { events, handlers };
 }
@@ -643,6 +649,16 @@ describe("TabPane, hidden and shown", () => {
     }
     await settle();
     expect(calls("pty_resize")).toEqual([{ id: 1, cols: 120, rows: 40 }]);
+  });
+});
+
+describe("TabPane title", () => {
+  it("tells the page each title its session sets, as received", () => {
+    const { events, handlers } = recorder();
+    const pane = openPane(1, handlers);
+    terminalOf(pane).titleListener("Fix the parser");
+    terminalOf(pane).titleListener("\u2733 Fix the parser");
+    expect(events).toEqual(["title Fix the parser", "title \u2733 Fix the parser"]);
   });
 });
 

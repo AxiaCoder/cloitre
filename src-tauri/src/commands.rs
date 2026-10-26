@@ -371,6 +371,21 @@ pub fn tab_activate(projects: State<'_, ProjectStore>, tab_id: u32) -> Result<()
     projects.activate_tab(tab_id)
 }
 
+/// Makes `title` the title of tab `tab_id`, for the next run; `None` or an
+/// empty title clears it. Saves nothing when the tab already has that title.
+///
+/// # Errors
+/// A title longer than 256 characters or holding a control character; an
+/// unknown tab id; a read-only project list; a failed save.
+#[tauri::command(async)]
+pub fn tab_set_title(
+    projects: State<'_, ProjectStore>,
+    tab_id: u32,
+    title: Option<String>,
+) -> Result<(), AppError> {
+    projects.set_tab_title(tab_id, title.as_deref())
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::{self, Write};

@@ -181,7 +181,8 @@ pub fn run() {
             commands::project_set_marker,
             commands::tab_open,
             commands::tab_close,
-            commands::tab_activate
+            commands::tab_activate,
+            commands::tab_set_title
         ])
         .build(context)
         .expect("error while building the app")
@@ -354,6 +355,7 @@ mod tests {
             "allow-tab-open",
             "allow-tab-close",
             "allow-tab-activate",
+            "allow-tab-set-title",
             "updater:allow-check",
             "updater:allow-download",
             "updater:allow-install",

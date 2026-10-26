@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { afterRefusedStart, TabModel } from "./tabs";
+import { afterRefusedStart, TabModel, tabName, type SavedTab } from "./tabs";
+
+/** Returns saved tabs `ids`, none with a title. */
+function saved(...ids: number[]): SavedTab[] {
+  return ids.map((id) => ({ id, title: null }));
+}
 
 describe("TabModel.open", () => {
   it("keeps the id Rust gave the tab", () => {
@@ -202,69 +207,158 @@ describe("TabModel replay ids", () => {
 describe("TabModel.restore", () => {
   it("reopens a project's tabs in order, restored, labelled from Session 1", () => {
     const model = new TabModel();
-    const restored = model.restore(10, [4, 9]);
+    const restored = model.restore(10, saved(4, 9));
     expect(restored).toEqual([
-      { kind: "session", id: 4, projectId: 10, label: "Session 1", state: "restored" },
-      { kind: "session", id: 9, projectId: 10, label: "Session 2", state: "restored" },
+      { kind: "session", id: 4, projectId: 10, label: "Session 1", title: null, state: "restored" },
+      { kind: "session", id: 9, projectId: 10, label: "Session 2", title: null, state: "restored" },
     ]);
     expect(model.tabsOf(10)).toEqual(restored);
   });
 
   it("numbers each project on its own", () => {
     const model = new TabModel();
-    model.restore(10, [1, 2]);
-    expect(model.restore(20, [3]).map((tab) => tab.label)).toEqual(["Session 1"]);
+    model.restore(10, saved(1, 2));
+    expect(model.restore(20, saved(3)).map((tab) => tab.label)).toEqual(["Session 1"]);
   });
 
   it("makes the first restored tab active", () => {
     const model = new TabModel();
-    model.restore(10, [4, 9]);
+    model.restore(10, saved(4, 9));
     expect(model.activeOf(10)?.id).toBe(4);
   });
 
   it("keeps the active tab of a project that already has one", () => {
     const model = new TabModel();
     model.open(10, 2);
-    model.restore(10, [5]);
+    model.restore(10, saved(5));
     expect(model.activeOf(10)?.id).toBe(2);
   });
 
   it("makes the remembered tab active", () => {
     const model = new TabModel();
-    model.restore(10, [4, 9, 11], 11);
+    model.restore(10, saved(4, 9, 11), 11);
     expect(model.activeOf(10)?.id).toBe(11);
   });
 
   it("makes the first tab active when the remembered one is not restored", () => {
     const model = new TabModel();
-    model.restore(10, [4, 9], 7);
+    model.restore(10, saved(4, 9), 7);
     expect(model.activeOf(10)?.id).toBe(4);
   });
 
   it("keeps the active tab of a project that already has one over the remembered one", () => {
     const model = new TabModel();
     model.open(10, 2);
-    model.restore(10, [5, 6], 6);
+    model.restore(10, saved(5, 6), 6);
     expect(model.activeOf(10)?.id).toBe(2);
   });
 
   it("goes on numbering after the restored tabs", () => {
     const model = new TabModel();
-    model.restore(10, [4, 9]);
+    model.restore(10, saved(4, 9));
     expect(model.open(10, 12).label).toBe("Session 3");
   });
 
   it("restores nothing and activates nothing for no tab", () => {
     const model = new TabModel();
-    expect(model.restore(10, [])).toEqual([]);
+    expect(model.restore(10, saved())).toEqual([]);
     expect(model.activeOf(10)).toBeUndefined();
   });
 
   it("moves a restored tab to starting on resume", () => {
     const model = new TabModel();
-    model.restore(10, [4]);
+    model.restore(10, saved(4));
     model.setState(4, "starting");
     expect(model.find(4)).toMatchObject({ state: "starting" });
+  });
+});
+
+describe("TabModel titles", () => {
+  it("names a session tab after the title its session set", () => {
+    const model = new TabModel();
+    model.open(10, 1);
+    expect(model.setTitle(1, "Fix the parser")).toEqual({ title: "Fix the parser" });
+    const tab = model.find(1);
+    expect(tab && tabName(tab)).toBe("Fix the parser");
+    expect(tab?.label).toBe("Session 1");
+  });
+
+  it("follows each change of title", () => {
+    const model = new TabModel();
+    model.open(10, 1);
+    model.setTitle(1, "First");
+    expect(model.setTitle(1, "Second")).toEqual({ title: "Second" });
+    expect(model.find(1)).toMatchObject({ title: "Second" });
+  });
+
+  it("reports no change for the same title", () => {
+    const model = new TabModel();
+    model.open(10, 1);
+    model.setTitle(1, "Same");
+    expect(model.setTitle(1, "Same")).toBeUndefined();
+    expect(model.setTitle(1, "Same\u0007")).toBeUndefined();
+  });
+
+  it("falls back to Session N without a title or with an empty one", () => {
+    const model = new TabModel();
+    const tab = model.open(10, 1);
+    expect(tabName(tab)).toBe("Session 1");
+    model.setTitle(1, "Working");
+    expect(model.setTitle(1, "  \u001b ")).toEqual({ title: null });
+    const cleared = model.find(1);
+    expect(cleared && tabName(cleared)).toBe("Session 1");
+    model.setTitle(1, "Again");
+    model.setTitle(1, null);
+    expect(model.find(1)).toMatchObject({ title: null });
+  });
+
+  it("ignores a title for a replay tab or an unknown tab", () => {
+    const model = new TabModel();
+    const replay = model.openReplay(10, "one.rec");
+    expect(model.setTitle(replay.id, "Hijack")).toBeUndefined();
+    expect(tabName(replay)).toBe("Replay one.rec");
+    expect(model.setTitle(42, "Nobody")).toBeUndefined();
+  });
+
+  it("restores each tab with its saved title, cleaned", () => {
+    const model = new TabModel();
+    const restored = model.restore(10, [
+      { id: 4, title: "Saved title" },
+      { id: 9, title: null },
+      { id: 11, title: "\u0007" },
+    ]);
+    expect(restored.map(tabName)).toEqual(["Saved title", "Session 2", "Session 3"]);
+  });
+
+  it("reports no change when a restored tab's session sets its saved title again", () => {
+    const model = new TabModel();
+    model.restore(10, [{ id: 4, title: "Saved title" }]);
+    model.setState(4, "starting");
+    expect(model.setTitle(4, "Saved title")).toBeUndefined();
+    expect(model.setTitle(4, "Next")).toEqual({ title: "Next" });
+  });
+
+  it("keeps the title across a change of state", () => {
+    const model = new TabModel();
+    model.open(10, 1);
+    model.setTitle(1, "Working");
+    model.setState(1, "running");
+    expect(model.find(1)).toMatchObject({ title: "Working", state: "running" });
+  });
+
+  it("keeps a title cut to the longest Rust saves", () => {
+    const model = new TabModel();
+    model.open(10, 1);
+    const changed = model.setTitle(1, "x".repeat(300));
+    expect(changed?.title).toHaveLength(256);
+  });
+
+  it("gives each tab its own title", () => {
+    const model = new TabModel();
+    model.open(10, 1);
+    model.open(10, 2);
+    model.setTitle(1, "One");
+    expect(model.tabsOf(10).map(tabName)).toEqual(["One", "Session 2"]);
   });
 });
 

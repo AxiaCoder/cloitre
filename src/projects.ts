@@ -4,6 +4,8 @@ import { invoke } from "@tauri-apps/api/core";
 export interface ProjectTab {
   /** Unique across every project, from 1, never reused. */
   readonly id: number;
+  /** The title its session last set, or `null` when it set none. */
+  readonly title: string | null;
 }
 
 /** A project as Rust reports it. */
@@ -89,6 +91,15 @@ export function setProjectMarker(id: number, color: string | null, icon: string 
  */
 export function rememberActiveTab(tabId: number): Promise<void> {
   return invoke("tab_activate", { tabId });
+}
+
+/**
+ * Saves `title` as the title of tab `tabId`, `null` to clear it. Rejects with
+ * the Rust refusal message: a title longer than 256 characters or holding a
+ * control character, an unknown tab id, a read-only project list, a failed save.
+ */
+export function saveTabTitle(tabId: number, title: string | null): Promise<void> {
+  return invoke("tab_set_title", { tabId, title });
 }
 
 /**

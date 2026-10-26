@@ -24,6 +24,7 @@ fn main() {
             "tab_open",
             "tab_close",
             "tab_activate",
+            "tab_set_title",
         ]),
     ))
     .expect("failed to run the Tauri build script");

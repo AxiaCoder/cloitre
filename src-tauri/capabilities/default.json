@@ -22,6 +22,7 @@
     "allow-tab-open",
     "allow-tab-close",
     "allow-tab-activate",
+    "allow-tab-set-title",
     "updater:allow-check",
     "updater:allow-download",
     "updater:allow-install"
