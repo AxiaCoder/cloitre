@@ -152,6 +152,9 @@ describe("the session activity texts", () => {
 
   it("say what the sessions of a live project are doing", () => {
     expect(messages.projectStatus("blocked")).toBe("waiting for your answer");
+    expect(messages.projectStatus("done")).toBe("finished");
+    expect(messages.projectStatus("failed")).toBe("stopped on an error");
+    expect(messages.projectStatus("working")).toBe("working");
   });
 
   it("say nothing of a project with no status", () => {
