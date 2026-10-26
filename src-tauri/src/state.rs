@@ -322,6 +322,16 @@ mod tests {
     }
 
     #[test]
+    fn background_tasks_that_are_not_an_array_count_as_none() {
+        let send = |input: Vec<u8>| hook_message(&input, Some(OsStr::new("3")));
+        let line = |state: &str| Some(format!("{{\"tab\":3,\"state\":\"{state}\"}}\n").into_bytes());
+        for tasks in [serde_json::json!("b1"), serde_json::json!(2), serde_json::json!(true)] {
+            assert_eq!(send(tasks_notice("Stop", tasks.clone())), line("done"), "{tasks}");
+            assert_eq!(send(tasks_notice("SubagentStop", tasks.clone())), line("settled"), "{tasks}");
+        }
+    }
+
+    #[test]
     fn an_unusable_notice_sends_nothing() {
         let cases: [(&[u8], Option<&str>); 7] = [
             (b"not json", Some("7")),

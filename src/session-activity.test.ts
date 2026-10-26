@@ -388,4 +388,62 @@ describe("ActivityStore working and failed", () => {
     expect(store.mostUrgent([1, 2])).toBe("done");
     expect(store.mostUrgent([1, 5])).toBe("working");
   });
+
+  it("works again once a block of the turn is answered from the keyboard", () => {
+    const store = new ActivityStore();
+    store.report(1, "prompted", false);
+    store.report(1, "blocked", false);
+    expect(store.of(1)).toBe("blocked");
+    expect(store.answer(1)).toBe(true);
+    expect(store.of(1)).toBe("working");
+  });
+
+  it("keeps waiting for background tasks across a block answered from the keyboard", () => {
+    const store = new ActivityStore();
+    store.report(1, "prompted", false);
+    store.report(1, "background", false);
+    store.report(1, "blocked", false, "agent-a");
+    store.answer(1);
+    expect(store.of(1)).toBe("working");
+    expect(store.report(1, "settled", false, "agent-a")).toBe(true);
+    expect(store.of(1)).toBe("done");
+  });
+
+  it("keeps showing failed when a done follows on the failed tab", () => {
+    const store = new ActivityStore();
+    store.report(1, "prompted", false);
+    store.report(1, "failed", false);
+    expect(store.report(1, "done", false)).toBe(false);
+    expect(store.of(1)).toBe("failed");
+    expect(store.report(1, "done", true)).toBe(false);
+    expect(store.of(1)).toBe("failed");
+  });
+
+  it("stops working when the turn fails, even with background tasks pending", () => {
+    const store = new ActivityStore();
+    store.report(1, "prompted", false);
+    store.report(1, "background", false);
+    store.report(1, "failed", false);
+    expect(store.report(1, "settled", false, "agent-a")).toBe(false);
+    expect(store.of(1)).toBe("failed");
+    expect(store.report(1, "prompted", false)).toBe(true);
+    expect(store.of(1)).toBe("working");
+  });
+
+  it("shows working after a failed tab is cleared by its next prompt, not done", () => {
+    const store = new ActivityStore();
+    store.report(1, "failed", false);
+    store.report(1, "prompted", false);
+    expect(store.mostUrgent([1])).toBe("working");
+  });
+
+  it("reports failed over done and working for a project, whatever the order", () => {
+    const store = new ActivityStore();
+    store.report(1, "prompted", false);
+    store.report(2, "failed", false);
+    store.report(3, "done", false);
+    expect(store.mostUrgent([1, 3, 2])).toBe("failed");
+    expect(store.mostUrgent([3, 1])).toBe("done");
+    expect(store.mostUrgent([1])).toBe("working");
+  });
 });
