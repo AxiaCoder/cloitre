@@ -13,6 +13,7 @@ describe("parseActivityReport", () => {
     expect(parseActivityReport({ tab: 3, state: "error" })).toBeUndefined();
     expect(parseActivityReport({ tab: 3, state: 1 })).toBeUndefined();
     expect(parseActivityReport({ tab: 3 })).toBeUndefined();
+    expect(parseActivityReport({ tab: 3, state: "Blocked" })).toBeUndefined();
   });
 
   it("ignores a tab id that is not a whole number of 1 or more", () => {
@@ -20,6 +21,8 @@ describe("parseActivityReport", () => {
     expect(parseActivityReport({ tab: -1, state: "done" })).toBeUndefined();
     expect(parseActivityReport({ tab: 1.5, state: "done" })).toBeUndefined();
     expect(parseActivityReport({ tab: "1", state: "done" })).toBeUndefined();
+    expect(parseActivityReport({ tab: Number.NaN, state: "done" })).toBeUndefined();
+    expect(parseActivityReport({ state: "done" })).toBeUndefined();
   });
 
   it("ignores a payload that is not an object", () => {
@@ -36,6 +39,33 @@ describe("ActivityStore", () => {
     expect(store.report(2, "blocked", true)).toBe(true);
     expect(store.of(1)).toBe("blocked");
     expect(store.of(2)).toBe("blocked");
+  });
+
+  it("reports no change when a tab is blocked again", () => {
+    const store = new ActivityStore();
+    store.report(1, "blocked", false);
+    expect(store.report(1, "blocked", true)).toBe(false);
+    expect(store.of(1)).toBe("blocked");
+  });
+
+  it("reports no change when a done tab is done again out of sight", () => {
+    const store = new ActivityStore();
+    store.report(1, "done", false);
+    expect(store.report(1, "done", false)).toBe(false);
+    expect(store.of(1)).toBe("done");
+  });
+
+  it("clears a done tab when its next turn ends on screen", () => {
+    const store = new ActivityStore();
+    store.report(1, "done", false);
+    expect(store.report(1, "done", true)).toBe(true);
+    expect(store.of(1)).toBeUndefined();
+  });
+
+  it("does nothing when a tab without activity is seen", () => {
+    const store = new ActivityStore();
+    expect(store.see(1)).toBe(false);
+    expect(store.of(1)).toBeUndefined();
   });
 
   it("keeps a blocked tab blocked when it is seen", () => {
@@ -102,5 +132,20 @@ describe("ActivityStore", () => {
     expect(store.mostUrgent([1, 3])).toBe("done");
     expect(store.mostUrgent([3])).toBeUndefined();
     expect(store.mostUrgent([])).toBeUndefined();
+  });
+
+  it("shows done for a set of tabs again once its blocked tab is answered", () => {
+    const store = new ActivityStore();
+    store.report(1, "done", false);
+    store.report(2, "blocked", false);
+    store.report(2, "working", false);
+    expect(store.mostUrgent([1, 2])).toBe("done");
+  });
+
+  it("ignores in a set the tabs of other projects", () => {
+    const store = new ActivityStore();
+    store.report(1, "blocked", false);
+    store.report(2, "done", false);
+    expect(store.mostUrgent([2, 3])).toBe("done");
   });
 });

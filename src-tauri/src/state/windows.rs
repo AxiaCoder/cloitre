@@ -566,6 +566,16 @@ mod tests {
     }
 
     #[test]
+    fn sending_to_a_pipe_whose_instances_are_all_busy_gives_up_quickly() {
+        let name = unique_name();
+        let _server = Server::bind(&name).unwrap();
+        send(&name, b"{}\n").unwrap();
+        let start = Instant::now();
+        assert!(send(&name, b"{}\n").is_err());
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
     fn sending_without_a_server_fails_at_once() {
         let start = Instant::now();
         assert!(send(&unique_name(), b"{}\n").is_err());
