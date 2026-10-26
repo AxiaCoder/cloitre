@@ -29,6 +29,7 @@ import {
   rememberActiveTab,
   rememberSelection,
   removeProject,
+  saveTabTitle,
   setProjectMarker,
   type Project,
 } from "./projects";
@@ -39,7 +40,8 @@ import { closeWarning, NO_WARNING, warningText as shownWarning, type WarningStat
 import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
 import { runningSessions, UpdateFlow, type UpdateNotice } from "./updates";
 import { ReplayPane, TabPane } from "./tab-pane";
-import { afterRefusedStart, TabModel, type Tab, type TabState } from "./tabs";
+import { afterRefusedStart, TabModel, tabName, type Tab, type TabState } from "./tabs";
+import { shortenLabel, TitleSaver } from "./tab-title";
 import { markerIcon, outlineDrawing } from "./marker-icons";
 import { markerColorValue, markerLook, projectInitials } from "./project-marker";
 import {
@@ -107,6 +109,12 @@ const statusText = element("status", HTMLSpanElement);
 
 /** The tabs of every project. */
 const tabs = new TabModel();
+/** Saves the session tab titles to Rust; a failed save of a tab still open is shown. */
+const titles = new TitleSaver(saveTabTitle, (tabId, error) => {
+  if (tabs.find(tabId)) {
+    showError(error);
+  }
+});
 /** The session count element of each project in the rail, by project id. */
 const sessionCounts = new Map<number, HTMLSpanElement>();
 /** The terminal of each open tab, by tab id: a session pane or the replay pane. */
@@ -260,8 +268,9 @@ function tabElement(tab: Tab, active: boolean): HTMLDivElement {
   const label = document.createElement("button");
   label.type = "button";
   label.className = "tab-label";
-  label.textContent = tab.label;
-  label.title = tab.kind === "session" ? messages.tabTitle(tab.label, tab.state) : tab.label;
+  const name = tabName(tab);
+  label.textContent = shortenLabel(name);
+  label.title = tab.kind === "session" ? messages.tabTitle(name, tab.state) : name;
   label.addEventListener("click", () => {
     activateTab(tab.id);
   });
@@ -269,7 +278,7 @@ function tabElement(tab: Tab, active: boolean): HTMLDivElement {
   close.type = "button";
   close.className = "tab-close";
   close.textContent = "×";
-  close.setAttribute("aria-label", messages.closeTab(tab.label));
+  close.setAttribute("aria-label", messages.closeTab(name));
   close.addEventListener("click", () => {
     if (closeGuard.accept(performance.now())) {
       report(() => closeTab(tab.id, true));
@@ -367,6 +376,13 @@ function createPane(tabId: number): TabPane {
     onRetry: (mode) => {
       report(() => restartTab(tabId, mode));
     },
+    onTitle: (raw) => {
+      const changed = tabs.setTitle(tabId, raw);
+      if (changed) {
+        renderTabs();
+        titles.schedule(tabId, changed.title);
+      }
+    },
   });
   registerPane(pane);
   return pane;
@@ -450,8 +466,8 @@ async function openTab(project: Project): Promise<void> {
  * Resume and New session, without starting any session.
  */
 function restoreTabs(project: Project): void {
-  const ids = project.tabs.map(({ id }) => id);
-  for (const tab of tabs.restore(project.id, ids, project.activeTab ?? undefined)) {
+  for (const tab of tabs.restore(project.id, project.tabs, project.activeTab ?? undefined)) {
+    titles.markSaved(tab.id, tab.title);
     createPane(tab.id).showOffer("resume");
   }
 }
@@ -512,6 +528,7 @@ async function closeTab(tabId: number, forget: boolean): Promise<void> {
     return;
   }
   panes.delete(tabId);
+  titles.forget(tabId);
   const closed = tabs.close(tabId)?.closed;
   pane.hide();
   renderTabs();

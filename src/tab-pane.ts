@@ -63,6 +63,8 @@ export interface TabPaneHandlers {
   onClose(): void;
   /** The user asked, from the start failure card, to start again in `mode`, the mode that failed. */
   onRetry(mode: SpawnMode): void;
+  /** The session set the terminal title to `title`, as received, control characters included. */
+  onTitle(title: string): void;
 }
 
 /**
@@ -145,6 +147,9 @@ export class TabPane extends Pane {
       this.slot.resize(size).catch((error: unknown) => {
         handlers.onError(error);
       });
+    });
+    terminal.onTitleChange((title) => {
+      handlers.onTitle(title);
     });
     terminal.attachCustomKeyEventHandler((event) => {
       const decision = decideKey(event, terminal.hasSelection());

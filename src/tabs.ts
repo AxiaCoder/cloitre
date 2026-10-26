@@ -1,4 +1,5 @@
 import { messages } from "./strings";
+import { cleanTitle } from "./tab-title";
 
 /**
  * Where a session tab's `claude` session stands. `"restored"` is a tab reopened
@@ -43,7 +44,20 @@ export interface SessionTab {
   readonly projectId: number;
   /** "Session N", numbered within its project. */
   readonly label: string;
+  /** The title its session set, cleaned by {@link cleanTitle}, or `null` when it set none. */
+  readonly title: string | null;
   readonly state: TabState;
+}
+
+/** A session tab saved by a previous run: its id and the title its session last set. */
+export interface SavedTab {
+  readonly id: number;
+  readonly title: string | null;
+}
+
+/** Returns the full name of `tab`: its session's title when it has one, else its label. */
+export function tabName(tab: Tab): string {
+  return (tab.kind === "session" ? tab.title : null) ?? tab.label;
 }
 
 /** One tab of a project replaying a recording, with no session behind it. */
@@ -97,13 +111,16 @@ export class TabModel {
   }
 
   /**
-   * Reopens the session tabs `ids` of project `projectId`, from a previous run,
-   * in that order and in the `"restored"` state, labelled as {@link open} does.
-   * When the project has no active tab, `activeId` becomes it if it is one of
-   * `ids`, else the first of `ids`.
+   * Reopens the session tabs `saved` of project `projectId`, from a previous
+   * run, in that order and in the `"restored"` state, labelled as {@link open}
+   * does and with their saved title, cleaned by {@link cleanTitle}. When the
+   * project has no active tab, `activeId` becomes it if it is one of `saved`,
+   * else the first of `saved`.
    */
-  restore(projectId: number, ids: readonly number[], activeId?: number): SessionTab[] {
-    const restored = ids.map((id) => this.addSession(projectId, id, "restored"));
+  restore(projectId: number, saved: readonly SavedTab[], activeId?: number): SessionTab[] {
+    const restored = saved.map(({ id, title }) =>
+      this.addSession(projectId, id, "restored", title === null ? null : cleanTitle(title)),
+    );
     if (restored.length > 0 && !this.activeIds.has(projectId)) {
       const active = restored.find((tab) => tab.id === activeId) ?? restored[0];
       this.activeIds.set(projectId, active.id);
@@ -173,6 +190,21 @@ export class TabModel {
     }
   }
 
+  /**
+   * Gives session tab `tabId` the title `raw` its session set, cleaned by
+   * {@link cleanTitle}; `null` clears it. Returns the title it keeps when that
+   * changed, else `undefined`, also for an unknown id or a replay tab.
+   */
+  setTitle(tabId: number, raw: string | null): { readonly title: string | null } | undefined {
+    const tab = this.tabs.find((candidate) => candidate.id === tabId);
+    const title = raw === null ? null : cleanTitle(raw);
+    if (tab?.kind !== "session" || tab.title === title) {
+      return undefined;
+    }
+    tab.title = title;
+    return { title };
+  }
+
   /** Returns tab `tabId`, or `undefined` when no tab has that id. */
   find(tabId: number): Tab | undefined {
     return this.tabs.find((tab) => tab.id === tabId);
@@ -194,11 +226,11 @@ export class TabModel {
     return id === undefined ? undefined : this.find(id);
   }
 
-  /** Appends session tab `id` of project `projectId` in `state`, labelled with the project's next number. */
-  private addSession(projectId: number, id: number, state: TabState): SessionTab {
+  /** Appends session tab `id` of project `projectId` in `state`, with `title`, labelled with the project's next number. */
+  private addSession(projectId: number, id: number, state: TabState, title: string | null = null): SessionTab {
     const number = (this.lastNumbers.get(projectId) ?? 0) + 1;
     this.lastNumbers.set(projectId, number);
-    const tab: StoredTab = { kind: "session", id, projectId, label: messages.sessionLabel(number), state };
+    const tab: StoredTab = { kind: "session", id, projectId, label: messages.sessionLabel(number), title, state };
     this.tabs.push(tab);
     return tab;
   }

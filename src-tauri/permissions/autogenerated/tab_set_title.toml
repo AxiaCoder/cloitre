@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-tab-set-title"
+description = "Enables the tab_set_title command without any pre-configured scope."
+commands.allow = ["tab_set_title"]
+
+[[permission]]
+identifier = "deny-tab-set-title"
+description = "Denies the tab_set_title command without any pre-configured scope."
+commands.deny = ["tab_set_title"]

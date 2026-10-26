@@ -60,6 +60,8 @@ pub enum AppError {
     ProjectsReadOnly,
     /// The marker catalog has no color or icon of this name.
     UnknownMarker(String),
+    /// A tab title is too long or holds a control character.
+    InvalidTabTitle,
 }
 
 impl fmt::Display for AppError {
@@ -115,6 +117,11 @@ impl fmt::Display for AppError {
                 "the project list is read-only until the app restarts: its file could not be loaded nor copied aside"
             ),
             Self::UnknownMarker(name) => write!(f, "no marker color or icon named {name}"),
+            Self::InvalidTabTitle => write!(
+                f,
+                "the tab title must be at most {} characters, without control characters",
+                crate::projects::MAX_TAB_TITLE
+            ),
         }
     }
 }
@@ -217,6 +224,10 @@ mod tests {
         assert_eq!(
             AppError::UnknownMarker("plaid".into()).to_string(),
             "no marker color or icon named plaid"
+        );
+        assert_eq!(
+            AppError::InvalidTabTitle.to_string(),
+            "the tab title must be at most 256 characters, without control characters"
         );
     }
 

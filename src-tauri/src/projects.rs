@@ -76,13 +76,27 @@ pub struct Tab {
     pub id: u32,
     /// The Claude Code session id the tab resumes.
     pub session_id: SessionId,
+    /// The title its session last set, or `None` when it set none. Absent from
+    /// older files, or not a string: it then reads as `None`. Never written
+    /// when `None`.
+    #[serde(
+        default,
+        deserialize_with = "lenient_name",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub title: Option<String>,
 }
+
+/// The longest tab title [`ProjectStore::set_tab_title`] accepts, in characters.
+pub const MAX_TAB_TITLE: usize = 256;
 
 /// One tab as the webview receives it: its session id stays in Rust.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TabView {
     /// The tab id.
     pub id: u32,
+    /// The title its session last set, or `None`.
+    pub title: Option<String>,
 }
 
 /// The whole content of `projects.json`.
@@ -369,10 +383,11 @@ impl ProjectStore {
         next.projects[index].tabs.push(Tab {
             id,
             session_id: SessionId::generate(),
+            title: None,
         });
         next.projects[index].active_tab = Some(id);
         self.commit(&mut state, next)?;
-        Ok(TabView { id })
+        Ok(TabView { id, title: None })
     }
 
     /// Closes tab `tab`: it is removed from its project.
@@ -421,6 +436,30 @@ impl ProjectStore {
         }
         let mut next = state.file.clone();
         next.projects[project].active_tab = Some(tab);
+        self.commit(&mut state, next)
+    }
+
+    /// Makes `title` the title of tab `tab` and saves it; `None` or an empty
+    /// title clears it. Writes nothing when the tab already has that title.
+    ///
+    /// # Errors
+    /// [`AppError::InvalidTabTitle`] for a title longer than [`MAX_TAB_TITLE`]
+    /// characters or holding a control character; [`AppError::UnknownTab`]; a
+    /// read-only store; a failed save.
+    pub fn set_tab_title(&self, tab: u32, title: Option<&str>) -> Result<(), AppError> {
+        let title = title.filter(|title| !title.is_empty());
+        if let Some(title) = title
+            && (title.chars().count() > MAX_TAB_TITLE || title.chars().any(char::is_control))
+        {
+            return Err(AppError::InvalidTabTitle);
+        }
+        let mut state = lock(&self.state);
+        let (project, index) = tab_position(&state.file, tab)?;
+        if state.file.projects[project].tabs[index].title.as_deref() == title {
+            return Ok(());
+        }
+        let mut next = state.file.clone();
+        next.projects[project].tabs[index].title = title.map(str::to_owned);
         self.commit(&mut state, next)
     }
 
@@ -827,7 +866,10 @@ fn view(project: &Project) -> ProjectView {
         tabs: project
             .tabs
             .iter()
-            .map(|tab| TabView { id: tab.id })
+            .map(|tab| TabView {
+                id: tab.id,
+                title: tab.title.clone(),
+            })
             .collect(),
         active_tab: active_tab(project),
         color: marker_color(project).map(str::to_owned),
@@ -1287,12 +1329,12 @@ mod tests {
         let tab = store.open_tab(a.id).unwrap();
         assert_eq!(
             serde_json::to_value(&tab).unwrap(),
-            serde_json::json!({ "id": 1 })
+            serde_json::json!({ "id": 1, "title": null })
         );
         let listed = serde_json::to_value(store.list()).unwrap();
         assert_eq!(
             listed["projects"][0]["tabs"],
-            serde_json::json!([{ "id": 1 }])
+            serde_json::json!([{ "id": 1, "title": null }])
         );
     }
 
@@ -1690,6 +1732,131 @@ mod tests {
         assert!(!file.exists());
     }
 
+    /// The title `store` lists for tab `tab` of its first project.
+    fn listed_title(store: &ProjectStore, tab: u32) -> Option<String> {
+        store.list().projects[0]
+            .tabs
+            .iter()
+            .find(|listed| listed.id == tab)
+            .unwrap()
+            .title
+            .clone()
+    }
+
+    #[test]
+    fn a_tab_title_survives_a_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let tab = store.open_tab(a.id).unwrap().id;
+        assert_eq!(store.set_tab_title(tab, Some("Fix the parser")), Ok(()));
+        assert_eq!(listed_title(&store, tab).as_deref(), Some("Fix the parser"));
+        let reopened = store_in(dir.path());
+        assert_eq!(
+            listed_title(&reopened, tab).as_deref(),
+            Some("Fix the parser")
+        );
+        let text = fs::read_to_string(dir.path().join("projects.json")).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["version"], 2);
+        assert_eq!(value["projects"][0]["tabs"][0]["title"], "Fix the parser");
+    }
+
+    #[test]
+    fn an_empty_or_absent_title_clears_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let tab = store.open_tab(a.id).unwrap().id;
+        store.set_tab_title(tab, Some("First")).unwrap();
+        store.set_tab_title(tab, Some("")).unwrap();
+        assert_eq!(listed_title(&store, tab), None);
+        store.set_tab_title(tab, Some("Second")).unwrap();
+        store.set_tab_title(tab, None).unwrap();
+        assert_eq!(listed_title(&store_in(dir.path()), tab), None);
+        let text = fs::read_to_string(dir.path().join("projects.json")).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert!(value["projects"][0]["tabs"][0].get("title").is_none());
+    }
+
+    #[test]
+    fn an_invalid_tab_title_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let tab = store.open_tab(a.id).unwrap().id;
+        store.set_tab_title(tab, Some("Kept")).unwrap();
+        let longest = "é".repeat(MAX_TAB_TITLE);
+        assert_eq!(store.set_tab_title(tab, Some(&longest)), Ok(()));
+        let too_long = "é".repeat(MAX_TAB_TITLE + 1);
+        assert_eq!(
+            store.set_tab_title(tab, Some(&too_long)),
+            Err(AppError::InvalidTabTitle)
+        );
+        for control in ["a\u{1b}]0;b", "a\nb", "a\u{7f}", "a\u{9b}b"] {
+            assert_eq!(
+                store.set_tab_title(tab, Some(control)),
+                Err(AppError::InvalidTabTitle),
+                "{control:?}"
+            );
+        }
+        assert_eq!(listed_title(&store, tab), Some(longest));
+        assert_eq!(
+            store.set_tab_title(9, Some("Lost")),
+            Err(AppError::UnknownTab(9))
+        );
+    }
+
+    #[test]
+    fn setting_the_same_title_again_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let tab = store.open_tab(a.id).unwrap().id;
+        store.set_tab_title(tab, Some("Same")).unwrap();
+        let file = dir.path().join("projects.json");
+        fs::remove_file(&file).unwrap();
+        assert_eq!(store.set_tab_title(tab, Some("Same")), Ok(()));
+        assert!(!file.exists());
+    }
+
+    #[test]
+    fn a_read_only_store_refuses_a_tab_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("projects.json");
+        fs::create_dir(&file).unwrap();
+        let store = store_in(dir.path());
+        lock(&store.state).file.projects = vec![Project {
+            id: 1,
+            name: "a".to_owned(),
+            path: "nowhere".to_owned(),
+            tabs: vec![Tab {
+                id: 1,
+                session_id: SessionId::generate(),
+                title: None,
+            }],
+            active_tab: None,
+            color: None,
+            icon: None,
+        }];
+        assert_eq!(
+            store.set_tab_title(1, Some("Title")),
+            Err(AppError::ProjectsReadOnly)
+        );
+        assert_eq!(listed_title(&store, 1), None);
+    }
+
+    #[test]
+    fn a_tab_title_absent_or_not_a_string_lists_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let saved = r#"{ "version": 2, "projects": [{ "id": 1, "name": "a", "path": "nowhere", "tabs": [{ "id": 3, "session_id": "6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b" }, { "id": 4, "session_id": "7f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b", "title": 5 }] }] }"#;
+        fs::write(dir.path().join("projects.json"), saved).unwrap();
+        let store = store_in(dir.path());
+        assert_eq!(store.list().warning, None);
+        assert_eq!(listed_title(&store, 3), None);
+        assert_eq!(listed_title(&store, 4), None);
+    }
+
     #[test]
     fn a_read_only_store_keeps_the_active_tab_in_memory() {
         let dir = tempfile::tempdir().unwrap();
@@ -1699,6 +1866,7 @@ mod tests {
         let tab = |id| Tab {
             id,
             session_id: SessionId::generate(),
+            title: None,
         };
         lock(&store.state).file.projects = vec![Project {
             id: 1,
