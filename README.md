@@ -16,6 +16,8 @@ Cloître is an independent project, not affiliated with or endorsed by Anthropic
 
 The installed app then offers each new release itself.
 
+Tabs learn what their Claude Code session is doing with no setup: the app passes its own hooks to each session it starts, beside yours.
+
 ### The "isn't commonly downloaded" warning
 
 The installer is not signed with a code signing certificate, so Microsoft Defender SmartScreen does not know its publisher. In Microsoft Edge, it holds the download:

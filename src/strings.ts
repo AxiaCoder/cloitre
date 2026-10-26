@@ -4,6 +4,8 @@
  * are the functions of {@link messages}.
  */
 
+import type { SessionActivity } from "./session-activity";
+
 /** The fixed texts of the interface, by key. `index.html` names them in `data-text`, `data-label` and `data-title`. */
 export const texts = {
   closeWarning: "Close the warning",
@@ -84,8 +86,15 @@ export const messages = {
   sessionLabel: (number: number) => `Session ${String(number)}`,
   /** The label of the replay tab showing `recording`. */
   replayLabel: (recording: string) => `Replay ${recording}`,
-  /** The tooltip of session tab `label` in `state`. */
-  tabTitle: (label: string, state: string) => `${label} (${state})`,
+  /** The tooltip of session tab `label` in `state`, followed by what its session is doing when `activity` is given. */
+  tabTitle: (label: string, state: string, activity?: SessionActivity) =>
+    activity === undefined ? `${label} (${state})` : `${label} (${state}, ${activityName(activity)})`,
+  /** The accessible name of the label of tab `label` whose session shows `activity`. */
+  tabActivityLabel: (label: string, activity: SessionActivity) => `${label}, ${activityName(activity)}`,
+  /** What a session showing `activity` is doing, in words. */
+  activity: (activity: SessionActivity) => activityName(activity),
+  /** The tooltip `title` of a project, followed by what the most urgent of its sessions is doing. */
+  projectActivityTitle: (title: string, activity: SessionActivity) => `${title}\n${activityName(activity)}`,
   /** The accessible name of the close button of tab `label`. */
   closeTab: (label: string) => `Close ${label}`,
   /** The tooltip of a project's session count. */
@@ -201,6 +210,11 @@ export function fillTexts(root: TextRoot): void {
       }
     }
   }
+}
+
+/** What a session showing `activity` is doing, in words. */
+function activityName(activity: SessionActivity): string {
+  return activity === "blocked" ? "waiting for your answer" : "finished";
 }
 
 /** `word` with its first letter upper-cased. */

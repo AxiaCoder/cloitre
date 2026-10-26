@@ -6,6 +6,7 @@ mod projects;
 mod pty;
 mod recording;
 mod session;
+mod state;
 
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager, RunEvent, Runtime, Window, WindowEvent};
@@ -18,6 +19,7 @@ use crate::recording::RecordingRegistry;
 use crate::session::{HookSettings, PendingSessions};
 
 pub use crate::session::{HOOK_ARG, run_hook};
+pub use crate::state::{STATE_HOOK_ARG, run_state_hook};
 
 /// Returns the question asked before closing the window while `running`
 /// sessions still run, or `None` when none runs and the window closes at once.
@@ -106,6 +108,8 @@ const CHECKS_FOR_UPDATES: bool = !cfg!(debug_assertions);
 /// The project list is kept in `projects.json` of the app data folder. At
 /// startup the `SessionStart` hook settings are written to `hooks.json` there,
 /// and the session ids the hook left in its `sessions` folder are applied.
+/// On Windows, the server that receives the state hook's messages starts
+/// too, and emits each valid one to the webview as a `session-state` event.
 /// Closing the window while sessions run asks for confirmation first.
 /// In a development build, sessions are recorded in its `recordings` folder,
 /// and their recordings closed whenever they are stopped; a release build
@@ -144,6 +148,7 @@ pub fn run() {
                 data.join("recordings"),
                 cfg!(debug_assertions),
             ));
+            state::start_server(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -356,6 +361,8 @@ mod tests {
             "allow-tab-close",
             "allow-tab-activate",
             "allow-tab-set-title",
+            "core:event:allow-listen",
+            "core:event:allow-unlisten",
             "updater:allow-check",
             "updater:allow-download",
             "updater:allow-install",

@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::AppError;
 use crate::launch::TAB_ID_VAR;
 use crate::projects::{ProjectStore, write_file_atomically};
+use crate::state::{ASK_TOOL, STATE_HOOK_ARG, STATE_HOOK_EVENTS};
 
 /// The app identifier of `tauri.conf.json`, kept by a release build.
 pub const RELEASE_IDENTIFIER: &str = "com.cloitre.desktop";
@@ -126,9 +127,10 @@ fn is_command_line_safe(text: &str) -> bool {
 }
 
 /// Returns the content of the Claude Code settings file that runs `exe` with
-/// [`HOOK_ARG`] on every `SessionStart`.
+/// [`HOOK_ARG`] on every `SessionStart`, and with [`STATE_HOOK_ARG`] on every
+/// event of [`STATE_HOOK_EVENTS`] and on `PreToolUse` for [`ASK_TOOL`].
 ///
-/// The command is `"<exe>" session-hook`, with `exe` written with `/`
+/// Each command is `"<exe>" <argument>`, with `exe` written with `/`
 /// separators. `None` when that path holds a character a shell would
 /// interpret, or is not valid Unicode.
 pub fn hook_settings(exe: &Path) -> Option<String> {
@@ -136,14 +138,25 @@ pub fn hook_settings(exe: &Path) -> Option<String> {
     if !is_command_line_safe(&exe) {
         return None;
     }
-    let settings = serde_json::json!({
-        "hooks": {
-            "SessionStart": [
-                { "hooks": [{ "type": "command", "command": format!("\"{exe}\" {HOOK_ARG}") }] }
-            ]
-        }
-    });
-    Some(settings.to_string())
+    let run = |argument: &str| {
+        serde_json::json!([{ "type": "command", "command": format!("\"{exe}\" {argument}") }])
+    };
+    let mut hooks = serde_json::Map::new();
+    hooks.insert(
+        "SessionStart".to_owned(),
+        serde_json::json!([{ "hooks": run(HOOK_ARG) }]),
+    );
+    for event in STATE_HOOK_EVENTS {
+        hooks.insert(
+            event.to_owned(),
+            serde_json::json!([{ "hooks": run(STATE_HOOK_ARG) }]),
+        );
+    }
+    hooks.insert(
+        "PreToolUse".to_owned(),
+        serde_json::json!([{ "matcher": ASK_TOOL, "hooks": run(STATE_HOOK_ARG) }]),
+    );
+    Some(serde_json::json!({ "hooks": hooks }).to_string())
 }
 
 /// Writes the hook settings file for `exe` in `data_dir` and returns its path,
@@ -169,7 +182,7 @@ pub fn sessions_dir(data_dir: &Path) -> PathBuf {
 
 /// Reads the tab id from `value`, the [`TAB_ID_VAR`] variable: a decimal
 /// integer from 1 to 4294967295. `None` otherwise.
-fn parse_tab_id(value: &OsStr) -> Option<NonZeroU32> {
+pub(crate) fn parse_tab_id(value: &OsStr) -> Option<NonZeroU32> {
     let text = value.to_str()?;
     if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
         return None;
@@ -407,13 +420,30 @@ mod tests {
     fn hook_command_quotes_the_executable_with_forward_slashes() {
         let settings = hook_settings(Path::new(r"C:\Program Files\Cloitre\cloitre.exe")).unwrap();
         let value: serde_json::Value = serde_json::from_str(&settings).unwrap();
+        let state = serde_json::json!([{ "hooks": [{
+            "type": "command",
+            "command": "\"C:/Program Files/Cloitre/cloitre.exe\" state-hook"
+        }] }]);
         assert_eq!(
             value,
             serde_json::json!({
-                "hooks": { "SessionStart": [{ "hooks": [{
-                    "type": "command",
-                    "command": "\"C:/Program Files/Cloitre/cloitre.exe\" session-hook"
-                }] }] }
+                "hooks": {
+                    "SessionStart": [{ "hooks": [{
+                        "type": "command",
+                        "command": "\"C:/Program Files/Cloitre/cloitre.exe\" session-hook"
+                    }] }],
+                    "PermissionRequest": state,
+                    "PreToolUse": [{ "matcher": "AskUserQuestion", "hooks": [{
+                        "type": "command",
+                        "command": "\"C:/Program Files/Cloitre/cloitre.exe\" state-hook"
+                    }] }],
+                    "Elicitation": state,
+                    "UserPromptSubmit": state,
+                    "PostToolUse": state,
+                    "PostToolUseFailure": state,
+                    "ElicitationResult": state,
+                    "Stop": state,
+                }
             })
         );
     }

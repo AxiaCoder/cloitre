@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-window",
-  "description": "What the main window may call: the session, recording, project and tab commands, and checking, downloading and installing an update.",
+  "description": "What the main window may call: the session, recording, project and tab commands, listening to the events the app emits, and checking, downloading and installing an update.",
   "windows": ["main"],
   "permissions": [
     "allow-pty-spawn",
@@ -23,6 +23,8 @@
     "allow-tab-close",
     "allow-tab-activate",
     "allow-tab-set-title",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
     "updater:allow-check",
     "updater:allow-download",
     "updater:allow-install"
