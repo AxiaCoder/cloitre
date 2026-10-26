@@ -35,8 +35,10 @@ import {
 } from "./projects";
 import type { SpawnMode } from "./pty";
 import { ReplayDeck, type LoadedReplay } from "./replay-deck";
+import { ActivityStore, parseActivityReport } from "./session-activity";
 import { fillTexts, messages, texts } from "./strings";
 import { closeWarning, NO_WARNING, warningText as shownWarning, type WarningState } from "./warning-bar";
+import { listen } from "@tauri-apps/api/event";
 import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
 import { runningSessions, UpdateFlow, type UpdateNotice } from "./updates";
 import { ReplayPane, TabPane } from "./tab-pane";
@@ -117,6 +119,10 @@ const titles = new TitleSaver(saveTabTitle, (tabId, error) => {
 });
 /** The session count element of each project in the rail, by project id. */
 const sessionCounts = new Map<number, HTMLSpanElement>();
+/** The button, its tooltip without activity, and the activity dot of each project in the rail, by project id. */
+const projectIndicators = new Map<number, { button: HTMLButtonElement; title: string; dot: HTMLSpanElement }>();
+/** What the session of each session tab is doing, as far as the tabs show it. */
+const activities = new ActivityStore();
 /** The terminal of each open tab, by tab id: a session pane or the replay pane. */
 const panes = new Map<number, TabPane | ReplayPane>();
 /** The projects as last listed by Rust. */
@@ -155,6 +161,11 @@ const updateFlow = new UpdateFlow({
 /** Returns the active tab of the selected project, if any. */
 function activeTab(): Tab | undefined {
   return selectedId === undefined ? undefined : tabs.activeOf(selectedId);
+}
+
+/** Returns the id of the tab the user sees: the selected project's active tab, while the window has the focus. */
+function seenTabId(): number | undefined {
+  return document.hasFocus() ? activeTab()?.id : undefined;
 }
 
 /** Returns the pane of the selected project's active tab, if any. */
@@ -263,6 +274,7 @@ function tabElement(tab: Tab, active: boolean): HTMLDivElement {
   const item = document.createElement("div");
   item.className = `tab ${tab.kind === "session" ? tab.state : "replay"}`;
   item.classList.toggle("active", active);
+  const activity = activities.of(tab.id);
   item.setAttribute("role", "tab");
   item.setAttribute("aria-selected", String(active));
   const label = document.createElement("button");
@@ -270,7 +282,10 @@ function tabElement(tab: Tab, active: boolean): HTMLDivElement {
   label.className = "tab-label";
   const name = tabName(tab);
   label.textContent = shortenLabel(name);
-  label.title = tab.kind === "session" ? messages.tabTitle(name, tab.state) : name;
+  label.title = tab.kind === "session" ? messages.tabTitle(name, tab.state, activity) : name;
+  if (activity !== undefined) {
+    label.setAttribute("aria-label", messages.tabActivityLabel(name, activity));
+  }
   label.addEventListener("click", () => {
     activateTab(tab.id);
   });
@@ -284,7 +299,14 @@ function tabElement(tab: Tab, active: boolean): HTMLDivElement {
       report(() => closeTab(tab.id, true));
     }
   });
-  item.append(label, close);
+  if (activity === undefined) {
+    item.append(label, close);
+  } else {
+    const dot = document.createElement("span");
+    dot.className = activity === "blocked" ? "waiting-dot" : "done-dot";
+    dot.setAttribute("aria-hidden", "true");
+    item.append(dot, label, close);
+  }
   return item;
 }
 
@@ -295,6 +317,10 @@ function tabElement(tab: Tab, active: boolean): HTMLDivElement {
  * renderer, its session left running.
  */
 function renderTabs(): void {
+  const seen = seenTabId();
+  if (seen !== undefined) {
+    activities.see(seen);
+  }
   const hasTabs = selectedId !== undefined && tabs.tabsOf(selectedId).length > 0;
   const area = chooseWorkArea(projects, selectedId, hasTabs);
   emptyState.hidden = area.kind !== "empty";
@@ -354,6 +380,7 @@ function createPane(tabId: number): TabPane {
   const pane = new TabPane(terminals, tabId, {
     onExit: () => {
       tabs.setState(tabId, "exited");
+      activities.forget(tabId);
       pane.recording = undefined;
       renderTabs();
       refreshRecordingsOrReport();
@@ -375,6 +402,11 @@ function createPane(tabId: number): TabPane {
     },
     onRetry: (mode) => {
       report(() => restartTab(tabId, mode));
+    },
+    onAnswer: () => {
+      if (activities.answer(tabId)) {
+        renderTabs();
+      }
     },
     onTitle: (raw) => {
       const changed = tabs.setTitle(tabId, raw);
@@ -403,6 +435,7 @@ async function startTab(tabId: number, mode: SpawnMode, folder: string): Promise
     running = await pane.start(mode, folder);
   } catch {
     tabs.setState(tabId, "failed");
+    activities.forget(tabId);
     renderTabs();
     return false;
   }
@@ -496,6 +529,7 @@ async function restartTab(tabId: number, mode: SpawnMode): Promise<void> {
   }
   const previous = tab.state;
   tabs.setState(tabId, "starting");
+  activities.forget(tabId);
   renderTabs();
   if (await startTab(tabId, mode, project.path)) {
     return;
@@ -529,6 +563,7 @@ async function closeTab(tabId: number, forget: boolean): Promise<void> {
   }
   panes.delete(tabId);
   titles.forget(tabId);
+  activities.forget(tabId);
   const closed = tabs.close(tabId)?.closed;
   pane.hide();
   renderTabs();
@@ -556,12 +591,27 @@ async function closeProjectTabs(projectId: number): Promise<void> {
   await Promise.all(tabs.tabsOf(projectId).map((tab) => closeTab(tab.id, false)));
 }
 
-/** Shows, next to each project in the rail, how many session tabs it has open; nothing for none. */
+/**
+ * Shows, next to each project in the rail, how many session tabs it has open,
+ * nothing for none, and on its marker what the most urgent of its sessions is
+ * doing: waiting for an answer before finished.
+ */
 function renderSessionCounts(): void {
   for (const [projectId, count] of sessionCounts) {
     const open = tabs.tabsOf(projectId).filter((tab) => tab.kind === "session").length;
     count.textContent = open > 0 ? String(open) : "";
     count.title = messages.sessionCount(open);
+  }
+  for (const [projectId, { button, title, dot }] of projectIndicators) {
+    const activity = activities.mostUrgent(tabs.tabsOf(projectId).map((tab) => tab.id));
+    dot.className = `project-activity ${activity ?? ""}`.trim();
+    dot.hidden = activity === undefined;
+    button.title = activity === undefined ? title : messages.projectActivityTitle(title, activity);
+    if (activity === undefined) {
+      button.removeAttribute("aria-description");
+    } else {
+      button.setAttribute("aria-description", messages.activity(activity));
+    }
   }
 }
 
@@ -933,6 +983,7 @@ function offerStoppedSessions(): void {
     const pane = panes.get(tabId);
     if (pane instanceof TabPane) {
       tabs.setState(tabId, "exited");
+      activities.forget(tabId);
       pane.recording = undefined;
       pane.showOffer("resume");
     }
@@ -1161,6 +1212,7 @@ async function chooseMarker(
 function renderProjects(): void {
   closeMarkerMenu();
   sessionCounts.clear();
+  projectIndicators.clear();
   projectList.replaceChildren(
     ...projects.map((project) => {
       const button = document.createElement("button");
@@ -1173,6 +1225,10 @@ function renderProjects(): void {
         : messages.missingProjectTitle(project.name, project.path);
       button.dataset.project = String(project.id);
       const marker = projectMarker(project);
+      const dot = document.createElement("span");
+      dot.hidden = true;
+      marker.append(dot);
+      projectIndicators.set(project.id, { button, title: button.title, dot });
       const name = document.createElement("span");
       name.className = "project-name";
       name.textContent = project.name;
@@ -1528,6 +1584,19 @@ document.addEventListener(
 );
 
 window.addEventListener("resize", dismissMarkerMenu);
+
+window.addEventListener("focus", renderTabs);
+
+listen("session-state", (event) => {
+  const reported = parseActivityReport(event.payload);
+  const tab = reported && tabs.find(reported.tab);
+  if (!reported || tab?.kind !== "session" || (tab.state !== "running" && tab.state !== "starting")) {
+    return;
+  }
+  if (activities.report(reported.tab, reported.state, seenTabId() === reported.tab, reported.agent)) {
+    renderTabs();
+  }
+}).catch(showError);
 
 window.addEventListener(
   "keydown",

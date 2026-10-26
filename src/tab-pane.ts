@@ -2,6 +2,7 @@ import { decideKey } from "./keys";
 import type { SpawnMode } from "./pty";
 import { isFailedResume } from "./resume";
 import { SessionSlot, type TerminalSize } from "./session";
+import { isAnswerInput } from "./session-activity";
 import { messages, texts } from "./strings";
 import { TerminalView } from "./terminal-view";
 
@@ -63,6 +64,8 @@ export interface TabPaneHandlers {
   onClose(): void;
   /** The user asked, from the start failure card, to start again in `mode`, the mode that failed. */
   onRetry(mode: SpawnMode): void;
+  /** The user sent input that may answer what the session waits for (see {@link isAnswerInput}). */
+  onAnswer(): void;
   /** The session set the terminal title to `title`, as received, control characters included. */
   onTitle(title: string): void;
 }
@@ -139,6 +142,9 @@ export class TabPane extends Pane {
     super(parent, tabId);
     const terminal = this.view.terminal;
     terminal.onData((data) => {
+      if (isAnswerInput(data)) {
+        handlers.onAnswer();
+      }
       this.slot.write(data).catch((error: unknown) => {
         handlers.onError(error);
       });

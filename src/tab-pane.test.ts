@@ -209,6 +209,7 @@ function recorder() {
     onResume: () => events.push("resume"),
     onClose: () => events.push("close"),
     onRetry: (mode) => events.push(`retry ${mode}`),
+    onAnswer: () => events.push("answer"),
     onTitle: (title) => events.push(`title ${title}`),
   };
   return { events, handlers };
@@ -671,6 +672,22 @@ describe("TabPane input", () => {
     terminalOf(second).dataListener("ls");
     await settle();
     expect(calls("pty_write")).toEqual([{ id: 2, data: "ls" }]);
+  });
+
+  it("tells the page about input that may answer, and still sends it", async () => {
+    const { events, handlers } = recorder();
+    const pane = openPane(1, handlers);
+    await pane.start("new", FOLDER);
+    for (const data of ["a", "\x1b[A", "\r"]) {
+      terminalOf(pane).dataListener(data);
+      await settle();
+    }
+    expect(events).toEqual(["answer"]);
+    expect(calls("pty_write")).toEqual([
+      { id: 1, data: "a" },
+      { id: 1, data: "\x1b[A" },
+      { id: 1, data: "\r" },
+    ]);
   });
 
   it("reports a failed write to the page", async () => {

@@ -7,7 +7,7 @@ const SRC = fileURLToPath(new URL(".", import.meta.url));
 const ROOT = join(SRC, "..");
 
 /** The only rules allowed to use the amber tokens: a session is waiting. */
-const AMBER_SELECTORS = new Set([".tab .waiting-dot"]);
+const AMBER_SELECTORS = new Set([".tab .waiting-dot", ".project-activity.blocked"]);
 
 /** The only file allowed to hold color literals. */
 const TOKENS_FILE = "src/tokens.css";

@@ -120,3 +120,31 @@ describe("the project menu texts", () => {
     ]);
   });
 });
+
+describe("the session activity texts", () => {
+  it("leave a tab tooltip unchanged without activity", () => {
+    expect(messages.tabTitle("Session 1", "running")).toBe("Session 1 (running)");
+  });
+
+  it("add what the session is doing to a tab tooltip", () => {
+    expect(messages.tabTitle("Session 1", "running", "blocked")).toBe("Session 1 (running, waiting for your answer)");
+    expect(messages.tabTitle("Session 1", "running", "done")).toBe("Session 1 (running, finished)");
+  });
+
+  it("name a tab label with its activity", () => {
+    expect(messages.tabActivityLabel("Session 2", "blocked")).toBe("Session 2, waiting for your answer");
+    expect(messages.tabActivityLabel("Session 2", "done")).toBe("Session 2, finished");
+  });
+
+  it("say each activity in words", () => {
+    expect(messages.activity("blocked")).toBe("waiting for your answer");
+    expect(messages.activity("done")).toBe("finished");
+  });
+
+  it("put the activity on its own line under a project tooltip", () => {
+    expect(messages.projectActivityTitle("example\n/projects/example", "done")).toBe(
+      "example\n/projects/example\nfinished",
+    );
+    expect(messages.projectActivityTitle("example", "blocked")).toBe("example\nwaiting for your answer");
+  });
+});

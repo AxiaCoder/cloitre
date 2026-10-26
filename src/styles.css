@@ -162,6 +162,7 @@ button.primary:hover {
 }
 
 .project-marker {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -185,6 +186,25 @@ button.primary:hover {
   border-color: var(--line);
   background: var(--ink-3);
   color: var(--text);
+}
+
+.project-activity {
+  position: absolute;
+  top: calc(var(--dot-size) / -2);
+  right: calc(var(--dot-size) / -2);
+  width: calc(var(--dot-size) + 2px);
+  height: calc(var(--dot-size) + 2px);
+  border-radius: 50%;
+}
+
+.project-activity.done {
+  background: var(--ok);
+  box-shadow: 0 0 0 1px var(--ink-1);
+}
+
+.project-activity.blocked {
+  background: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-ink);
 }
 
 .marker-icon {
@@ -717,6 +737,15 @@ button.info:hover {
   border-radius: 50%;
   background: var(--accent);
   box-shadow: 0 0 0 1px var(--accent-ink);
+}
+
+.tab .done-dot {
+  width: var(--dot-size);
+  height: var(--dot-size);
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--ok);
+  opacity: 0.8;
 }
 
 .tab-label,
