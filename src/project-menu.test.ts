@@ -87,35 +87,43 @@ describe("gridMove", () => {
 
 describe("tabWrap", () => {
   it("wraps Tab from the last tab stop to the first", () => {
-    expect(tabWrap(4, 5, false)).toBe(0);
+    expect(tabWrap(4, 0, 5, false)).toBe(0);
   });
 
   it("wraps Shift+Tab from the first tab stop to the last", () => {
-    expect(tabWrap(0, 5, true)).toBe(4);
-  });
-
-  it("brings a focus from outside the loop to the first stop on Tab and the last on Shift+Tab", () => {
-    expect(tabWrap(-1, 5, false)).toBe(0);
-    expect(tabWrap(-1, 5, true)).toBe(4);
+    expect(tabWrap(0, 4, 5, true)).toBe(4);
   });
 
   it("leaves a move inside the loop to the browser", () => {
-    expect(tabWrap(2, 5, false)).toBeUndefined();
-    expect(tabWrap(2, 5, true)).toBeUndefined();
-    expect(tabWrap(0, 5, false)).toBeUndefined();
-    expect(tabWrap(4, 5, true)).toBeUndefined();
+    expect(tabWrap(2, 2, 5, false)).toBeUndefined();
+    expect(tabWrap(2, 2, 5, true)).toBeUndefined();
+    expect(tabWrap(0, 4, 5, false)).toBeUndefined();
+    expect(tabWrap(4, 0, 5, true)).toBeUndefined();
+  });
+
+  it("leaves Tab from an element between two stops to the browser", () => {
+    expect(tabWrap(2, 1, 3, false)).toBeUndefined();
+    expect(tabWrap(2, 1, 3, true)).toBeUndefined();
+  });
+
+  it("wraps from an element before every stop on Shift+Tab only", () => {
+    expect(tabWrap(0, 3, 3, true)).toBe(2);
+    expect(tabWrap(0, 3, 3, false)).toBeUndefined();
+  });
+
+  it("wraps from an element after every stop on Tab only", () => {
+    expect(tabWrap(3, 0, 3, false)).toBe(0);
+    expect(tabWrap(3, 0, 3, true)).toBeUndefined();
   });
 
   it("keeps the focus on the only tab stop of a one-stop loop", () => {
-    expect(tabWrap(0, 1, false)).toBe(0);
-    expect(tabWrap(0, 1, true)).toBe(0);
-    expect(tabWrap(-1, 1, false)).toBe(0);
-    expect(tabWrap(-1, 1, true)).toBe(0);
+    expect(tabWrap(0, 0, 1, false)).toBe(0);
+    expect(tabWrap(0, 0, 1, true)).toBe(0);
   });
 
   it("does nothing on an empty loop", () => {
-    expect(tabWrap(-1, 0, false)).toBeUndefined();
-    expect(tabWrap(-1, 0, true)).toBeUndefined();
+    expect(tabWrap(0, 0, 0, false)).toBeUndefined();
+    expect(tabWrap(0, 0, 0, true)).toBeUndefined();
   });
 });
 

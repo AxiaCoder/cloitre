@@ -782,8 +782,12 @@ function trapFocus(dialog: HTMLElement, event: KeyboardEvent): void {
   const stops = [...dialog.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")].filter(
     (button) => button.tabIndex >= 0,
   );
-  const index = stops.findIndex((stop) => stop === document.activeElement);
-  const wrap = tabWrap(index, stops.length, event.shiftKey);
+  const active = document.activeElement;
+  const placed = (stop: HTMLButtonElement, side: number): boolean =>
+    active !== null && (stop.compareDocumentPosition(active) & side) !== 0;
+  const before = stops.filter((stop) => placed(stop, Node.DOCUMENT_POSITION_FOLLOWING)).length;
+  const after = stops.filter((stop) => placed(stop, Node.DOCUMENT_POSITION_PRECEDING)).length;
+  const wrap = tabWrap(before, after, stops.length, event.shiftKey);
   if (stops.length === 0) {
     event.preventDefault();
   } else if (wrap !== undefined) {

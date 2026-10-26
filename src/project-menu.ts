@@ -65,19 +65,20 @@ export function gridMove(index: number, count: number, columns: number, key: str
 
 /**
  * The tab stop the focus wraps to when Tab, or Shift+Tab when `backward`, is
- * pressed on tab stop `index` of a loop of `count` tab stops: the first from
- * the last, the last from the first, and the first or the last from outside
- * the loop (`index` -1). `undefined` when the move stays inside the loop on
- * its own, or when the loop is empty.
+ * pressed in a loop of `count` tab stops, with `before` of them before the
+ * focused element and `after` after it, the focused element itself counted in
+ * neither: the first when Tab has no stop after, the last when Shift+Tab has
+ * no stop before. `undefined` when the move stays inside the loop on its own,
+ * or when the loop is empty.
  */
-export function tabWrap(index: number, count: number, backward: boolean): number | undefined {
+export function tabWrap(before: number, after: number, count: number, backward: boolean): number | undefined {
   if (count === 0) {
     return undefined;
   }
   if (backward) {
-    return index <= 0 ? count - 1 : undefined;
+    return before === 0 ? count - 1 : undefined;
   }
-  return index < 0 || index === count - 1 ? 0 : undefined;
+  return after === 0 ? 0 : undefined;
 }
 
 /** Tells whether keyboard event `event` asks for a context menu: Shift+F10 or the menu key. */
