@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.0](https://github.com/AxiaCoder/cloitre/compare/v0.3.0...v0.4.0) (2026-10-26)
+
+
+### Features
+
+* **icon:** the app shows its own icon instead of the Tauri logo ([#63](https://github.com/AxiaCoder/cloitre/issues/63)) ([d410868](https://github.com/AxiaCoder/cloitre/commit/d41086875e5a777bddfeebe2ba04ccc72bc5ca29))
+* **marker:** a project marker combines a color and a symbol, with a "No color" choice ([#64](https://github.com/AxiaCoder/cloitre/issues/64)) ([ae37ac8](https://github.com/AxiaCoder/cloitre/commit/ae37ac88fdd800cbfc842be4a23958d0f618d0ec))
+* **release:** each release notes a Defender scan and publishes SHA-256 checksums, and the README explains the SmartScreen warning ([#61](https://github.com/AxiaCoder/cloitre/issues/61)) ([e75a252](https://github.com/AxiaCoder/cloitre/commit/e75a252904b86532f6babb2c5a2a4971e2b2e659))
+
+
+### Bug Fixes
+
+* **menu:** Tab no longer leaves the project menu while it is open ([#66](https://github.com/AxiaCoder/cloitre/issues/66)) ([77d5bc7](https://github.com/AxiaCoder/cloitre/commit/77d5bc7fd813bc070de00e3941ac2bb7685531be))
+
 ## [0.3.0](https://github.com/AxiaCoder/cloitre/compare/v0.2.0...v0.3.0) (2026-10-25)
 
 
