@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { COLOR_CHOICES, GRID_COLUMNS, currentSymbol, gridMove, isMenuKey, symbolChoices } from "./project-menu";
+import { COLOR_CHOICES, GRID_COLUMNS, currentSymbol, gridMove, isMenuKey, symbolChoices, tabWrap } from "./project-menu";
 import { FALLBACK_ICON, MARKER_COLORS, MARKER_ICONS } from "./project-marker";
 import { messages } from "./strings";
 
@@ -82,6 +82,40 @@ describe("gridMove", () => {
   it("ignores other keys and empty grids", () => {
     expect(gridMove(3, 15, 6, "Enter")).toBeUndefined();
     expect(gridMove(0, 0, 6, "ArrowRight")).toBeUndefined();
+  });
+});
+
+describe("tabWrap", () => {
+  it("wraps Tab from the last tab stop to the first", () => {
+    expect(tabWrap(4, 5, false)).toBe(0);
+  });
+
+  it("wraps Shift+Tab from the first tab stop to the last", () => {
+    expect(tabWrap(0, 5, true)).toBe(4);
+  });
+
+  it("brings a focus from outside the loop to the first stop on Tab and the last on Shift+Tab", () => {
+    expect(tabWrap(-1, 5, false)).toBe(0);
+    expect(tabWrap(-1, 5, true)).toBe(4);
+  });
+
+  it("leaves a move inside the loop to the browser", () => {
+    expect(tabWrap(2, 5, false)).toBeUndefined();
+    expect(tabWrap(2, 5, true)).toBeUndefined();
+    expect(tabWrap(0, 5, false)).toBeUndefined();
+    expect(tabWrap(4, 5, true)).toBeUndefined();
+  });
+
+  it("keeps the focus on the only tab stop of a one-stop loop", () => {
+    expect(tabWrap(0, 1, false)).toBe(0);
+    expect(tabWrap(0, 1, true)).toBe(0);
+    expect(tabWrap(-1, 1, false)).toBe(0);
+    expect(tabWrap(-1, 1, true)).toBe(0);
+  });
+
+  it("does nothing on an empty loop", () => {
+    expect(tabWrap(-1, 0, false)).toBeUndefined();
+    expect(tabWrap(-1, 0, true)).toBeUndefined();
   });
 });
 
