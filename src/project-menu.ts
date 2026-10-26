@@ -63,6 +63,24 @@ export function gridMove(index: number, count: number, columns: number, key: str
   }
 }
 
+/**
+ * The tab stop the focus wraps to when Tab, or Shift+Tab when `backward`, is
+ * pressed in a loop of `count` tab stops, with `before` of them before the
+ * focused element and `after` after it, the focused element itself counted in
+ * neither: the first when Tab has no stop after, the last when Shift+Tab has
+ * no stop before. `undefined` when the move stays inside the loop on its own,
+ * or when the loop is empty.
+ */
+export function tabWrap(before: number, after: number, count: number, backward: boolean): number | undefined {
+  if (count === 0) {
+    return undefined;
+  }
+  if (backward) {
+    return before === 0 ? count - 1 : undefined;
+  }
+  return after === 0 ? 0 : undefined;
+}
+
 /** Tells whether keyboard event `event` asks for a context menu: Shift+F10 or the menu key. */
 export function isMenuKey(event: Pick<KeyboardEvent, "key" | "shiftKey" | "ctrlKey" | "altKey" | "metaKey">): boolean {
   if (event.key === "ContextMenu") {
