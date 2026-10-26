@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.0](https://github.com/AxiaCoder/cloitre/compare/v0.4.0...v0.5.0) (2026-10-26)
+
+
+### Features
+
+* **rail:** a project with no live session shows as paused ([#76](https://github.com/AxiaCoder/cloitre/issues/76)) ([df2df65](https://github.com/AxiaCoder/cloitre/commit/df2df65d1ecf587a9f2b9d5fd5844bc3a907ddb7))
+* **tabs:** a session tab shows the title its session sets, and keeps it across restarts ([#67](https://github.com/AxiaCoder/cloitre/issues/67)) ([8242314](https://github.com/AxiaCoder/cloitre/commit/824231499ea03c2ae81666254893d49c0737cc98))
+* **tabs:** a tab and its project show when a session is blocked or done ([#73](https://github.com/AxiaCoder/cloitre/issues/73)) ([b337517](https://github.com/AxiaCoder/cloitre/commit/b337517796da50e3239033002ec7c87e375fdc51))
+* **tabs:** a tab and its project show when a session is working or stopped on an error ([#75](https://github.com/AxiaCoder/cloitre/issues/75)) ([217f1da](https://github.com/AxiaCoder/cloitre/commit/217f1da948a79af19e635f1424882d04ebb0dc1f))
+
 ## [0.4.0](https://github.com/AxiaCoder/cloitre/compare/v0.3.0...v0.4.0) (2026-10-26)
 
 
