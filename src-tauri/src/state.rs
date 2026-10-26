@@ -42,28 +42,63 @@ const HOOK_INPUT_LIMIT: u64 = 1 << 20;
 /// message is dropped.
 pub const MESSAGE_LIMIT: usize = 256;
 
+/// The most bytes an agent id may hold.
+pub const AGENT_ID_LIMIT: usize = 64;
+
 /// What a tab's session is doing, as told by its hooks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionState {
     /// Waits for the user: a permission, a question or an elicitation.
     Blocked,
+    /// The user sent a prompt: every wait of the session is over, and it works
+    /// on the prompt.
+    Prompted,
     /// Works on a prompt.
     Working,
     /// Has finished answering.
     Done,
 }
 
-/// One state message: the tab id and the state of its session. Sent by the
-/// hook as one JSON line, `{"tab":3,"state":"blocked"}`, and emitted to the
-/// webview in the same form.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// The id of the subagent a hook event comes from: 1 to [`AGENT_ID_LIMIT`]
+/// ASCII letters, digits, `-` or `_`. Any other text is refused, when read
+/// from JSON as well.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String")]
+pub struct AgentId(String);
+
+impl TryFrom<String> for AgentId {
+    type Error = &'static str;
+
+    /// Accepts `id` when it is a valid agent id; refuses it otherwise.
+    fn try_from(id: String) -> Result<Self, Self::Error> {
+        let valid = !id.is_empty()
+            && id.len() <= AGENT_ID_LIMIT
+            && id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_');
+        if valid {
+            Ok(Self(id))
+        } else {
+            Err("not an agent id")
+        }
+    }
+}
+
+/// One state message: the tab id, the state of its session and, for an event
+/// of a subagent, its id. Sent by the hook as one JSON line,
+/// `{"tab":3,"state":"blocked","agent":"a1b2"}` (no `agent` for the main
+/// conversation), and emitted to the webview in the same form.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StateMessage {
     /// The tab id, from 1.
     pub tab: NonZeroU32,
     /// The state of the tab's session.
     pub state: SessionState,
+    /// The subagent the event comes from; `None` for the main conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentId>,
 }
 
 /// Returns the state a hook event means: `event` is its `hook_event_name`,
@@ -73,9 +108,8 @@ pub fn state_for(event: &str, tool: Option<&str>) -> Option<SessionState> {
     match event {
         "PermissionRequest" | "Elicitation" => Some(SessionState::Blocked),
         "PreToolUse" if tool == Some(ASK_TOOL) => Some(SessionState::Blocked),
-        "UserPromptSubmit" | "PostToolUse" | "PostToolUseFailure" | "ElicitationResult" => {
-            Some(SessionState::Working)
-        }
+        "UserPromptSubmit" => Some(SessionState::Prompted),
+        "PostToolUse" | "PostToolUseFailure" | "ElicitationResult" => Some(SessionState::Working),
         "Stop" => Some(SessionState::Done),
         _ => None,
     }
@@ -83,24 +117,31 @@ pub fn state_for(event: &str, tool: Option<&str>) -> Option<SessionState> {
 
 /// Builds the line the hook sends for one notice: `input` is the JSON Claude
 /// Code sends on the hook's standard input, `tab_var` the value of
-/// [`TAB_ID_VAR`]. The line is a [`StateMessage`] in JSON, then `\n`.
+/// [`TAB_ID_VAR`]. The line is a [`StateMessage`] in JSON, then `\n`; its
+/// `agent` is the input's `agent_id`, absent when the input has none.
 ///
 /// `None` when `input` is not JSON, has no `hook_event_name`, names an event
-/// [`state_for`] ignores, or when `tab_var` is not a tab id.
+/// [`state_for`] ignores, has an `agent_id` that is not an [`AgentId`], or
+/// when `tab_var` is not a tab id.
 pub fn hook_message(input: &[u8], tab_var: Option<&OsStr>) -> Option<Vec<u8>> {
     let tab = tab_var.and_then(parse_tab_id)?;
     let notice: serde_json::Value = serde_json::from_slice(input).ok()?;
     let event = notice.get("hook_event_name")?.as_str()?;
     let tool = notice.get("tool_name").and_then(serde_json::Value::as_str);
     let state = state_for(event, tool)?;
-    let mut line = serde_json::to_vec(&StateMessage { tab, state }).ok()?;
+    let agent = match notice.get("agent_id") {
+        None => None,
+        Some(id) => Some(AgentId::try_from(id.as_str()?.to_owned()).ok()?),
+    };
+    let mut line = serde_json::to_vec(&StateMessage { tab, state, agent }).ok()?;
     line.push(b'\n');
     Some(line)
 }
 
 /// Reads one message the app received: `None` when it holds more than
-/// [`MESSAGE_LIMIT`] bytes, is not one JSON object with exactly a valid `tab`
-/// and a known `state`, or holds anything after it but whitespace.
+/// [`MESSAGE_LIMIT`] bytes, is not one JSON object with a valid `tab`, a known
+/// `state` and maybe a valid `agent`, and nothing else, or holds anything after
+/// it but whitespace.
 pub fn parse_message(bytes: &[u8]) -> Option<StateMessage> {
     if bytes.len() > MESSAGE_LIMIT {
         return None;
@@ -176,7 +217,7 @@ mod tests {
             ("PermissionRequest", Some("Bash"), Some(Blocked)),
             ("PreToolUse", Some(ASK_TOOL), Some(Blocked)),
             ("Elicitation", None, Some(Blocked)),
-            ("UserPromptSubmit", None, Some(Working)),
+            ("UserPromptSubmit", None, Some(Prompted)),
             ("PostToolUse", Some("Bash"), Some(Working)),
             ("PostToolUseFailure", Some("Bash"), Some(Working)),
             ("ElicitationResult", None, Some(Working)),
@@ -244,7 +285,8 @@ mod tests {
             parse_message(&line),
             Some(StateMessage {
                 tab: NonZeroU32::new(4).unwrap(),
-                state: SessionState::Working
+                state: SessionState::Prompted,
+                agent: None,
             })
         );
     }
@@ -278,10 +320,112 @@ mod tests {
         let message = StateMessage {
             tab: NonZeroU32::new(3).unwrap(),
             state: SessionState::Blocked,
+            agent: None,
         };
         assert_eq!(
             serde_json::to_value(message).unwrap(),
             serde_json::json!({ "tab": 3, "state": "blocked" })
+        );
+    }
+
+    /// Builds the JSON a subagent's hook receives for `event`, with `agent_id` set to `agent`.
+    fn agent_notice(event: &str, agent: serde_json::Value) -> Vec<u8> {
+        let mut value: serde_json::Value = serde_json::from_slice(&notice(event, None)).unwrap();
+        value["agent_id"] = agent;
+        value["agent_type"] = "general-purpose".into();
+        value.to_string().into_bytes()
+    }
+
+    #[test]
+    fn a_subagent_notice_carries_its_agent_id() {
+        let line = hook_message(
+            &agent_notice("PostToolUse", "a1b2-c3_D4".into()),
+            Some(OsStr::new("5")),
+        );
+        assert_eq!(
+            line.unwrap(),
+            b"{\"tab\":5,\"state\":\"working\",\"agent\":\"a1b2-c3_D4\"}\n"
+        );
+    }
+
+    #[test]
+    fn a_notice_with_an_invalid_agent_id_sends_nothing() {
+        let long = "a".repeat(AGENT_ID_LIMIT + 1);
+        for agent in [
+            serde_json::json!(""),
+            serde_json::json!("a b"),
+            serde_json::json!("a\"b"),
+            serde_json::json!("agent/1"),
+            serde_json::json!("é"),
+            serde_json::json!(long),
+            serde_json::json!(3),
+            serde_json::json!(null),
+        ] {
+            let input = agent_notice("PostToolUse", agent.clone());
+            assert_eq!(hook_message(&input, Some(OsStr::new("5"))), None, "{agent}");
+        }
+    }
+
+    #[test]
+    fn the_longest_message_fits_the_limit() {
+        let message = StateMessage {
+            tab: NonZeroU32::MAX,
+            state: SessionState::Prompted,
+            agent: Some(AgentId::try_from("a".repeat(AGENT_ID_LIMIT)).unwrap()),
+        };
+        let mut line = serde_json::to_vec(&message).unwrap();
+        line.push(b'\n');
+        assert!(line.len() <= MESSAGE_LIMIT, "{} bytes", line.len());
+        assert_eq!(parse_message(&line), Some(message));
+    }
+
+    #[test]
+    fn a_message_reads_with_or_without_agent() {
+        assert_eq!(
+            parse_message(br#"{"tab":2,"state":"blocked","agent":"x-1_Y"}"#),
+            Some(StateMessage {
+                tab: NonZeroU32::new(2).unwrap(),
+                state: SessionState::Blocked,
+                agent: Some(AgentId::try_from("x-1_Y".to_owned()).unwrap()),
+            })
+        );
+        assert_eq!(
+            parse_message(br#"{"tab":2,"state":"prompted"}"#),
+            Some(StateMessage {
+                tab: NonZeroU32::new(2).unwrap(),
+                state: SessionState::Prompted,
+                agent: None,
+            })
+        );
+    }
+
+    #[test]
+    fn a_message_with_an_invalid_agent_is_dropped() {
+        let long = format!(
+            "{{\"tab\":1,\"state\":\"done\",\"agent\":\"{}\"}}",
+            "a".repeat(AGENT_ID_LIMIT + 1)
+        );
+        for bad in [
+            r#"{"tab":1,"state":"done","agent":""}"#,
+            r#"{"tab":1,"state":"done","agent":"a b"}"#,
+            r#"{"tab":1,"state":"done","agent":"<x>"}"#,
+            r#"{"tab":1,"state":"done","agent":3}"#,
+            &long,
+        ] {
+            assert_eq!(parse_message(bad.as_bytes()), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_webview_payload_carries_the_agent_when_present() {
+        let message = StateMessage {
+            tab: NonZeroU32::new(3).unwrap(),
+            state: SessionState::Working,
+            agent: Some(AgentId::try_from("a1".to_owned()).unwrap()),
+        };
+        assert_eq!(
+            serde_json::to_value(message).unwrap(),
+            serde_json::json!({ "tab": 3, "state": "working", "agent": "a1" })
         );
     }
 }

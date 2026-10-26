@@ -403,6 +403,11 @@ function createPane(tabId: number): TabPane {
     onRetry: (mode) => {
       report(() => restartTab(tabId, mode));
     },
+    onAnswer: () => {
+      if (activities.answer(tabId)) {
+        renderTabs();
+      }
+    },
     onTitle: (raw) => {
       const changed = tabs.setTitle(tabId, raw);
       if (changed) {
@@ -1588,7 +1593,7 @@ listen("session-state", (event) => {
   if (!reported || tab?.kind !== "session" || (tab.state !== "running" && tab.state !== "starting")) {
     return;
   }
-  if (activities.report(reported.tab, reported.state, seenTabId() === reported.tab)) {
+  if (activities.report(reported.tab, reported.state, seenTabId() === reported.tab, reported.agent)) {
     renderTabs();
   }
 }).catch(showError);
