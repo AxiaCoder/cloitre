@@ -416,6 +416,11 @@ function createPane(tabId: number): TabPane {
         renderTabs();
       }
     },
+    onInterrupt: () => {
+      if (activities.interrupt(tabId)) {
+        renderTabs();
+      }
+    },
     onTitle: (raw) => {
       const changed = tabs.setTitle(tabId, raw);
       if (changed) {

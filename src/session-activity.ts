@@ -81,6 +81,15 @@ export function isAnswerInput(data: string): boolean {
 }
 
 /**
+ * Returns whether `data`, input the user sends to a session's terminal,
+ * interrupts the session: it is a lone Escape or a lone Ctrl+C. An escape
+ * sequence such as an arrow key is not an interrupt.
+ */
+export function isInterruptInput(data: string): boolean {
+  return data === "\x1b" || data === "\x03";
+}
+
+/**
  * The activity of every session tab that shows one, by tab id. A tab is
  * blocked while one of its agents waits for the user, the main conversation
  * or a subagent. A tab works from its prompt until its turn ends and, when the
@@ -106,7 +115,8 @@ export class ActivityStore {
    * that tab is on screen in the focused window: a turn it sees end shows
    * nothing. `"blocked"` blocks the tab for that agent; every other state ends
    * that agent's block, and `"prompted"` every block of the tab. `"prompted"`
-   * and `"working"` make the tab work, `"background"` keeps it working until a
+   * and `"working"` make the tab work, and a `"working"` from the main
+   * conversation ends the wait for background tasks; `"background"` keeps it working until a
    * `"settled"` or a `"done"`; `"settled"` is ignored for a tab not waiting for
    * its background tasks. `"failed"` shows until the next `"prompted"`.
    * Returns whether the tab's activity changed.
@@ -126,7 +136,7 @@ export class ActivityStore {
       this.working.add(tabId);
     } else {
       this.unblock(tabId, agent ?? MAIN_AGENT);
-      this.apply(tabId, state, seen);
+      this.apply(tabId, state, seen, agent);
     }
     return this.of(tabId) !== before;
   }
@@ -134,6 +144,21 @@ export class ActivityStore {
   /** Ends every block of tab `tabId`, whose user just answered from the keyboard. Returns whether it was blocked. */
   answer(tabId: number): boolean {
     return this.blocks.delete(tabId);
+  }
+
+  /**
+   * Ends the work and every block of tab `tabId`, whose user just interrupted
+   * it from the keyboard, without showing it done. A tab that only waits for
+   * its background tasks keeps working. Returns whether the tab's activity changed.
+   */
+  interrupt(tabId: number): boolean {
+    if (this.awaiting.has(tabId)) {
+      return false;
+    }
+    const before = this.of(tabId);
+    this.blocks.delete(tabId);
+    this.working.delete(tabId);
+    return this.of(tabId) !== before;
   }
 
   /** Marks tab `tabId` as seen on screen in the focused window: a `"done"` goes out, any other activity stays. Returns whether it changed. */
@@ -178,13 +203,20 @@ export class ActivityStore {
     return found;
   }
 
-  /** Applies to tab `tabId` a state that neither blocks it nor starts a turn; `seen` as in {@link report}. */
-  private apply(tabId: number, state: Exclude<ReportedState, "blocked" | "prompted">, seen: boolean): void {
+  /** Applies to tab `tabId` a state that neither blocks it nor starts a turn; `seen` and `agent` as in {@link report}. */
+  private apply(
+    tabId: number,
+    state: Exclude<ReportedState, "blocked" | "prompted">,
+    seen: boolean,
+    agent: string | undefined,
+  ): void {
     if (state === "working" || state === "background") {
       this.working.add(tabId);
       this.done.delete(tabId);
       if (state === "background") {
         this.awaiting.add(tabId);
+      } else if (agent === undefined) {
+        this.awaiting.delete(tabId);
       }
     } else if (state === "settled") {
       if (this.awaiting.has(tabId)) {

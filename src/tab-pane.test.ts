@@ -210,6 +210,7 @@ function recorder() {
     onClose: () => events.push("close"),
     onRetry: (mode) => events.push(`retry ${mode}`),
     onAnswer: () => events.push("answer"),
+    onInterrupt: () => events.push("interrupt"),
     onTitle: (title) => events.push(`title ${title}`),
   };
   return { events, handlers };

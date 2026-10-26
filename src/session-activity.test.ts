@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ActivityStore, isAnswerInput, parseActivityReport } from "./session-activity";
+import { ActivityStore, isAnswerInput, isInterruptInput, parseActivityReport } from "./session-activity";
 
 describe("parseActivityReport", () => {
   it("reads a well-formed payload", () => {
@@ -445,5 +445,73 @@ describe("ActivityStore working and failed", () => {
     expect(store.mostUrgent([1, 3, 2])).toBe("failed");
     expect(store.mostUrgent([3, 1])).toBe("done");
     expect(store.mostUrgent([1])).toBe("working");
+  });
+});
+
+describe("isInterruptInput", () => {
+  it("accepts a lone Escape or a lone Ctrl+C", () => {
+    expect(isInterruptInput("\x1b")).toBe(true);
+    expect(isInterruptInput("\x03")).toBe(true);
+  });
+
+  it("refuses an escape sequence, a letter or Enter", () => {
+    expect(isInterruptInput("\x1b[A")).toBe(false);
+    expect(isInterruptInput("a")).toBe(false);
+    expect(isInterruptInput("\r")).toBe(false);
+  });
+});
+
+describe("ActivityStore interrupt", () => {
+  it("ends the work of a tab interrupted during its turn, without showing done", () => {
+    const store = new ActivityStore();
+    store.report(1, "prompted", false);
+    expect(store.interrupt(1)).toBe(true);
+    expect(store.of(1)).toBeUndefined();
+  });
+
+  it("keeps a tab working when it only waits for background tasks", () => {
+    const store = new ActivityStore();
+    store.report(1, "prompted", false);
+    store.report(1, "background", false);
+    expect(store.interrupt(1)).toBe(false);
+    expect(store.of(1)).toBe("working");
+    expect(store.report(1, "settled", false, "agent-a")).toBe(true);
+    expect(store.of(1)).toBe("done");
+  });
+
+  it("ends both the block and the work of a blocked working tab refused with Escape", () => {
+    const store = new ActivityStore();
+    store.report(1, "prompted", false);
+    store.report(1, "blocked", false);
+    expect(store.interrupt(1)).toBe(true);
+    expect(store.of(1)).toBeUndefined();
+  });
+
+  it("changes nothing on a tab without activity", () => {
+    const store = new ActivityStore();
+    expect(store.interrupt(1)).toBe(false);
+    expect(store.of(1)).toBeUndefined();
+  });
+});
+
+describe("ActivityStore turn woken by background tasks", () => {
+  it("stops waiting for background tasks once the main conversation works again", () => {
+    const store = new ActivityStore();
+    store.report(1, "prompted", false);
+    store.report(1, "background", false);
+    store.report(1, "working", false);
+    expect(store.report(1, "settled", false, "agent-a")).toBe(false);
+    expect(store.of(1)).toBe("working");
+    expect(store.report(1, "done", false)).toBe(true);
+    expect(store.of(1)).toBe("done");
+  });
+
+  it("keeps waiting for background tasks while only a subagent works", () => {
+    const store = new ActivityStore();
+    store.report(1, "prompted", false);
+    store.report(1, "background", false);
+    store.report(1, "working", false, "agent-a");
+    expect(store.report(1, "settled", false, "agent-a")).toBe(true);
+    expect(store.of(1)).toBe("done");
   });
 });
