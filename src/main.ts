@@ -47,6 +47,7 @@ import {
   currentSymbol,
   GRID_COLUMNS,
   gridMove,
+  tabWrap,
   isMenuKey,
   symbolChoices,
   TRASH_PATH,
@@ -701,7 +702,8 @@ type MarkerGridName = "color" | "symbol";
 /**
  * Opens, under project button `anchor` and inside the window, the menu of
  * `project`: its color grid, its symbol grid, and an entry that asks to remove
- * the project. Focuses the current choice of grid `focus`.
+ * the project. Focuses the current choice of grid `focus`; Tab and Shift+Tab
+ * cycle inside the menu.
  */
 function openMarkerMenu(project: Project, anchor: HTMLButtonElement, focus: MarkerGridName = "color"): void {
   closeMarkerMenu();
@@ -730,6 +732,9 @@ function openMarkerMenu(project: Project, anchor: HTMLButtonElement, focus: Mark
     if (!(event.relatedTarget instanceof Node && menu.contains(event.relatedTarget))) {
       closeMarkerMenu();
     }
+  });
+  menu.addEventListener("keydown", (event) => {
+    trapFocus(menu, event);
   });
   menu.addEventListener("contextmenu", (event) => {
     event.preventDefault();
@@ -766,26 +771,24 @@ function dismissRemoveDialog(): void {
   }
 }
 
-/** Keeps Tab and Shift+Tab of keyboard event `event` inside `dialog`, cycling through its enabled buttons. */
+/**
+ * Keeps Tab and Shift+Tab of keyboard event `event` inside `dialog`, cycling
+ * through its enabled buttons that are in the tab order.
+ */
 function trapFocus(dialog: HTMLElement, event: KeyboardEvent): void {
   if (event.key !== "Tab") {
     return;
   }
-  const buttons = [...dialog.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
-  if (buttons.length === 0) {
+  const stops = [...dialog.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")].filter(
+    (button) => button.tabIndex >= 0,
+  );
+  const index = stops.findIndex((stop) => stop === document.activeElement);
+  const wrap = tabWrap(index, stops.length, event.shiftKey);
+  if (stops.length === 0) {
     event.preventDefault();
-    return;
-  }
-  const first = buttons[0];
-  const last = buttons[buttons.length - 1];
-  const active = document.activeElement;
-  const inside = buttons.some((button) => button === active);
-  if (event.shiftKey && (active === first || !inside)) {
+  } else if (wrap !== undefined) {
     event.preventDefault();
-    last.focus();
-  } else if (!event.shiftKey && (active === last || !inside)) {
-    event.preventDefault();
-    first.focus();
+    stops[wrap].focus();
   }
 }
 
