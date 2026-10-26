@@ -144,9 +144,27 @@ describe("the session activity texts", () => {
   });
 
   it("put the activity on its own line under a project tooltip", () => {
-    expect(messages.projectActivityTitle("example\n/projects/example", "done")).toBe(
+    expect(messages.projectStatusTitle("example\n/projects/example", false, "done")).toBe(
       "example\n/projects/example\nfinished",
     );
-    expect(messages.projectActivityTitle("example", "blocked")).toBe("example\nwaiting for your answer");
+    expect(messages.projectStatusTitle("example", false, "blocked")).toBe("example\nwaiting for your answer");
+  });
+
+  it("say a paused project is paused, with its activity when it has one", () => {
+    expect(messages.projectStatus(false)).toBeUndefined();
+    expect(messages.projectStatus(true)).toBe("Paused");
+    expect(messages.projectStatus(true, "failed")).toBe("Paused, stopped on an error");
+    expect(messages.projectStatusTitle("example", true)).toBe("example\nPaused");
+    expect(messages.projectStatusTitle("example", false)).toBe("example");
+  });
+
+  it("say only the activity of a project that is not paused", () => {
+    expect(messages.projectStatus(false, "blocked")).toBe("waiting for your answer");
+  });
+
+  it("put the pause and the activity together on the line under a paused project tooltip", () => {
+    expect(messages.projectStatusTitle("example\n/projects/example", true, "failed")).toBe(
+      "example\n/projects/example\nPaused, stopped on an error",
+    );
   });
 });

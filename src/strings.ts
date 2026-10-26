@@ -93,8 +93,16 @@ export const messages = {
   tabActivityLabel: (label: string, activity: SessionActivity) => `${label}, ${activityName(activity)}`,
   /** What a session showing `activity` is doing, in words. */
   activity: (activity: SessionActivity) => activityName(activity),
-  /** The tooltip `title` of a project, followed by what the most urgent of its sessions is doing. */
-  projectActivityTitle: (title: string, activity: SessionActivity) => `${title}\n${activityName(activity)}`,
+  /**
+   * What a project's rail entry says of it: paused when `paused`, then what the
+   * most urgent of its sessions is doing when `activity` is given; `undefined` for neither.
+   */
+  projectStatus: (paused: boolean, activity?: SessionActivity) => projectStatus(paused, activity),
+  /** The tooltip `title` of a project, followed on its own line by its {@link projectStatus} when it has one. */
+  projectStatusTitle: (title: string, paused: boolean, activity?: SessionActivity) => {
+    const status = projectStatus(paused, activity);
+    return status === undefined ? title : `${title}\n${status}`;
+  },
   /** The accessible name of the close button of tab `label`. */
   closeTab: (label: string) => `Close ${label}`,
   /** The tooltip of a project's session count. */
@@ -223,6 +231,14 @@ const ACTIVITY_NAMES: Readonly<Record<SessionActivity, string>> = {
 /** What a session showing `activity` is doing, in words. */
 function activityName(activity: SessionActivity): string {
   return ACTIVITY_NAMES[activity];
+}
+
+/** A project's status in words: "Paused" when `paused`, then `activity` in words; `undefined` for neither. */
+function projectStatus(paused: boolean, activity?: SessionActivity): string | undefined {
+  if (activity === undefined) {
+    return paused ? "Paused" : undefined;
+  }
+  return paused ? `Paused, ${activityName(activity)}` : activityName(activity);
 }
 
 /** `word` with its first letter upper-cased. */

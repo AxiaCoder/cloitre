@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { afterRefusedStart, TabModel, tabName, type SavedTab } from "./tabs";
+import { afterRefusedStart, isProjectPaused, TabModel, tabName, type SavedTab, type Tab, type TabState } from "./tabs";
 
 /** Returns saved tabs `ids`, none with a title. */
 function saved(...ids: number[]): SavedTab[] {
@@ -389,5 +389,41 @@ describe("afterRefusedStart", () => {
   it("keeps a restarted tab another start or a stop moved on", () => {
     expect(afterRefusedStart("running", "restored")).toBe("keep");
     expect(afterRefusedStart("exited", "restored")).toBe("keep");
+  });
+});
+
+/** Returns a session tab of project 10 in `state`. */
+function session(id: number, state: TabState): Tab {
+  return { kind: "session", id, projectId: 10, label: `Session ${String(id)}`, title: null, state };
+}
+
+describe("isProjectPaused", () => {
+  const replay: Tab = { kind: "replay", id: -1, projectId: 10, label: "Replay example", recording: "example" };
+
+  it("pauses a project with no tab, or only a replay", () => {
+    expect(isProjectPaused(true, [])).toBe(true);
+    expect(isProjectPaused(true, [replay])).toBe(true);
+  });
+
+  it("pauses a project whose session tabs are all stopped", () => {
+    expect(isProjectPaused(true, [session(1, "exited"), session(2, "failed"), session(3, "restored"), replay])).toBe(true);
+  });
+
+  it("wakes a project as soon as one session starts or runs", () => {
+    expect(isProjectPaused(true, [session(1, "exited"), session(2, "starting")])).toBe(false);
+    expect(isProjectPaused(true, [session(1, "running")])).toBe(false);
+  });
+
+  it("pauses a project whose only session stopped on an error", () => {
+    expect(isProjectPaused(true, [session(1, "failed")])).toBe(true);
+  });
+
+  it("keeps a project awake when a session runs beside a replay", () => {
+    expect(isProjectPaused(true, [replay, session(1, "running")])).toBe(false);
+  });
+
+  it("never pauses a missing project", () => {
+    expect(isProjectPaused(false, [])).toBe(false);
+    expect(isProjectPaused(false, [session(1, "exited"), replay])).toBe(false);
   });
 });

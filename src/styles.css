@@ -161,8 +161,13 @@ button.primary:hover {
   background: var(--ink-2);
 }
 
-.project-marker {
+.project-badge {
   position: relative;
+  display: flex;
+  flex-shrink: 0;
+}
+
+.project-marker {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -482,6 +487,24 @@ button.danger:hover {
 
 .project-count {
   flex-shrink: 0;
+}
+
+.project.paused .project-marker {
+  filter: grayscale(1) brightness(0.62);
+}
+
+.project.paused .project-name {
+  color: var(--muted);
+}
+
+.project.paused .project-count::before {
+  content: "";
+  display: block;
+  box-sizing: border-box;
+  width: 6px;
+  height: 9px;
+  border-right: 2px solid var(--muted);
+  border-left: 2px solid var(--muted);
 }
 
 .project.missing .project-marker {
