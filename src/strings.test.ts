@@ -136,13 +136,6 @@ describe("the session activity texts", () => {
     expect(messages.tabActivityLabel("Session 2", "done")).toBe("Session 2, finished");
   });
 
-  it("say each activity in words", () => {
-    expect(messages.activity("blocked")).toBe("waiting for your answer");
-    expect(messages.activity("done")).toBe("finished");
-    expect(messages.activity("failed")).toBe("stopped on an error");
-    expect(messages.activity("working")).toBe("working");
-  });
-
   it("put the activity on its own line under a project tooltip", () => {
     expect(messages.projectStatusTitle("example\n/projects/example", "done")).toBe(
       "example\n/projects/example\nfinished",

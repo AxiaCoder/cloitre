@@ -94,8 +94,6 @@ export const messages = {
     activity === undefined ? `${label} (${state})` : `${label} (${state}, ${activityName(activity)})`,
   /** The accessible name of the label of tab `label` whose session shows `activity`. */
   tabActivityLabel: (label: string, activity: SessionActivity) => `${label}, ${activityName(activity)}`,
-  /** What a session showing `activity` is doing, in words. */
-  activity: (activity: SessionActivity) => activityName(activity),
   /** What a project's rail entry says of its `status`; `undefined` for no status. */
   projectStatus: (status?: ProjectStatus) => projectStatus(status),
   /** The tooltip `title` of a project, followed on its own line by its `status` in words when it has one. */
