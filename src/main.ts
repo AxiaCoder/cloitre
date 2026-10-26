@@ -119,7 +119,10 @@ const titles = new TitleSaver(saveTabTitle, (tabId, error) => {
 });
 /** The session count element of each project in the rail, by project id. */
 const sessionCounts = new Map<number, HTMLSpanElement>();
-/** The button, its tooltip without activity, and the activity dot of each project in the rail, by project id. */
+/**
+ * The button, its tooltip without status, the activity dot and whether the
+ * folder exists, of each project in the rail, by project id.
+ */
 const projectIndicators = new Map<
   number,
   { button: HTMLButtonElement; title: string; dot: HTMLSpanElement; exists: boolean }
@@ -610,8 +613,8 @@ async function closeProjectTabs(projectId: number): Promise<void> {
 /**
  * Shows, next to each project in the rail, how many session tabs it has open,
  * nothing for none, or the pause glyph when the project is paused; greys out a
- * paused project; and on its marker what the most urgent of its sessions is
- * doing: waiting for an answer before finished.
+ * paused project; otherwise shows on its marker what the most urgent of its
+ * sessions is doing: waiting for an answer before finished.
  */
 function renderSessionCounts(): void {
   for (const [projectId, count] of sessionCounts) {
@@ -627,14 +630,15 @@ function renderSessionCounts(): void {
     if (paused) {
       sessionCounts.get(projectId)?.replaceChildren();
     }
+    const status = paused ? "paused" : activity;
     dot.className = `project-activity ${activity ?? ""}`.trim();
-    dot.hidden = activity === undefined;
-    button.title = messages.projectStatusTitle(title, paused, activity);
-    const status = messages.projectStatus(paused, activity);
-    if (status === undefined) {
+    dot.hidden = paused || activity === undefined;
+    button.title = messages.projectStatusTitle(title, status);
+    const description = messages.projectStatus(status);
+    if (description === undefined) {
       button.removeAttribute("aria-description");
     } else {
-      button.setAttribute("aria-description", status);
+      button.setAttribute("aria-description", description);
     }
   }
 }
@@ -1248,12 +1252,10 @@ function renderProjects(): void {
         ? messages.projectTitle(project.name, project.path)
         : messages.missingProjectTitle(project.name, project.path);
       button.dataset.project = String(project.id);
+      const marker = projectMarker(project);
       const dot = document.createElement("span");
       dot.hidden = true;
-      dot.setAttribute("aria-hidden", "true");
-      const badge = document.createElement("span");
-      badge.className = "project-badge";
-      badge.append(projectMarker(project), dot);
+      marker.append(dot);
       projectIndicators.set(project.id, { button, title: button.title, dot, exists: project.exists });
       const name = document.createElement("span");
       name.className = "project-name";
@@ -1267,7 +1269,7 @@ function renderProjects(): void {
       const count = document.createElement("span");
       count.className = "project-count";
       sessionCounts.set(project.id, count);
-      button.append(badge, text, count);
+      button.append(marker, text, count);
       button.addEventListener("click", () => {
         report(() => selectProject(project.id));
       });

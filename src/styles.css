@@ -161,13 +161,8 @@ button.primary:hover {
   background: var(--ink-2);
 }
 
-.project-badge {
-  position: relative;
-  display: flex;
-  flex-shrink: 0;
-}
-
 .project-marker {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
