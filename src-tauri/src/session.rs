@@ -443,6 +443,8 @@ mod tests {
                     "PostToolUseFailure": state,
                     "ElicitationResult": state,
                     "Stop": state,
+                    "SubagentStop": state,
+                    "StopFailure": state,
                 }
             })
         );

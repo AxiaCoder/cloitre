@@ -21,7 +21,7 @@ pub const SESSION_STATE_EVENT: &str = "session-state";
 
 /// The Claude Code hook events the state hook runs on for every tool or
 /// server, with no matcher.
-pub const STATE_HOOK_EVENTS: [&str; 7] = [
+pub const STATE_HOOK_EVENTS: [&str; 9] = [
     "PermissionRequest",
     "Elicitation",
     "UserPromptSubmit",
@@ -29,6 +29,8 @@ pub const STATE_HOOK_EVENTS: [&str; 7] = [
     "PostToolUseFailure",
     "ElicitationResult",
     "Stop",
+    "SubagentStop",
+    "StopFailure",
 ];
 
 /// The tool whose `PreToolUse` event means the session waits for an answer;
@@ -58,6 +60,12 @@ pub enum SessionState {
     Working,
     /// Has finished answering.
     Done,
+    /// Has finished answering, while background tasks of the session still run.
+    Background,
+    /// A subagent ended, and no background task of the session runs anymore.
+    Settled,
+    /// Its turn ended on an API error.
+    Failed,
 }
 
 /// The id of the subagent a hook event comes from: 1 to [`AGENT_ID_LIMIT`]
@@ -102,15 +110,20 @@ pub struct StateMessage {
 }
 
 /// Returns the state a hook event means: `event` is its `hook_event_name`,
-/// `tool` its `tool_name` when it has one. `None` for any event that tells
-/// nothing about the state.
-pub fn state_for(event: &str, tool: Option<&str>) -> Option<SessionState> {
+/// `tool` its `tool_name` when it has one, `background_tasks` the number of
+/// entries of its `background_tasks`, 0 when it has none. `None` for any event
+/// that tells nothing about the state, and for a `SubagentStop` while
+/// background tasks still run.
+pub fn state_for(event: &str, tool: Option<&str>, background_tasks: usize) -> Option<SessionState> {
     match event {
         "PermissionRequest" | "Elicitation" => Some(SessionState::Blocked),
         "PreToolUse" if tool == Some(ASK_TOOL) => Some(SessionState::Blocked),
         "UserPromptSubmit" => Some(SessionState::Prompted),
         "PostToolUse" | "PostToolUseFailure" | "ElicitationResult" => Some(SessionState::Working),
+        "Stop" if background_tasks > 0 => Some(SessionState::Background),
         "Stop" => Some(SessionState::Done),
+        "SubagentStop" if background_tasks == 0 => Some(SessionState::Settled),
+        "StopFailure" => Some(SessionState::Failed),
         _ => None,
     }
 }
@@ -118,7 +131,8 @@ pub fn state_for(event: &str, tool: Option<&str>) -> Option<SessionState> {
 /// Builds the line the hook sends for one notice: `input` is the JSON Claude
 /// Code sends on the hook's standard input, `tab_var` the value of
 /// [`TAB_ID_VAR`]. The line is a [`StateMessage`] in JSON, then `\n`; its
-/// `agent` is the input's `agent_id`, absent when the input has none.
+/// `agent` is the input's `agent_id`, absent when the input has none. A
+/// `background_tasks` that is absent or not an array counts as empty.
 ///
 /// `None` when `input` is not JSON, has no `hook_event_name`, names an event
 /// [`state_for`] ignores, has an `agent_id` that is not an [`AgentId`], or
@@ -128,7 +142,11 @@ pub fn hook_message(input: &[u8], tab_var: Option<&OsStr>) -> Option<Vec<u8>> {
     let notice: serde_json::Value = serde_json::from_slice(input).ok()?;
     let event = notice.get("hook_event_name")?.as_str()?;
     let tool = notice.get("tool_name").and_then(serde_json::Value::as_str);
-    let state = state_for(event, tool)?;
+    let background_tasks = notice
+        .get("background_tasks")
+        .and_then(serde_json::Value::as_array)
+        .map_or(0, Vec::len);
+    let state = state_for(event, tool, background_tasks)?;
     let agent = match notice.get("agent_id") {
         None => None,
         Some(id) => Some(AgentId::try_from(id.as_str()?.to_owned()).ok()?),
@@ -222,6 +240,7 @@ mod tests {
             ("PostToolUseFailure", Some("Bash"), Some(Working)),
             ("ElicitationResult", None, Some(Working)),
             ("Stop", None, Some(Done)),
+            ("StopFailure", None, Some(Failed)),
             ("PreToolUse", Some("Bash"), None),
             ("PreToolUse", None, None),
             ("SessionStart", None, None),
@@ -230,14 +249,30 @@ mod tests {
             ("", None, None),
         ];
         for (event, tool, expected) in cases {
-            assert_eq!(state_for(event, tool), expected, "{event} {tool:?}");
+            assert_eq!(state_for(event, tool, 0), expected, "{event} {tool:?}");
+        }
+    }
+
+    #[test]
+    fn stop_events_depend_on_background_tasks() {
+        use SessionState::*;
+        let cases = [
+            ("Stop", 0, Some(Done)),
+            ("Stop", 2, Some(Background)),
+            ("SubagentStop", 0, Some(Settled)),
+            ("SubagentStop", 1, None),
+            ("StopFailure", 0, Some(Failed)),
+            ("StopFailure", 1, Some(Failed)),
+        ];
+        for (event, tasks, expected) in cases {
+            assert_eq!(state_for(event, None, tasks), expected, "{event} {tasks}");
         }
     }
 
     #[test]
     fn every_event_the_hook_runs_on_means_a_state() {
         for event in STATE_HOOK_EVENTS {
-            assert!(state_for(event, Some("Bash")).is_some(), "{event}");
+            assert!(state_for(event, Some("Bash"), 0).is_some(), "{event}");
         }
     }
 
@@ -260,6 +295,40 @@ mod tests {
         assert_eq!(line.unwrap(), b"{\"tab\":7,\"state\":\"blocked\"}\n");
         let line = hook_message(&notice("Stop", None), Some(OsStr::new("12")));
         assert_eq!(line.unwrap(), b"{\"tab\":12,\"state\":\"done\"}\n");
+    }
+
+    /// Builds the JSON a hook receives for `event`, with `tasks` as `background_tasks`.
+    fn tasks_notice(event: &str, tasks: serde_json::Value) -> Vec<u8> {
+        let mut value: serde_json::Value = serde_json::from_slice(&notice(event, None)).unwrap();
+        value["background_tasks"] = tasks;
+        value.to_string().into_bytes()
+    }
+
+    #[test]
+    fn a_stop_notice_reads_its_background_tasks() {
+        let task = serde_json::json!([{ "id": "b1", "type": "shell", "status": "running" }]);
+        let send = |input: Vec<u8>| hook_message(&input, Some(OsStr::new("3")));
+        let line = |state: &str| Some(format!("{{\"tab\":3,\"state\":\"{state}\"}}\n").into_bytes());
+        let empty = serde_json::json!([]);
+        assert_eq!(send(tasks_notice("Stop", task.clone())), line("background"));
+        assert_eq!(send(tasks_notice("Stop", empty.clone())), line("done"));
+        assert_eq!(send(notice("Stop", None)), line("done"));
+        assert_eq!(send(tasks_notice("Stop", serde_json::json!({ "id": "b1" }))), line("done"));
+        assert_eq!(send(tasks_notice("Stop", serde_json::json!(null))), line("done"));
+        assert_eq!(send(tasks_notice("SubagentStop", empty)), line("settled"));
+        assert_eq!(send(notice("SubagentStop", None)), line("settled"));
+        assert_eq!(send(tasks_notice("SubagentStop", task.clone())), None);
+        assert_eq!(send(tasks_notice("StopFailure", task)), line("failed"));
+    }
+
+    #[test]
+    fn background_tasks_that_are_not_an_array_count_as_none() {
+        let send = |input: Vec<u8>| hook_message(&input, Some(OsStr::new("3")));
+        let line = |state: &str| Some(format!("{{\"tab\":3,\"state\":\"{state}\"}}\n").into_bytes());
+        for tasks in [serde_json::json!("b1"), serde_json::json!(2), serde_json::json!(true)] {
+            assert_eq!(send(tasks_notice("Stop", tasks.clone())), line("done"), "{tasks}");
+            assert_eq!(send(tasks_notice("SubagentStop", tasks.clone())), line("settled"), "{tasks}");
+        }
     }
 
     #[test]
@@ -371,7 +440,7 @@ mod tests {
     fn the_longest_message_fits_the_limit() {
         let message = StateMessage {
             tab: NonZeroU32::MAX,
-            state: SessionState::Prompted,
+            state: SessionState::Background,
             agent: Some(AgentId::try_from("a".repeat(AGENT_ID_LIMIT)).unwrap()),
         };
         let mut line = serde_json::to_vec(&message).unwrap();

@@ -207,6 +207,17 @@ button.primary:hover {
   box-shadow: 0 0 0 1px var(--accent-ink);
 }
 
+.project-activity.failed {
+  background: var(--crit);
+  box-shadow: 0 0 0 1px var(--ink-1);
+}
+
+.project-activity.working {
+  background: var(--muted);
+  box-shadow: 0 0 0 1px var(--ink-1);
+  animation: activity-pulse 1.6s ease-in-out infinite;
+}
+
 .marker-icon {
   width: 16px;
   height: 16px;
@@ -748,6 +759,34 @@ button.info:hover {
   opacity: 0.8;
 }
 
+.tab .error-dot {
+  width: var(--dot-size);
+  height: var(--dot-size);
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--crit);
+}
+
+.tab .working-dot {
+  width: var(--dot-size);
+  height: var(--dot-size);
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--muted);
+  animation: activity-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes activity-pulse {
+  0%,
+  100% {
+    opacity: 0.9;
+  }
+
+  50% {
+    opacity: 0.35;
+  }
+}
+
 .tab-label,
 .tab-close,
 .new-tab {
@@ -938,6 +977,12 @@ button.info:hover {
 
 @media (prefers-reduced-motion: reduce) {
   .spinner > span {
+    animation: none;
+    opacity: 0.7;
+  }
+
+  .tab .working-dot,
+  .project-activity.working {
     animation: none;
     opacity: 0.7;
   }

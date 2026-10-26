@@ -210,6 +210,7 @@ function recorder() {
     onClose: () => events.push("close"),
     onRetry: (mode) => events.push(`retry ${mode}`),
     onAnswer: () => events.push("answer"),
+    onInterrupt: () => events.push("interrupt"),
     onTitle: (title) => events.push(`title ${title}`),
   };
   return { events, handlers };
@@ -674,19 +675,21 @@ describe("TabPane input", () => {
     expect(calls("pty_write")).toEqual([{ id: 2, data: "ls" }]);
   });
 
-  it("tells the page about input that may answer, and still sends it", async () => {
+  it("tells the page about input that may answer or interrupt, and still sends it", async () => {
     const { events, handlers } = recorder();
     const pane = openPane(1, handlers);
     await pane.start("new", FOLDER);
-    for (const data of ["a", "\x1b[A", "\r"]) {
+    for (const data of ["a", "\x1b[A", "\r", "\x1b", "\x03"]) {
       terminalOf(pane).dataListener(data);
       await settle();
     }
-    expect(events).toEqual(["answer"]);
+    expect(events).toEqual(["answer", "answer", "interrupt", "interrupt"]);
     expect(calls("pty_write")).toEqual([
       { id: 1, data: "a" },
       { id: 1, data: "\x1b[A" },
       { id: 1, data: "\r" },
+      { id: 1, data: "\x1b" },
+      { id: 1, data: "\x03" },
     ]);
   });
 

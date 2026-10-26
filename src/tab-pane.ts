@@ -2,7 +2,7 @@ import { decideKey } from "./keys";
 import type { SpawnMode } from "./pty";
 import { isFailedResume } from "./resume";
 import { SessionSlot, type TerminalSize } from "./session";
-import { isAnswerInput } from "./session-activity";
+import { isAnswerInput, isInterruptInput } from "./session-activity";
 import { messages, texts } from "./strings";
 import { TerminalView } from "./terminal-view";
 
@@ -66,6 +66,8 @@ export interface TabPaneHandlers {
   onRetry(mode: SpawnMode): void;
   /** The user sent input that may answer what the session waits for (see {@link isAnswerInput}). */
   onAnswer(): void;
+  /** The user sent input that interrupts the session (see {@link isInterruptInput}). */
+  onInterrupt(): void;
   /** The session set the terminal title to `title`, as received, control characters included. */
   onTitle(title: string): void;
 }
@@ -144,6 +146,9 @@ export class TabPane extends Pane {
     terminal.onData((data) => {
       if (isAnswerInput(data)) {
         handlers.onAnswer();
+      }
+      if (isInterruptInput(data)) {
+        handlers.onInterrupt();
       }
       this.slot.write(data).catch((error: unknown) => {
         handlers.onError(error);

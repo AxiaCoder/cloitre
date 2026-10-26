@@ -16,7 +16,7 @@ Cloître is an independent project, not affiliated with or endorsed by Anthropic
 
 The installed app then offers each new release itself.
 
-Tabs learn what their Claude Code session is doing with no setup: the app passes its own hooks to each session it starts, beside yours.
+Tabs learn what their Claude Code session is doing with no setup: a tab and its project show when the session works, waits for your answer, has finished or stopped on an error. The app passes its own hooks to each session it starts, beside yours.
 
 ### The "isn't commonly downloaded" warning
 
