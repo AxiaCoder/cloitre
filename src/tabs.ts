@@ -75,6 +75,15 @@ export interface ReplayTab {
 /** One tab of a project: a session tab or a replay tab. */
 export type Tab = SessionTab | ReplayTab;
 
+/**
+ * Whether a project is paused: its folder exists and none of `tabs`, its tabs,
+ * is a session tab `"starting"` or `"running"`. A project with no tab is
+ * paused; a replay tab never keeps it awake; a missing project is never paused.
+ */
+export function isProjectPaused(exists: boolean, tabs: readonly Tab[]): boolean {
+  return exists && !tabs.some((tab) => tab.kind === "session" && (tab.state === "starting" || tab.state === "running"));
+}
+
 /** `T` with every property writable. */
 type Writable<T> = { -readonly [K in keyof T]: T[K] };
 

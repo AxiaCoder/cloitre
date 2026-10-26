@@ -484,6 +484,24 @@ button.danger:hover {
   flex-shrink: 0;
 }
 
+.project.paused .project-marker {
+  filter: grayscale(1) brightness(0.62);
+}
+
+.project.paused .project-name {
+  color: var(--muted);
+}
+
+.project.paused .project-count::before {
+  content: "";
+  display: block;
+  box-sizing: border-box;
+  width: 6px;
+  height: 9px;
+  border-right: 2px solid var(--muted);
+  border-left: 2px solid var(--muted);
+}
+
 .project.missing .project-marker {
   border-style: dashed;
   border-color: var(--crit);

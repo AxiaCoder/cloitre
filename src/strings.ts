@@ -71,6 +71,9 @@ export const texts = {
 /** The key of a fixed text. */
 export type TextKey = keyof typeof texts;
 
+/** What a project's rail entry shows: paused, or what the most urgent of its live sessions is doing. */
+export type ProjectStatus = "paused" | SessionActivity;
+
 /** The texts of the interface built from a value. */
 export const messages = {
   /** The end notice of a session that ended with exit code `code`. */
@@ -91,10 +94,13 @@ export const messages = {
     activity === undefined ? `${label} (${state})` : `${label} (${state}, ${activityName(activity)})`,
   /** The accessible name of the label of tab `label` whose session shows `activity`. */
   tabActivityLabel: (label: string, activity: SessionActivity) => `${label}, ${activityName(activity)}`,
-  /** What a session showing `activity` is doing, in words. */
-  activity: (activity: SessionActivity) => activityName(activity),
-  /** The tooltip `title` of a project, followed by what the most urgent of its sessions is doing. */
-  projectActivityTitle: (title: string, activity: SessionActivity) => `${title}\n${activityName(activity)}`,
+  /** What a project's rail entry says of its `status`; `undefined` for no status. */
+  projectStatus: (status?: ProjectStatus) => projectStatus(status),
+  /** The tooltip `title` of a project, followed on its own line by its `status` in words when it has one. */
+  projectStatusTitle: (title: string, status?: ProjectStatus) => {
+    const words = projectStatus(status);
+    return words === undefined ? title : `${title}\n${words}`;
+  },
   /** The accessible name of the close button of tab `label`. */
   closeTab: (label: string) => `Close ${label}`,
   /** The tooltip of a project's session count. */
@@ -223,6 +229,14 @@ const ACTIVITY_NAMES: Readonly<Record<SessionActivity, string>> = {
 /** What a session showing `activity` is doing, in words. */
 function activityName(activity: SessionActivity): string {
   return ACTIVITY_NAMES[activity];
+}
+
+/** A project's `status` in words: "Paused", or what its sessions are doing; `undefined` for no status. */
+function projectStatus(status?: ProjectStatus): string | undefined {
+  if (status === undefined) {
+    return undefined;
+  }
+  return status === "paused" ? "Paused" : activityName(status);
 }
 
 /** `word` with its first letter upper-cased. */

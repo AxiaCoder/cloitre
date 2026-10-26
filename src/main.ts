@@ -42,7 +42,7 @@ import { listen } from "@tauri-apps/api/event";
 import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
 import { runningSessions, UpdateFlow, type UpdateNotice } from "./updates";
 import { ReplayPane, TabPane } from "./tab-pane";
-import { afterRefusedStart, TabModel, tabName, type Tab, type TabState } from "./tabs";
+import { afterRefusedStart, isProjectPaused, TabModel, tabName, type Tab, type TabState } from "./tabs";
 import { shortenLabel, TitleSaver } from "./tab-title";
 import { markerIcon, outlineDrawing } from "./marker-icons";
 import { markerColorValue, markerLook, projectInitials } from "./project-marker";
@@ -119,8 +119,14 @@ const titles = new TitleSaver(saveTabTitle, (tabId, error) => {
 });
 /** The session count element of each project in the rail, by project id. */
 const sessionCounts = new Map<number, HTMLSpanElement>();
-/** The button, its tooltip without activity, and the activity dot of each project in the rail, by project id. */
-const projectIndicators = new Map<number, { button: HTMLButtonElement; title: string; dot: HTMLSpanElement }>();
+/**
+ * The button, its tooltip without status, the activity dot and whether the
+ * folder exists, of each project in the rail, by project id.
+ */
+const projectIndicators = new Map<
+  number,
+  { button: HTMLButtonElement; title: string; dot: HTMLSpanElement; exists: boolean }
+>();
 /** What the session of each session tab is doing, as far as the tabs show it. */
 const activities = new ActivityStore();
 /** The terminal of each open tab, by tab id: a session pane or the replay pane. */
@@ -606,8 +612,9 @@ async function closeProjectTabs(projectId: number): Promise<void> {
 
 /**
  * Shows, next to each project in the rail, how many session tabs it has open,
- * nothing for none, and on its marker what the most urgent of its sessions is
- * doing: waiting for an answer before finished.
+ * nothing for none, or the pause glyph when the project is paused; greys out a
+ * paused project; otherwise shows on its marker what the most urgent of its
+ * sessions is doing: waiting for an answer before finished.
  */
 function renderSessionCounts(): void {
   for (const [projectId, count] of sessionCounts) {
@@ -615,15 +622,23 @@ function renderSessionCounts(): void {
     count.textContent = open > 0 ? String(open) : "";
     count.title = messages.sessionCount(open);
   }
-  for (const [projectId, { button, title, dot }] of projectIndicators) {
-    const activity = activities.mostUrgent(tabs.tabsOf(projectId).map((tab) => tab.id));
+  for (const [projectId, { button, title, dot, exists }] of projectIndicators) {
+    const projectTabs = tabs.tabsOf(projectId);
+    const activity = activities.mostUrgent(projectTabs.map((tab) => tab.id));
+    const paused = isProjectPaused(exists, projectTabs);
+    button.classList.toggle("paused", paused);
+    if (paused) {
+      sessionCounts.get(projectId)?.replaceChildren();
+    }
+    const status = paused ? "paused" : activity;
     dot.className = `project-activity ${activity ?? ""}`.trim();
-    dot.hidden = activity === undefined;
-    button.title = activity === undefined ? title : messages.projectActivityTitle(title, activity);
-    if (activity === undefined) {
+    dot.hidden = paused || activity === undefined;
+    button.title = messages.projectStatusTitle(title, status);
+    const description = messages.projectStatus(status);
+    if (description === undefined) {
       button.removeAttribute("aria-description");
     } else {
-      button.setAttribute("aria-description", messages.activity(activity));
+      button.setAttribute("aria-description", description);
     }
   }
 }
@@ -1241,7 +1256,7 @@ function renderProjects(): void {
       const dot = document.createElement("span");
       dot.hidden = true;
       marker.append(dot);
-      projectIndicators.set(project.id, { button, title: button.title, dot });
+      projectIndicators.set(project.id, { button, title: button.title, dot, exists: project.exists });
       const name = document.createElement("span");
       name.className = "project-name";
       name.textContent = project.name;

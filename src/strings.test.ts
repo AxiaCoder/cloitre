@@ -136,17 +136,29 @@ describe("the session activity texts", () => {
     expect(messages.tabActivityLabel("Session 2", "done")).toBe("Session 2, finished");
   });
 
-  it("say each activity in words", () => {
-    expect(messages.activity("blocked")).toBe("waiting for your answer");
-    expect(messages.activity("done")).toBe("finished");
-    expect(messages.activity("failed")).toBe("stopped on an error");
-    expect(messages.activity("working")).toBe("working");
-  });
-
   it("put the activity on its own line under a project tooltip", () => {
-    expect(messages.projectActivityTitle("example\n/projects/example", "done")).toBe(
+    expect(messages.projectStatusTitle("example\n/projects/example", "done")).toBe(
       "example\n/projects/example\nfinished",
     );
-    expect(messages.projectActivityTitle("example", "blocked")).toBe("example\nwaiting for your answer");
+    expect(messages.projectStatusTitle("example", "blocked")).toBe("example\nwaiting for your answer");
+  });
+
+  it("say a paused project is paused", () => {
+    expect(messages.projectStatus("paused")).toBe("Paused");
+    expect(messages.projectStatusTitle("example\n/projects/example", "paused")).toBe(
+      "example\n/projects/example\nPaused",
+    );
+  });
+
+  it("say what the sessions of a live project are doing", () => {
+    expect(messages.projectStatus("blocked")).toBe("waiting for your answer");
+    expect(messages.projectStatus("done")).toBe("finished");
+    expect(messages.projectStatus("failed")).toBe("stopped on an error");
+    expect(messages.projectStatus("working")).toBe("working");
+  });
+
+  it("say nothing of a project with no status", () => {
+    expect(messages.projectStatus()).toBeUndefined();
+    expect(messages.projectStatusTitle("example")).toBe("example");
   });
 });
