@@ -44,7 +44,7 @@ describe("parseActivityReport", () => {
   });
 
   it("ignores a report whose agent is not an agent id", () => {
-    for (const agent of ["", "a b", "<x>", "é", "a".repeat(65), 3, null]) {
+    for (const agent of ["", "a b", "<x>", "a.b", "é", "a".repeat(65), 3, null]) {
       expect(parseActivityReport({ tab: 3, state: "blocked", agent })).toBeUndefined();
     }
     expect(parseActivityReport({ tab: 3, state: "blocked", agent: "a".repeat(64) })).toBeDefined();
@@ -61,6 +61,7 @@ describe("isAnswerInput", () => {
 
   it("takes pasted text holding Enter as an answer", () => {
     expect(isAnswerInput("yes\r")).toBe(true);
+    expect(isAnswerInput("first line\rsecond line")).toBe(true);
   });
 
   it("does not take an escape sequence, a letter or longer text as an answer", () => {
@@ -135,6 +136,14 @@ describe("ActivityStore with agents", () => {
     store.report(1, "done", false);
     expect(store.answer(1)).toBe(false);
     expect(store.of(1)).toBe("done");
+  });
+
+  it("drops an earlier done when the tab blocks, so answering leaves nothing", () => {
+    const store = new ActivityStore();
+    store.report(1, "done", false);
+    store.report(1, "blocked", true, "agent-a");
+    expect(store.answer(1)).toBe(true);
+    expect(store.of(1)).toBeUndefined();
   });
 
   it("shows blocked before done for one tab, and done once the user answers", () => {

@@ -356,6 +356,7 @@ mod tests {
             serde_json::json!("a b"),
             serde_json::json!("a\"b"),
             serde_json::json!("agent/1"),
+            serde_json::json!("a.b"),
             serde_json::json!("é"),
             serde_json::json!(long),
             serde_json::json!(3),
@@ -409,11 +410,24 @@ mod tests {
             r#"{"tab":1,"state":"done","agent":""}"#,
             r#"{"tab":1,"state":"done","agent":"a b"}"#,
             r#"{"tab":1,"state":"done","agent":"<x>"}"#,
+            r#"{"tab":1,"state":"done","agent":"a.b"}"#,
             r#"{"tab":1,"state":"done","agent":3}"#,
             &long,
         ] {
             assert_eq!(parse_message(bad.as_bytes()), None, "{bad:?}");
         }
+    }
+
+    #[test]
+    fn a_null_agent_reads_as_the_main_conversation() {
+        assert_eq!(
+            parse_message(br#"{"tab":2,"state":"working","agent":null}"#),
+            Some(StateMessage {
+                tab: NonZeroU32::new(2).unwrap(),
+                state: SessionState::Working,
+                agent: None,
+            })
+        );
     }
 
     #[test]
