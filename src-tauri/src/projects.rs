@@ -1858,6 +1858,62 @@ mod tests {
     }
 
     #[test]
+    fn clearing_an_untitled_tab_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let tab = store.open_tab(a.id).unwrap().id;
+        let file = dir.path().join("projects.json");
+        fs::remove_file(&file).unwrap();
+        assert_eq!(store.set_tab_title(tab, None), Ok(()));
+        assert_eq!(store.set_tab_title(tab, Some("")), Ok(()));
+        assert!(!file.exists());
+    }
+
+    #[test]
+    fn a_tab_title_changes_only_its_own_tab() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let b = store.add(&folder(dir.path(), "b")).unwrap();
+        let first = store.open_tab(a.id).unwrap().id;
+        let second = store.open_tab(a.id).unwrap().id;
+        let other = store.open_tab(b.id).unwrap().id;
+        store.set_tab_title(second, Some("Second")).unwrap();
+        store.set_tab_title(other, Some("Other")).unwrap();
+        assert_eq!(listed_title(&store, first), None);
+        assert_eq!(listed_title(&store, second).as_deref(), Some("Second"));
+        let listed = store.list();
+        let b_tabs = &listed
+            .projects
+            .iter()
+            .find(|project| project.id == b.id)
+            .unwrap()
+            .tabs;
+        assert_eq!(b_tabs[0].title.as_deref(), Some("Other"));
+    }
+
+    #[test]
+    fn closing_a_tab_keeps_the_title_of_the_others() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let first = store.open_tab(a.id).unwrap().id;
+        let second = store.open_tab(a.id).unwrap().id;
+        store.set_tab_title(first, Some("Gone")).unwrap();
+        store.set_tab_title(second, Some("Kept")).unwrap();
+        store.close_tab(first).unwrap();
+        assert_eq!(
+            listed_title(&store_in(dir.path()), second).as_deref(),
+            Some("Kept")
+        );
+        assert_eq!(
+            store.set_tab_title(first, Some("Late")),
+            Err(AppError::UnknownTab(first))
+        );
+    }
+
+    #[test]
     fn a_read_only_store_keeps_the_active_tab_in_memory() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("projects.json");

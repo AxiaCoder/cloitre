@@ -329,6 +329,37 @@ describe("TabModel titles", () => {
     ]);
     expect(restored.map(tabName)).toEqual(["Saved title", "Session 2", "Session 3"]);
   });
+
+  it("reports no change when a restored tab's session sets its saved title again", () => {
+    const model = new TabModel();
+    model.restore(10, [{ id: 4, title: "Saved title" }]);
+    model.setState(4, "starting");
+    expect(model.setTitle(4, "Saved title")).toBeUndefined();
+    expect(model.setTitle(4, "Next")).toEqual({ title: "Next" });
+  });
+
+  it("keeps the title across a change of state", () => {
+    const model = new TabModel();
+    model.open(10, 1);
+    model.setTitle(1, "Working");
+    model.setState(1, "running");
+    expect(model.find(1)).toMatchObject({ title: "Working", state: "running" });
+  });
+
+  it("keeps a title cut to the longest Rust saves", () => {
+    const model = new TabModel();
+    model.open(10, 1);
+    const changed = model.setTitle(1, "x".repeat(300));
+    expect(changed?.title).toHaveLength(256);
+  });
+
+  it("gives each tab its own title", () => {
+    const model = new TabModel();
+    model.open(10, 1);
+    model.open(10, 2);
+    model.setTitle(1, "One");
+    expect(model.tabsOf(10).map(tabName)).toEqual(["One", "Session 2"]);
+  });
 });
 
 describe("afterRefusedStart", () => {
