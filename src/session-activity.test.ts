@@ -35,6 +35,12 @@ describe("parseActivityReport", () => {
     expect(parseActivityReport({ tab: 1, state: "prompted" })).toEqual({ tab: 1, state: "prompted" });
   });
 
+  it("reads the background, settled and failed states", () => {
+    for (const state of ["background", "settled", "failed"]) {
+      expect(parseActivityReport({ tab: 1, state })).toEqual({ tab: 1, state });
+    }
+  });
+
   it("reads the agent of a subagent's report", () => {
     expect(parseActivityReport({ tab: 3, state: "blocked", agent: "a1b2-c3_D4" })).toEqual({
       tab: 3,
@@ -80,7 +86,7 @@ describe("ActivityStore with agents", () => {
     expect(store.report(1, "working", true, "agent-b")).toBe(false);
     expect(store.of(1)).toBe("blocked");
     expect(store.report(1, "working", true, "agent-a")).toBe(true);
-    expect(store.of(1)).toBeUndefined();
+    expect(store.of(1)).toBe("working");
   });
 
   it("keeps the main block when a subagent works, and a subagent's when the main conversation works", () => {
@@ -100,19 +106,20 @@ describe("ActivityStore with agents", () => {
     expect(store.report(1, "done", false)).toBe(false);
     expect(store.of(1)).toBe("blocked");
     expect(store.report(1, "working", false, "agent-a")).toBe(true);
-    expect(store.of(1)).toBeUndefined();
+    expect(store.of(1)).toBe("working");
   });
 
-  it("ends every block of the tab on prompted", () => {
+  it("ends every block of the tab on prompted, and works", () => {
     const store = new ActivityStore();
     store.report(1, "blocked", true);
     store.report(1, "blocked", true, "agent-a");
     store.report(2, "done", false);
     expect(store.report(1, "prompted", true)).toBe(true);
     expect(store.report(2, "prompted", false)).toBe(true);
-    expect(store.of(1)).toBeUndefined();
-    expect(store.of(2)).toBeUndefined();
-    expect(store.report(3, "prompted", false)).toBe(false);
+    expect(store.of(1)).toBe("working");
+    expect(store.of(2)).toBe("working");
+    expect(store.report(3, "prompted", false)).toBe(true);
+    expect(store.of(3)).toBe("working");
   });
 
   it("ends the main block on the main conversation's done", () => {
@@ -200,15 +207,16 @@ describe("ActivityStore", () => {
     expect(store.of(1)).toBe("blocked");
   });
 
-  it("clears a blocked or done tab on working, showing nothing", () => {
+  it("turns a blocked or done tab to working on working", () => {
     const store = new ActivityStore();
     store.report(1, "blocked", true);
     store.report(2, "done", false);
     expect(store.report(1, "working", true)).toBe(true);
     expect(store.report(2, "working", false)).toBe(true);
-    expect(store.of(1)).toBeUndefined();
-    expect(store.of(2)).toBeUndefined();
-    expect(store.report(3, "working", false)).toBe(false);
+    expect(store.of(1)).toBe("working");
+    expect(store.of(2)).toBe("working");
+    expect(store.report(3, "working", false)).toBe(true);
+    expect(store.of(3)).toBe("working");
   });
 
   it("clears a blocked tab on done", () => {
@@ -272,5 +280,112 @@ describe("ActivityStore", () => {
     store.report(1, "blocked", false);
     store.report(2, "done", false);
     expect(store.mostUrgent([2, 3])).toBe("done");
+  });
+});
+
+describe("ActivityStore working and failed", () => {
+  it("works from the prompt until the turn ends, on screen or not", () => {
+    const store = new ActivityStore();
+    store.report(1, "prompted", true);
+    store.report(2, "prompted", false);
+    expect(store.see(1)).toBe(false);
+    expect(store.of(1)).toBe("working");
+    expect(store.report(1, "done", true)).toBe(true);
+    expect(store.report(2, "done", false)).toBe(true);
+    expect(store.of(1)).toBeUndefined();
+    expect(store.of(2)).toBe("done");
+  });
+
+  it("keeps working after the turn while background tasks run, and is done once a subagent settles them", () => {
+    const store = new ActivityStore();
+    store.report(1, "prompted", false);
+    expect(store.report(1, "background", false)).toBe(false);
+    expect(store.of(1)).toBe("working");
+    expect(store.report(1, "settled", false, "agent-a")).toBe(true);
+    expect(store.of(1)).toBe("done");
+  });
+
+  it("shows nothing when background tasks settle on a seen tab", () => {
+    const store = new ActivityStore();
+    store.report(1, "prompted", true);
+    store.report(1, "background", true);
+    expect(store.report(1, "settled", true, "agent-a")).toBe(true);
+    expect(store.of(1)).toBeUndefined();
+  });
+
+  it("ends background work on the done of the turn that follows", () => {
+    const store = new ActivityStore();
+    store.report(1, "prompted", false);
+    store.report(1, "background", false);
+    store.report(1, "working", false);
+    expect(store.of(1)).toBe("working");
+    expect(store.report(1, "done", false)).toBe(true);
+    expect(store.of(1)).toBe("done");
+    expect(store.report(1, "settled", false, "agent-a")).toBe(false);
+    expect(store.of(1)).toBe("done");
+  });
+
+  it("ignores a subagent that settles during a turn", () => {
+    const store = new ActivityStore();
+    store.report(1, "prompted", false);
+    expect(store.report(1, "settled", false, "agent-a")).toBe(false);
+    expect(store.of(1)).toBe("working");
+    expect(store.report(2, "settled", false, "agent-a")).toBe(false);
+    expect(store.of(2)).toBeUndefined();
+  });
+
+  it("ignores background tasks settling after a new prompt", () => {
+    const store = new ActivityStore();
+    store.report(1, "prompted", false);
+    store.report(1, "background", false);
+    store.report(1, "prompted", false);
+    expect(store.report(1, "settled", false, "agent-a")).toBe(false);
+    expect(store.of(1)).toBe("working");
+  });
+
+  it("shows failed after an API error, seen or not, until the next prompt", () => {
+    const store = new ActivityStore();
+    store.report(1, "prompted", true);
+    expect(store.report(1, "failed", true)).toBe(true);
+    expect(store.of(1)).toBe("failed");
+    expect(store.see(1)).toBe(false);
+    expect(store.of(1)).toBe("failed");
+    expect(store.report(1, "working", true)).toBe(false);
+    expect(store.report(1, "prompted", true)).toBe(true);
+    expect(store.of(1)).toBe("working");
+  });
+
+  it("shows blocked over failed on one tab", () => {
+    const store = new ActivityStore();
+    store.report(1, "failed", false);
+    expect(store.report(1, "blocked", false, "agent-a")).toBe(true);
+    expect(store.of(1)).toBe("blocked");
+    expect(store.answer(1)).toBe(true);
+    expect(store.of(1)).toBe("failed");
+  });
+
+  it("forgets a working or failed tab", () => {
+    const store = new ActivityStore();
+    store.report(1, "prompted", false);
+    store.report(1, "background", false);
+    store.report(2, "failed", false);
+    expect(store.forget(1)).toBe(true);
+    expect(store.forget(2)).toBe(true);
+    expect(store.of(1)).toBeUndefined();
+    expect(store.of(2)).toBeUndefined();
+    expect(store.report(1, "settled", false)).toBe(false);
+  });
+
+  it("reports blocked, then failed, then done, then working for a set of tabs", () => {
+    const store = new ActivityStore();
+    store.report(1, "prompted", false);
+    store.report(2, "done", false);
+    store.report(3, "failed", false);
+    store.report(4, "blocked", false);
+    expect(store.mostUrgent([1, 2, 3, 4])).toBe("blocked");
+    expect(store.mostUrgent([1, 2, 3])).toBe("failed");
+    expect(store.mostUrgent([3, 2, 1])).toBe("failed");
+    expect(store.mostUrgent([1, 2])).toBe("done");
+    expect(store.mostUrgent([1, 5])).toBe("working");
   });
 });

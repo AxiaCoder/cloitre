@@ -35,7 +35,7 @@ import {
 } from "./projects";
 import type { SpawnMode } from "./pty";
 import { ReplayDeck, type LoadedReplay } from "./replay-deck";
-import { ActivityStore, parseActivityReport } from "./session-activity";
+import { ActivityStore, parseActivityReport, type SessionActivity } from "./session-activity";
 import { fillTexts, messages, texts } from "./strings";
 import { closeWarning, NO_WARNING, warningText as shownWarning, type WarningState } from "./warning-bar";
 import { listen } from "@tauri-apps/api/event";
@@ -269,6 +269,14 @@ function refreshRecordingsOrReport(): void {
   });
 }
 
+/** The class of the dot a tab shows for each activity of its session. */
+const TAB_DOTS: Readonly<Record<SessionActivity, string>> = {
+  blocked: "waiting-dot",
+  failed: "error-dot",
+  done: "done-dot",
+  working: "working-dot",
+};
+
 /** Builds the tab bar entry of `tab`: its label, which activates it, and its close button. */
 function tabElement(tab: Tab, active: boolean): HTMLDivElement {
   const item = document.createElement("div");
@@ -303,7 +311,7 @@ function tabElement(tab: Tab, active: boolean): HTMLDivElement {
     item.append(label, close);
   } else {
     const dot = document.createElement("span");
-    dot.className = activity === "blocked" ? "waiting-dot" : "done-dot";
+    dot.className = TAB_DOTS[activity];
     dot.setAttribute("aria-hidden", "true");
     item.append(dot, label, close);
   }

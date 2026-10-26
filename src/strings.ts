@@ -212,9 +212,17 @@ export function fillTexts(root: TextRoot): void {
   }
 }
 
+/** What a session showing each activity is doing, in words. */
+const ACTIVITY_NAMES: Readonly<Record<SessionActivity, string>> = {
+  blocked: "waiting for your answer",
+  failed: "stopped on an error",
+  done: "finished",
+  working: "working",
+};
+
 /** What a session showing `activity` is doing, in words. */
 function activityName(activity: SessionActivity): string {
-  return activity === "blocked" ? "waiting for your answer" : "finished";
+  return ACTIVITY_NAMES[activity];
 }
 
 /** `word` with its first letter upper-cased. */

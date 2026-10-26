@@ -139,6 +139,8 @@ describe("the session activity texts", () => {
   it("say each activity in words", () => {
     expect(messages.activity("blocked")).toBe("waiting for your answer");
     expect(messages.activity("done")).toBe("finished");
+    expect(messages.activity("failed")).toBe("stopped on an error");
+    expect(messages.activity("working")).toBe("working");
   });
 
   it("put the activity on its own line under a project tooltip", () => {
