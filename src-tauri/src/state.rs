@@ -37,6 +37,10 @@ pub const STATE_HOOK_EVENTS: [&str; 9] = [
 /// the state hook runs on `PreToolUse` with this tool name as matcher.
 pub const ASK_TOOL: &str = "AskUserQuestion";
 
+/// The environment variable naming a file the state hook appends its `Stop` and
+/// `SubagentStop` notices to; unset, the hook logs nothing.
+pub const STATE_LOG_VAR: &str = "CLOITRE_STATE_LOG";
+
 /// The most bytes the hook reads from its standard input.
 const HOOK_INPUT_LIMIT: u64 = 1 << 20;
 
@@ -156,6 +160,42 @@ pub fn hook_message(input: &[u8], tab_var: Option<&OsStr>) -> Option<Vec<u8>> {
     Some(line)
 }
 
+/// Builds the line the hook appends to its log for one notice: a JSON object
+/// with the notice's `event`, the `tab` and `agent` when it has them, and its
+/// `background_tasks` as Claude Code sent them, then `\n`.
+///
+/// `None` unless `input` is a JSON `Stop` or `SubagentStop` notice.
+pub fn log_line(input: &[u8], tab_var: Option<&OsStr>) -> Option<Vec<u8>> {
+    let notice: serde_json::Value = serde_json::from_slice(input).ok()?;
+    let event = notice.get("hook_event_name")?.as_str()?;
+    if event != "Stop" && event != "SubagentStop" {
+        return None;
+    }
+    let entry = serde_json::json!({
+        "event": event,
+        "tab": tab_var.and_then(parse_tab_id),
+        "agent": notice.get("agent_id"),
+        "background_tasks": notice.get("background_tasks"),
+    });
+    let mut line = serde_json::to_vec(&entry).ok()?;
+    line.push(b'\n');
+    Some(line)
+}
+
+/// Appends [`log_line`] for `input` to the file named by [`STATE_LOG_VAR`], if
+/// that variable is set. Any failure is ignored.
+fn append_log(input: &[u8]) {
+    let Some(path) = std::env::var_os(STATE_LOG_VAR) else {
+        return;
+    };
+    let Some(line) = log_line(input, std::env::var_os(TAB_ID_VAR).as_deref()) else {
+        return;
+    };
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = std::io::Write::write_all(&mut file, &line);
+    }
+}
+
 /// Reads one message the app received: `None` when it holds more than
 /// [`MESSAGE_LIMIT`] bytes, is not one JSON object with a valid `tab`, a known
 /// `state` and maybe a valid `agent`, and nothing else, or holds anything after
@@ -183,6 +223,7 @@ pub fn run_state_hook() {
     {
         return;
     }
+    append_log(&input);
     let Some(line) = hook_message(&input, std::env::var_os(TAB_ID_VAR).as_deref()) else {
         return;
     };
@@ -227,6 +268,31 @@ pub fn start_server<R: Runtime>(app: &AppHandle<R>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn log_line_keeps_the_background_tasks_of_a_stop() {
+        let input = br#"{"hook_event_name":"Stop","background_tasks":[{"type":"shell","command":"pnpm dev"}]}"#;
+        let line = log_line(input, Some(OsStr::new("3"))).unwrap();
+        let entry: serde_json::Value = serde_json::from_slice(&line).unwrap();
+        assert_eq!(entry["event"], "Stop");
+        assert_eq!(entry["tab"], 3);
+        assert_eq!(entry["background_tasks"][0]["type"], "shell");
+        assert!(line.ends_with(b"\n"));
+    }
+
+    #[test]
+    fn log_line_keeps_the_agent_of_a_subagent_stop() {
+        let input = br#"{"hook_event_name":"SubagentStop","agent_id":"a1b2"}"#;
+        let entry: serde_json::Value = serde_json::from_slice(&log_line(input, None).unwrap()).unwrap();
+        assert_eq!(entry["agent"], "a1b2");
+        assert!(entry["tab"].is_null());
+    }
+
+    #[test]
+    fn log_line_ignores_other_events_and_bad_input() {
+        assert!(log_line(br#"{"hook_event_name":"PostToolUse"}"#, None).is_none());
+        assert!(log_line(b"not json", None).is_none());
+    }
 
     #[test]
     fn hook_events_map_to_their_state() {
