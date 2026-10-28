@@ -299,17 +299,22 @@ describe("TabModel titles", () => {
     expect(model.setTitle(1, "Same\u0007")).toBeUndefined();
   });
 
-  it("falls back to Session N without a title or with an empty one", () => {
+  it("falls back to Session N without a title or once the title is cleared", () => {
     const model = new TabModel();
     const tab = model.open(10, 1);
     expect(tabName(tab)).toBe("Session 1");
     model.setTitle(1, "Working");
-    expect(model.setTitle(1, "  \u001b ")).toEqual({ title: null });
+    expect(model.setTitle(1, null)).toEqual({ title: null });
     const cleared = model.find(1);
     expect(cleared && tabName(cleared)).toBe("Session 1");
-    model.setTitle(1, "Again");
-    model.setTitle(1, null);
-    expect(model.find(1)).toMatchObject({ title: null });
+  });
+
+  it("keeps the title when the received one is empty once cleaned", () => {
+    const model = new TabModel();
+    model.open(10, 1);
+    model.setTitle(1, "Working");
+    expect(model.setTitle(1, "  \u001b ")).toBeUndefined();
+    expect(model.find(1)).toMatchObject({ title: "Working" });
   });
 
   it("ignores a title for a replay tab or an unknown tab", () => {
@@ -377,13 +382,34 @@ describe("TabModel titles", () => {
     expect(model.setTitle(1, "Fix the parser")).toBeUndefined();
   });
 
-  it("falls back to Session N for a status symbol alone or Claude Code's name", () => {
+  it("keeps the title on a status symbol alone or Claude Code's name", () => {
     const model = new TabModel();
     model.open(10, 1);
     model.setTitle(1, "Working");
-    expect(model.setTitle(1, "✳ Claude Code")).toEqual({ title: null });
-    expect(model.find(1)).toMatchObject({ title: null });
+    expect(model.setTitle(1, "✳ Claude Code")).toBeUndefined();
     expect(model.setTitle(1, "◐")).toBeUndefined();
+    expect(model.find(1)).toMatchObject({ title: "Working" });
+  });
+
+  it("keeps a restored tab's saved title when its resumed session sends no topic", () => {
+    const model = new TabModel();
+    model.restore(10, [{ id: 4, title: "Saved title" }]);
+    model.setState(4, "starting");
+    for (const received of ["claude", "✳ Claude Code", "✳"]) {
+      expect(model.setTitle(4, received)).toBeUndefined();
+      const tab = model.find(4);
+      expect(tab && tabName(tab)).toBe("Saved title");
+    }
+  });
+
+  it("leaves a new tab untitled when its session sends no topic", () => {
+    const model = new TabModel();
+    model.open(10, 1);
+    for (const received of ["claude", "✳ Claude Code", "✳"]) {
+      expect(model.setTitle(1, received)).toBeUndefined();
+      const tab = model.find(1);
+      expect(tab && tabName(tab)).toBe("Session 1");
+    }
   });
 
   it("restores a title saved with a status symbol without it", () => {

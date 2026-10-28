@@ -201,13 +201,14 @@ export class TabModel {
 
   /**
    * Gives session tab `tabId` the title `raw` its session set, cleaned by
-   * {@link cleanTitle}; `null` clears it. Returns the title it keeps when that
-   * changed, else `undefined`, also for an unknown id or a replay tab.
+   * {@link cleanTitle}; `null` clears it. A title that holds no topic once
+   * cleaned leaves the tab's title as it is. Returns the title it keeps when
+   * that changed, else `undefined`, also for an unknown id or a replay tab.
    */
   setTitle(tabId: number, raw: string | null): { readonly title: string | null } | undefined {
     const tab = this.tabs.find((candidate) => candidate.id === tabId);
     const title = raw === null ? null : cleanTitle(raw);
-    if (tab?.kind !== "session" || tab.title === title) {
+    if (tab?.kind !== "session" || tab.title === title || (raw !== null && title === null)) {
       return undefined;
     }
     tab.title = title;
