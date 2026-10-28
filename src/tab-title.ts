@@ -7,6 +7,15 @@ export const SHOWN_TITLE_LENGTH = 40;
 /** How long a title must stay unchanged before it is saved, in milliseconds. */
 export const TITLE_SAVE_DELAY_MS = 1000;
 
+/**
+ * The status symbol Claude Code puts before its title, with the spaces after
+ * it: `✳` when idle, `◐` and `◑` in turn while it works.
+ */
+const STATUS_SYMBOL = /^[✳◐◑](?:\s+|$)/u;
+
+/** The titles Claude Code sets before its session has a topic. */
+const PLACEHOLDER_TITLES: ReadonlySet<string> = new Set(["claude", "Claude Code"]);
+
 /** Whether code point `code` is a C0 control, DEL or a C1 control. */
 function isControl(code: number): boolean {
   return code < 0x20 || (code >= 0x7f && code <= 0x9f);
@@ -14,14 +23,20 @@ function isControl(code: number): boolean {
 
 /**
  * Returns the title a tab keeps for `raw`, the title its terminal received:
- * without control characters, trimmed and cut to {@link MAX_TITLE_LENGTH}
- * code points. Returns `null` when nothing is left.
+ * without control characters, without Claude Code's leading status symbol,
+ * trimmed and cut to {@link MAX_TITLE_LENGTH} code points. Returns `null` when
+ * nothing is left or when only a name Claude Code sets before its session has
+ * a topic is left.
  */
 export function cleanTitle(raw: string): string | null {
   const kept = Array.from(raw)
     .filter((char) => !isControl(char.codePointAt(0) ?? 0))
     .join("")
-    .trim();
+    .trim()
+    .replace(STATUS_SYMBOL, "");
+  if (PLACEHOLDER_TITLES.has(kept)) {
+    return null;
+  }
   const cut = Array.from(kept).slice(0, MAX_TITLE_LENGTH).join("").trimEnd();
   return cut === "" ? null : cut;
 }
