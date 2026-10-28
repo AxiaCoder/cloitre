@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/AxiaCoder/cloitre/compare/v0.5.0...v0.6.0) (2026-10-28)
+
+
+### Features
+
+* **tabs:** a tab title showed the status symbol Claude Code puts before the topic ([#80](https://github.com/AxiaCoder/cloitre/issues/80)) ([c4b15e2](https://github.com/AxiaCoder/cloitre/commit/c4b15e290a2c76ca1f521fd4772a7c4d083b909e))
+
 ## [0.5.0](https://github.com/AxiaCoder/cloitre/compare/v0.4.0...v0.5.0) (2026-10-26)
 
 
