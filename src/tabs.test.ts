@@ -360,6 +360,41 @@ describe("TabModel titles", () => {
     model.setTitle(1, "One");
     expect(model.tabsOf(10).map(tabName)).toEqual(["One", "Session 2"]);
   });
+
+  it("shows and reports for saving the topic without Claude Code's status symbol", () => {
+    const model = new TabModel();
+    model.open(10, 1);
+    expect(model.setTitle(1, "✳ Fix the parser")).toEqual({ title: "Fix the parser" });
+    expect(model.find(1)).toMatchObject({ title: "Fix the parser" });
+  });
+
+  it("reports no change when only the status symbol changes", () => {
+    const model = new TabModel();
+    model.open(10, 1);
+    model.setTitle(1, "◐ Fix the parser");
+    expect(model.setTitle(1, "◑ Fix the parser")).toBeUndefined();
+    expect(model.setTitle(1, "✳ Fix the parser")).toBeUndefined();
+    expect(model.setTitle(1, "Fix the parser")).toBeUndefined();
+  });
+
+  it("falls back to Session N for a status symbol alone or Claude Code's name", () => {
+    const model = new TabModel();
+    model.open(10, 1);
+    model.setTitle(1, "Working");
+    expect(model.setTitle(1, "✳ Claude Code")).toEqual({ title: null });
+    expect(model.find(1)).toMatchObject({ title: null });
+    expect(model.setTitle(1, "◐")).toBeUndefined();
+  });
+
+  it("restores a title saved with a status symbol without it", () => {
+    const model = new TabModel();
+    const restored = model.restore(10, [
+      { id: 4, title: "◑ Saved title" },
+      { id: 9, title: "✳ Claude Code" },
+    ]);
+    expect(restored.map(tabName)).toEqual(["Saved title", "Session 2"]);
+    expect(model.setTitle(4, "✳ Saved title")).toBeUndefined();
+  });
 });
 
 describe("afterRefusedStart", () => {
