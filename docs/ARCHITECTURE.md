@@ -188,7 +188,7 @@ Remembers a tab as the active tab of its project, so that the next run brings it
 
 ### `tab_set_title`
 
-Saves the title a tab's session set in its terminal, so that the next run shows it on the restored tab. Saves nothing when the tab already has that title. The webview strips control characters and the status symbol Claude Code puts before its title (`✳`, `◐`, `◑`), sends no title for the names Claude Code sets before its session has a topic (`claude`, `Claude Code`), and cuts the title to 256 characters before sending it, and sends a title once it has stayed unchanged for one second, so a title that changes many times a second is written once.
+Saves the title a tab's session set in its terminal, so that the next run shows it on the restored tab. Saves nothing when the tab already has that title. Before sending a title, the webview strips control characters and the status symbol Claude Code puts before it (`✳`, `◐`, `◑`), then cuts it to 256 characters. It sends no title for the names Claude Code sets before its session has a topic (`claude`, `Claude Code`). It sends a title once it has stayed unchanged for one second, so a title that changes many times a second is written once.
 
 - **Arguments**: `tabId` (integer, a tab id), `title` (string, at most 256 characters, or `null`; `null` or an empty string clears the title).
 - **Returns**: nothing.
