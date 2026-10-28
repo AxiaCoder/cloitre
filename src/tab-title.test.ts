@@ -41,6 +41,31 @@ describe("cleanTitle", () => {
   it("keeps the spaces inside a title", () => {
     expect(cleanTitle("a  b")).toBe("a  b");
   });
+
+  it.each(["✳", "◐", "◑"])("drops the status symbol %s Claude Code puts before the topic", (symbol) => {
+    expect(cleanTitle(`${symbol} Fix the parser`)).toBe("Fix the parser");
+  });
+
+  it("returns null for a status symbol alone", () => {
+    expect(cleanTitle("✳")).toBeNull();
+    expect(cleanTitle("◐ ")).toBeNull();
+  });
+
+  it("returns null for the names Claude Code sets before it has a topic", () => {
+    expect(cleanTitle("claude")).toBeNull();
+    expect(cleanTitle("✳ Claude Code")).toBeNull();
+    expect(cleanTitle("◐ Claude Code")).toBeNull();
+  });
+
+  it("keeps a symbol that is not a leading status symbol", () => {
+    expect(cleanTitle("Fix ✳ the parser")).toBe("Fix ✳ the parser");
+    expect(cleanTitle("✳Fix")).toBe("✳Fix");
+    expect(cleanTitle("● Fix")).toBe("● Fix");
+  });
+
+  it("keeps a topic that only starts like Claude Code's name", () => {
+    expect(cleanTitle("✳ Claude Code hooks")).toBe("Claude Code hooks");
+  });
 });
 
 describe("shortenLabel", () => {

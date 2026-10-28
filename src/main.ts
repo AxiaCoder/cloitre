@@ -535,9 +535,10 @@ async function restoreAllTabs(): Promise<void> {
 
 /**
  * Starts a session in `mode` in session tab `tabId`, restored or ended, on a
- * cleared screen. A start Rust refuses leaves the tab showing the refusal and
- * reloads the projects, closing every tab of the project when its folder is
- * gone; a start overtaken by another start or a stop puts the tab back in its
+ * cleared screen. A new session also clears the tab's title and schedules
+ * saving the cleared title. A start Rust refuses leaves the tab showing the
+ * refusal and reloads the projects, closing every tab of the project when its
+ * folder is gone; a start overtaken by another start or a stop puts the tab back in its
  * previous state.
  */
 async function restartTab(tabId: number, mode: SpawnMode): Promise<void> {
@@ -549,6 +550,9 @@ async function restartTab(tabId: number, mode: SpawnMode): Promise<void> {
   const previous = tab.state;
   tabs.setState(tabId, "starting");
   activities.forget(tabId);
+  if (mode === "new" && tabs.setTitle(tabId, null)) {
+    titles.schedule(tabId, null);
+  }
   renderTabs();
   if (await startTab(tabId, mode, project.path)) {
     return;
