@@ -231,6 +231,49 @@ describe("the guard itself", () => {
   });
 });
 
+/** The declarations of the rule written `selector` in `src/styles.css`, as property → value; fails when absent. */
+function declarations(selector: string): Map<string, string> {
+  const rule = cssRules("src/styles.css", read("src/styles.css")).find((candidate) => candidate.selector === selector);
+  expect(rule, `rule ${selector}`).toBeDefined();
+  const pairs = (rule?.body ?? "")
+    .split(";")
+    .map((declaration) => declaration.split(":"))
+    .filter((parts) => parts.length >= 2)
+    .map(([property, ...value]): [string, string] => [property.trim(), value.join(":").trim().replace(/\s+/gu, " ")]);
+  return new Map(pairs);
+}
+
+/** The flex shrink factor of a `flex` shorthand written `grow shrink basis`. */
+function flexShrink(flex: string | undefined): number {
+  const parts = (flex ?? "").split(" ");
+  expect(parts, `flex: ${flex ?? "absent"}`).toHaveLength(3);
+  return Number(parts[1]);
+}
+
+describe("tab bar", () => {
+  it("shrinks the folder path long before the tab list", () => {
+    const tabList = flexShrink(declarations(".tab-list").get("flex"));
+    const cwd = flexShrink(declarations(".cwd").get("flex"));
+    expect(tabList).toBeGreaterThan(0);
+    expect(cwd).toBeGreaterThanOrEqual(tabList * 1000);
+  });
+
+  it("lets the folder path shrink to nothing behind an ellipsis", () => {
+    const cwd = declarations(".cwd");
+    expect(cwd.get("min-width")).toBe("0");
+    expect(cwd.get("text-overflow")).toBe("ellipsis");
+  });
+
+  it("hides the tab list scrollbar in every engine", () => {
+    expect(declarations(".tab-list").get("scrollbar-width")).toBe("none");
+    expect(declarations(".tab-list::-webkit-scrollbar").get("display")).toBe("none");
+  });
+
+  it("keeps the tab list scrollable sideways", () => {
+    expect(declarations(".tab-list").get("overflow-x")).toBe("auto");
+  });
+});
+
 describe("amber guard", () => {
   it("finds the waiting rule in the stylesheets", () => {
     const selectors = appRules().map((rule) => rule.selector);
