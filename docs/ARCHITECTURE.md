@@ -1,6 +1,6 @@
 # Architecture
 
-The webview (TypeScript, xterm.js) draws the terminal and handles everything the user sees. Rust only runs `claude` in a pseudo-terminal (ConPTY on Windows, through `portable-pty`), moves bytes in and out, in a development build records the output of each session to a file (see [Recordings](#recordings)), and owns the project list, whose folders it picks itself (see [Projects](#projects)), with the tabs of each project and the Claude Code session each tab resumes (see [Sessions](#sessions)).
+The webview (TypeScript, xterm.js) draws the terminal and handles everything the user sees. Rust only runs `claude` in a pseudo-terminal (ConPTY on Windows, through `portable-pty`), moves bytes in and out, in a development build records the output of each session to a file (see [Recordings](#recordings)), and owns the project list, whose folders it picks itself (see [Projects](#projects)), with the tabs of each project and the Claude Code session each tab resumes (see [Sessions](#sessions)). It also reads the paths of the files copied to the clipboard, which the webview cannot see (see [`clipboard_file_paths`](#clipboard_file_paths)).
 
 ## Bundled ConPTY (Windows)
 
@@ -193,6 +193,14 @@ Saves the title a tab's session set in its terminal, so that the next run shows 
 - **Arguments**: `tabId` (integer, a tab id), `title` (string, at most 256 characters, or `null`; `null` or an empty string clears the title).
 - **Returns**: nothing.
 - **Refuses**: a title longer than 256 characters or holding a control character ("the tab title must be at most 256 characters, without control characters"); an unknown tab id ("no tab with id <id>"); a read-only project list; a failed save.
+
+### `clipboard_file_paths`
+
+Reads the full paths of the files copied to the system clipboard, such as a Copy in the Windows file explorer. The webview cannot read them itself: a paste only gives it file names. It asks for them on a paste that holds no text, while the tab's session runs, and types them into the session as a drop does, quoted and not submitted; without copied files it sends the clipboard image key as before (Alt+V on Windows, Ctrl+V elsewhere). A paste that holds text is left to xterm.js and asks nothing.
+
+- **Arguments**: none.
+- **Returns**: an array of strings, the paths in the clipboard's order. On Windows they come from the clipboard's `CF_HDROP` file list; a path that is not valid Unicode is left out. Empty when the clipboard holds no file list, when another app still holds it open after about 100 ms of retries, and always outside Windows.
+- **Refuses**: nothing.
 
 ## Projects
 

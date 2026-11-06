@@ -1,4 +1,5 @@
-import { pathStyleOf, TAB_ATTRIBUTE } from "./dropped-paths";
+import { clipboardFilePaths, clipboardPaste } from "./clipboard";
+import { type PathStyle, pathStyleOf, TAB_ATTRIBUTE } from "./dropped-paths";
 import { decideKey, imagePasteKey } from "./keys";
 import type { SpawnMode } from "./pty";
 import { isFailedResume } from "./resume";
@@ -53,7 +54,7 @@ abstract class Pane {
 export interface TabPaneHandlers {
   /** The session ended with `code`; the end notice is already on screen. */
   onExit(code: number): void;
-  /** Sending input or a size to the session failed. */
+  /** Sending input or a size to the session, or reading the files copied to the clipboard, failed. */
   onError(error: unknown): void;
   /** The user pressed the marker key in this terminal. */
   onMarkKey(): void;
@@ -186,15 +187,14 @@ export class TabPane extends Pane {
     this.container.addEventListener(
       "paste",
       (event) => {
-        const key = event.clipboardData
-          ? imagePasteKey(event.clipboardData, pathStyleOf(navigator.userAgent))
-          : undefined;
-        if (key === undefined || !this.slot.current) {
+        const content = event.clipboardData;
+        if (content?.getData("text/plain") !== "" || !this.slot.current) {
           return;
         }
         event.preventDefault();
         event.stopPropagation();
-        terminal.input(key, true);
+        const style = pathStyleOf(navigator.userAgent);
+        void this.pasteWithoutText(style, imagePasteKey(content, style));
       },
       { capture: true },
     );
@@ -325,6 +325,31 @@ export class TabPane extends Pane {
     this.hide();
     await this.slot.stop();
     this.dispose();
+  }
+
+  /**
+   * Sends a paste without text to the session: the paths of the files copied
+   * to the clipboard, typed as a paste in `style`, else `imageKey` when
+   * defined (see {@link clipboardPaste}). When Rust cannot be asked for the
+   * copied files, reports the error through `onError` and sends `imageKey`.
+   * Sends nothing once the session has stopped. Never rejects.
+   */
+  private async pasteWithoutText(style: PathStyle, imageKey: string | undefined): Promise<void> {
+    let paths: readonly string[] = [];
+    try {
+      paths = await clipboardFilePaths();
+    } catch (error) {
+      this.handlers.onError(error);
+    }
+    const paste = clipboardPaste(paths, imageKey, style);
+    if (paste === undefined || !this.slot.current) {
+      return;
+    }
+    if ("text" in paste) {
+      this.pasteText(paste.text);
+    } else {
+      this.view.terminal.input(paste.key, true);
+    }
   }
 
   /** Hides the start notice. */

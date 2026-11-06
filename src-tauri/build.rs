@@ -25,6 +25,7 @@ fn main() {
             "tab_close",
             "tab_activate",
             "tab_set_title",
+            "clipboard_file_paths",
         ]),
     ))
     .expect("failed to run the Tauri build script");

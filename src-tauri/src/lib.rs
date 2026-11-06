@@ -1,3 +1,4 @@
+mod clipboard;
 mod commands;
 mod error;
 mod folder;
@@ -187,7 +188,8 @@ pub fn run() {
             commands::tab_open,
             commands::tab_close,
             commands::tab_activate,
-            commands::tab_set_title
+            commands::tab_set_title,
+            commands::clipboard_file_paths
         ])
         .build(context)
         .expect("error while building the app")
@@ -361,6 +363,7 @@ mod tests {
             "allow-tab-close",
             "allow-tab-activate",
             "allow-tab-set-title",
+            "allow-clipboard-file-paths",
             "core:event:allow-listen",
             "core:event:allow-unlisten",
             "updater:allow-check",
