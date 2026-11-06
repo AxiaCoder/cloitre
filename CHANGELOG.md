@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.0](https://github.com/AxiaCoder/cloitre/compare/v0.6.0...v0.7.0) (2026-11-06)
+
+
+### Features
+
+* **tabs:** a file dropped on a tab types its path into the session ([#83](https://github.com/AxiaCoder/cloitre/issues/83)) ([f11c7d6](https://github.com/AxiaCoder/cloitre/commit/f11c7d6a9e96eeebaa9a481b86f150163dd5c8a0))
+* **tabs:** an image pasted with Ctrl+V reaches the session ([#85](https://github.com/AxiaCoder/cloitre/issues/85)) ([8a67bdd](https://github.com/AxiaCoder/cloitre/commit/8a67bdd9317f6797042e75eba1e09fc042fcbe9f))
+* **tabs:** files copied in the explorer paste as their paths ([#88](https://github.com/AxiaCoder/cloitre/issues/88)) ([7a7b994](https://github.com/AxiaCoder/cloitre/commit/7a7b9947e3ef805b18ad52a715a1a4b99d23ea23))
+
+
+### Bug Fixes
+
+* **tabs:** a long folder path squeezed the tab list into a scrollbar ([#87](https://github.com/AxiaCoder/cloitre/issues/87)) ([49ceaa0](https://github.com/AxiaCoder/cloitre/commit/49ceaa0fa991e4bae912253580d04193b559bbdc))
+
 ## [0.6.0](https://github.com/AxiaCoder/cloitre/compare/v0.5.0...v0.6.0) (2026-10-28)
 
 
