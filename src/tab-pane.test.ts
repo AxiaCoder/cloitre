@@ -90,6 +90,10 @@ const fakes = vi.hoisted(() => {
     paste(text: string): void {
       this.pasted.push(text);
     }
+    /** Hands `data` to the input listener, as xterm.js does for input it did not type itself. */
+    input(data: string): void {
+      this.dataListener(data);
+    }
     /** Counts one reset. */
     reset(): void {
       this.resets += 1;
@@ -135,9 +139,33 @@ vi.mock("@xterm/addon-unicode-graphemes", () => ({ UnicodeGraphemesAddon: fakes.
 vi.mock("@xterm/addon-webgl", () => ({ WebglAddon: fakes.FakeAddon }));
 vi.mock("@tauri-apps/api/core", () => ({ Channel: tauri.FakeChannel, invoke: tauri.invoke }));
 
+import type { PasteContent } from "./keys";
 import { ReplayPane, TabPane, type TabPaneHandlers } from "./tab-pane";
 
-/** Stand-in for a DOM element: keeps its children, attributes and click listeners. */
+/** Stand-in for a paste event: carries the clipboard and records whether it was stopped. */
+class FakePasteEvent {
+  defaultPrevented = false;
+  propagationStopped = false;
+  /** Creates a paste of `clipboardData`, or of no clipboard at all. */
+  constructor(readonly clipboardData: PasteContent | undefined) {}
+  /** Records that the browser paste was cancelled. */
+  preventDefault(): void {
+    this.defaultPrevented = true;
+  }
+  /** Records that the event no longer reaches xterm.js. */
+  stopPropagation(): void {
+    this.propagationStopped = true;
+  }
+}
+
+/** A paste event holding `text` as plain text and items of the given kinds and types. */
+function pasteEvent(text: string, items: { kind: string; type: string }[]): FakePasteEvent {
+  return new FakePasteEvent({ getData: (format) => (format === "text/plain" ? text : ""), items });
+}
+
+const PNG = { kind: "file", type: "image/png" };
+
+/** Stand-in for a DOM element: keeps its children, attributes, and click and paste listeners. */
 class FakeElement {
   className = "";
   hidden = false;
@@ -147,6 +175,7 @@ class FakeElement {
   children: FakeElement[] = [];
   attributes: Record<string, string> = {};
   private readonly clickListeners: (() => void)[] = [];
+  readonly pasteListeners: { listener: (event: FakePasteEvent) => void; capture: boolean }[] = [];
   /** Creates an element of tag `tagName`. */
   constructor(readonly tagName: string) {}
   /** Appends `nodes` as children. */
@@ -163,10 +192,22 @@ class FakeElement {
       this.parent = undefined;
     }
   }
-  /** Keeps a click listener. */
-  addEventListener(type: string, listener: () => void): void {
+  /** Keeps a click or paste listener, with whether it listens in the capture phase. */
+  addEventListener(
+    type: string,
+    listener: (event: FakePasteEvent) => void,
+    options?: { capture?: boolean },
+  ): void {
     if (type === "click") {
-      this.clickListeners.push(listener);
+      this.clickListeners.push(listener as () => void);
+    } else if (type === "paste") {
+      this.pasteListeners.push({ listener, capture: options?.capture === true });
+    }
+  }
+  /** Fires the paste listeners with `event`. */
+  dispatchPaste(event: FakePasteEvent): void {
+    for (const { listener } of this.pasteListeners) {
+      listener(event);
     }
   }
   /** Sets attribute `name`. */
@@ -836,6 +877,96 @@ describe("TabPane.pasteText", () => {
     second.pasteText("/tmp/a.txt");
     expect(terminalOf(first).pasted).toEqual([]);
     expect(terminalOf(second).pasted).toEqual(["/tmp/a.txt"]);
+  });
+});
+
+describe("TabPane image paste", () => {
+  /** Makes the webview report the browser of `platform`. */
+  function runOn(platform: "Windows" | "Macintosh"): void {
+    vi.stubGlobal("navigator", { userAgent: `Mozilla/5.0 (${platform}) AppleWebKit/537.36` });
+  }
+
+  it("listens to the paste in the capture phase, before xterm.js", () => {
+    const pane = openPane(1, recorder().handlers);
+    expect(containerOf(pane).pasteListeners.map(({ capture }) => capture)).toEqual([true]);
+  });
+
+  it("sends Alt+V to the session for an image without text under Windows, instead of the browser paste", async () => {
+    runOn("Windows");
+    const pane = openPane(1, recorder().handlers);
+    await pane.start("new", FOLDER);
+    const event = pasteEvent("", [PNG]);
+    containerOf(pane).dispatchPaste(event);
+    await settle();
+    expect(calls("pty_write")).toEqual([{ id: 1, data: "\x1bv" }]);
+    expect(event.defaultPrevented).toBe(true);
+    expect(event.propagationStopped).toBe(true);
+  });
+
+  it("sends Ctrl+V to the session for an image without text on macOS", async () => {
+    runOn("Macintosh");
+    const pane = openPane(1, recorder().handlers);
+    await pane.start("new", FOLDER);
+    containerOf(pane).dispatchPaste(pasteEvent("", [PNG]));
+    await settle();
+    expect(calls("pty_write")).toEqual([{ id: 1, data: "\x16" }]);
+  });
+
+  it("leaves a paste with text to xterm.js, even with an image", async () => {
+    runOn("Windows");
+    const pane = openPane(1, recorder().handlers);
+    await pane.start("new", FOLDER);
+    const event = pasteEvent("hello", [PNG]);
+    containerOf(pane).dispatchPaste(event);
+    await settle();
+    expect(calls("pty_write")).toEqual([]);
+    expect(event.defaultPrevented).toBe(false);
+    expect(event.propagationStopped).toBe(false);
+  });
+
+  it("does nothing for a paste with neither text nor image, or with no clipboard", async () => {
+    runOn("Windows");
+    const pane = openPane(1, recorder().handlers);
+    await pane.start("new", FOLDER);
+    const empty = pasteEvent("", []);
+    const noClipboard = new FakePasteEvent(undefined);
+    containerOf(pane).dispatchPaste(empty);
+    containerOf(pane).dispatchPaste(noClipboard);
+    await settle();
+    expect(calls("pty_write")).toEqual([]);
+    expect([empty.defaultPrevented, noClipboard.defaultPrevented]).toEqual([false, false]);
+  });
+
+  it("sends nothing before the session has started", async () => {
+    runOn("Windows");
+    const pane = openPane(1, recorder().handlers);
+    const event = pasteEvent("", [PNG]);
+    containerOf(pane).dispatchPaste(event);
+    await settle();
+    expect(calls("pty_write")).toEqual([]);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("sends nothing once claude has ended", async () => {
+    runOn("Windows");
+    const pane = openPane(1, recorder().handlers);
+    await pane.start("new", FOLDER);
+    spawns[0].onExit.onmessage(0);
+    await settle();
+    containerOf(pane).dispatchPaste(pasteEvent("", [PNG]));
+    await settle();
+    expect(calls("pty_write")).toEqual([]);
+  });
+
+  it("sends the key to its own session only", async () => {
+    runOn("Windows");
+    const first = openPane(1, recorder().handlers);
+    const second = openPane(2, recorder().handlers);
+    await first.start("new", FOLDER);
+    await second.start("new", FOLDER);
+    containerOf(second).dispatchPaste(pasteEvent("", [PNG]));
+    await settle();
+    expect(calls("pty_write")).toEqual([{ id: 2, data: "\x1bv" }]);
   });
 });
 
