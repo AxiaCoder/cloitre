@@ -36,7 +36,7 @@ The checks a pull request must pass are listed in `.github/workflows/checks.yml`
 
 ## Out of scope until after the POC
 
-Plugin system, running a regular shell, SSH, tab notifications, pasted images and file drag and drop. The last two are planned for V1.
+Plugin system, running a regular shell, SSH, tab notifications.
 
 ## Commands
 
