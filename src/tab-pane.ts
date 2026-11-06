@@ -1,3 +1,4 @@
+import { TAB_ATTRIBUTE } from "./dropped-paths";
 import { decideKey } from "./keys";
 import type { SpawnMode } from "./pty";
 import { isFailedResume } from "./resume";
@@ -142,6 +143,7 @@ export class TabPane extends Pane {
     private readonly handlers: TabPaneHandlers,
   ) {
     super(parent, tabId);
+    this.container.setAttribute(TAB_ATTRIBUTE, String(tabId));
     const terminal = this.view.terminal;
     terminal.onData((data) => {
       if (isAnswerInput(data)) {
@@ -289,6 +291,18 @@ export class TabPane extends Pane {
     } finally {
       this.startingCard.hidden = true;
     }
+  }
+
+  /**
+   * Types `text` into the session's input as a paste: bracketed when the
+   * session asked for it, so it is not submitted. Does nothing when `text` is
+   * empty or no session is running.
+   */
+  pasteText(text: string): void {
+    if (text === "" || !this.slot.current) {
+      return;
+    }
+    this.view.terminal.paste(text);
   }
 
   /** Stops the session, then disposes of the terminal and removes the container. Never rejects. */

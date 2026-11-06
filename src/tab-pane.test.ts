@@ -38,6 +38,7 @@ const fakes = vi.hoisted(() => {
     rows = 24;
     unicode = { activeVersion: "6" };
     written: Uint8Array[] = [];
+    pasted: string[] = [];
     resets = 0;
     disposed = false;
     dataListener: (data: string) => void = () => undefined;
@@ -84,6 +85,10 @@ const fakes = vi.hoisted(() => {
     /** Records the bytes written to the screen. */
     write(bytes: Uint8Array): void {
       this.written.push(bytes);
+    }
+    /** Records the text pasted into the terminal. */
+    paste(text: string): void {
+      this.pasted.push(text);
     }
     /** Counts one reset. */
     reset(): void {
@@ -782,6 +787,67 @@ describe("TabPane input", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("TabPane.pasteText", () => {
+  it("pastes the text into the terminal of a running session", async () => {
+    const pane = openPane(1, recorder().handlers);
+    await pane.start("new", FOLDER);
+    pane.pasteText('"C:\\My Files\\a b.txt"');
+    expect(terminalOf(pane).pasted).toEqual(['"C:\\My Files\\a b.txt"']);
+  });
+
+  it("pastes nothing for an empty text", async () => {
+    const pane = openPane(1, recorder().handlers);
+    await pane.start("new", FOLDER);
+    pane.pasteText("");
+    expect(terminalOf(pane).pasted).toEqual([]);
+  });
+
+  it("pastes nothing before the session has started", () => {
+    const pane = openPane(1, recorder().handlers);
+    pane.pasteText("/tmp/a.txt");
+    expect(terminalOf(pane).pasted).toEqual([]);
+  });
+
+  it("pastes nothing once claude has ended", async () => {
+    const pane = openPane(1, recorder().handlers);
+    await pane.start("new", FOLDER);
+    spawns[0].onExit.onmessage(0);
+    await settle();
+    pane.pasteText("/tmp/a.txt");
+    expect(terminalOf(pane).pasted).toEqual([]);
+  });
+
+  it("pastes nothing when Rust refused the start", async () => {
+    refuseSpawns(new Error("folder refused"));
+    const pane = openPane(1, recorder().handlers);
+    await expect(pane.start("new", FOLDER)).rejects.toThrow("folder refused");
+    pane.pasteText("/tmp/a.txt");
+    expect(terminalOf(pane).pasted).toEqual([]);
+  });
+
+  it("pastes into its own terminal only", async () => {
+    const first = openPane(1, recorder().handlers);
+    const second = openPane(2, recorder().handlers);
+    await first.start("new", FOLDER);
+    await second.start("new", FOLDER);
+    second.pasteText("/tmp/a.txt");
+    expect(terminalOf(first).pasted).toEqual([]);
+    expect(terminalOf(second).pasted).toEqual(["/tmp/a.txt"]);
+  });
+});
+
+describe("drop target marking", () => {
+  it("marks a session tab's container with its tab id", () => {
+    const pane = openPane(7, recorder().handlers);
+    expect(containerOf(pane).attributes["data-tab"]).toBe("7");
+  });
+
+  it("leaves a replay's container unmarked", () => {
+    const pane = new ReplayPane(parent as unknown as HTMLElement, 3);
+    expect(containerOf(pane).attributes["data-tab"]).toBeUndefined();
   });
 });
 

@@ -39,6 +39,8 @@ import { ActivityStore, parseActivityReport, type SessionActivity } from "./sess
 import { fillTexts, messages, texts } from "./strings";
 import { closeWarning, NO_WARNING, warningText as shownWarning, type WarningState } from "./warning-bar";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { dropTargetTab, formatPathsForInput, pathStyleOf, TAB_ATTRIBUTE } from "./dropped-paths";
 import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
 import { runningSessions, UpdateFlow, type UpdateNotice } from "./updates";
 import { ReplayPane, TabPane } from "./tab-pane";
@@ -291,6 +293,9 @@ function tabElement(tab: Tab, active: boolean): HTMLDivElement {
   const activity = activities.of(tab.id);
   item.setAttribute("role", "tab");
   item.setAttribute("aria-selected", String(active));
+  if (tab.kind === "session") {
+    item.setAttribute(TAB_ATTRIBUTE, String(tab.id));
+  }
   const label = document.createElement("button");
   label.type = "button";
   label.className = "tab-label";
@@ -1629,6 +1634,22 @@ listen("session-state", (event) => {
     renderTabs();
   }
 }).catch(showError);
+
+getCurrentWebview()
+  .onDragDropEvent((event) => {
+    if (event.payload.type !== "drop") {
+      return;
+    }
+    const scale = window.devicePixelRatio;
+    const { x, y } = event.payload.position;
+    const tabId = dropTargetTab(document.elementFromPoint(x / scale, y / scale));
+    const pane = tabId === undefined ? undefined : panes.get(tabId);
+    if (pane instanceof TabPane) {
+      activateTab(pane.tabId);
+      pane.pasteText(formatPathsForInput(event.payload.paths, pathStyleOf(navigator.userAgent)));
+    }
+  })
+  .catch(showError);
 
 window.addEventListener(
   "keydown",
