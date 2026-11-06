@@ -65,8 +65,12 @@ describe("quotePath on Windows", () => {
 });
 
 describe("quotePath on POSIX", () => {
-  it("keeps a plain path unquoted", () => {
-    expect(quotePath("/home/user/notes.md", "posix")).toBe("/home/user/notes.md");
+  it("quotes a plain path, so a leading slash is not read as a slash command", () => {
+    expect(quotePath("/home/user/notes.md", "posix")).toBe("'/home/user/notes.md'");
+  });
+
+  it("quotes a path naming a slash command, so the empty prompt does not run it", () => {
+    expect(quotePath("/clear", "posix")).toBe("'/clear'");
   });
 
   it("quotes a path with spaces", () => {
@@ -150,13 +154,13 @@ describe("formatPathsForInput", () => {
   });
 
   it("leaves refused paths out", () => {
-    expect(formatPathsForInput(["/a\nb", "/ok.txt"], "posix")).toBe("/ok.txt");
+    expect(formatPathsForInput(["/a\nb", "/ok.txt"], "posix")).toBe("'/ok.txt'");
   });
 
   it("keeps the other paths when a trapped one sits between them", () => {
-    expect(formatPathsForInput(["/a b.txt", "/x\u001b[31my", "/c.txt"], "posix")).toBe("'/a b.txt' /c.txt");
+    expect(formatPathsForInput(["/a b.txt", "/x\u001b[31my", "/c.txt"], "posix")).toBe("'/a b.txt' '/c.txt'");
     expect(formatPathsForInput(["C:\\a.txt", "C:\\x\ry", "C:\\d e"], "windows")).toBe('C:\\a.txt "C:\\d e"');
-    expect(formatPathsForInput(["/a", "/b\u0085c", "/d"], "posix")).toBe("/a /d");
+    expect(formatPathsForInput(["/a", "/b\u0085c", "/d"], "posix")).toBe("'/a' '/d'");
   });
 
   it("lets no control character reach the input, whatever the paths", () => {

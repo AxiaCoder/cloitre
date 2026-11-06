@@ -6,8 +6,6 @@ export const TAB_ATTRIBUTE = "data-tab";
 
 /** Characters a Windows path may keep unquoted. */
 const WINDOWS_SAFE = /^[A-Za-z0-9_\-.:\\/]+$/;
-/** Characters a POSIX path may keep unquoted. */
-const POSIX_SAFE = /^[A-Za-z0-9_\-.,:/@+=%]+$/;
 
 /** Returns the path style of the system `userAgent` runs on: `"windows"` when it names Windows, else `"posix"`. */
 export function pathStyleOf(userAgent: string): PathStyle {
@@ -26,7 +24,9 @@ function hasControlCharacter(text: string): boolean {
 }
 
 /**
- * Returns `path` quoted for `claude`'s input in `style`, or `undefined` when
+ * Returns `path` quoted for `claude`'s input in `style`: a Windows path is
+ * double-quoted unless it holds only safe characters, a POSIX path is always
+ * single-quoted. Returns `undefined` when
  * the path cannot be typed as is: empty, holding a control character, or, in
  * the Windows style, holding a double quote. Such a path is refused whole,
  * never cleaned up, since a cleaned path would name another file.
@@ -41,7 +41,7 @@ export function quotePath(path: string, style: PathStyle): string | undefined {
     }
     return WINDOWS_SAFE.test(path) ? path : `"${path}"`;
   }
-  return POSIX_SAFE.test(path) ? path : `'${path.replace(/'/g, "'\\''")}'`;
+  return `'${path.replace(/'/g, "'\\''")}'`;
 }
 
 /**
