@@ -1539,6 +1539,16 @@ removeButton.addEventListener("click", () => {
   report(removeSelected);
 });
 
+tabList.addEventListener(
+  "wheel",
+  (event) => {
+    if (event.deltaY === 0 || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+    event.preventDefault();
+    tabList.scrollLeft += event.deltaMode === WheelEvent.DOM_DELTA_LINE ? event.deltaY * 40 : event.deltaY;
+  },
+  { passive: false },
+);
+
 newTabButton.addEventListener("click", () => {
   report(openTabInSelected);
 });
