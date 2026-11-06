@@ -1543,7 +1543,7 @@ removeButton.addEventListener("click", () => {
 tabList.addEventListener(
   "wheel",
   (event) => {
-    const scroll = tabBarScroll(event);
+    const scroll = tabBarScroll(event, tabList.clientWidth);
     if (scroll === undefined) return;
     event.preventDefault();
     tabList.scrollLeft += scroll;
