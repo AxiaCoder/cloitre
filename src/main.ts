@@ -1645,6 +1645,7 @@ getCurrentWebview()
     const tabId = dropTargetTab(document.elementFromPoint(x / scale, y / scale));
     const pane = tabId === undefined ? undefined : panes.get(tabId);
     if (pane instanceof TabPane) {
+      activateTab(pane.tabId);
       pane.pasteText(formatPathsForInput(event.payload.paths, pathStyleOf(navigator.userAgent)));
     }
   })
