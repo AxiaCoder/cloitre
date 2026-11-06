@@ -343,6 +343,9 @@ beforeEach(() => {
       spawns.push(args as SpawnArgs);
       return Promise.resolve(nextId++);
     }
+    if (command === "clipboard_file_paths") {
+      return Promise.resolve([]);
+    }
     return Promise.resolve();
   });
   vi.stubGlobal("document", { createElement: (tagName: string) => new FakeElement(tagName) });
@@ -924,17 +927,25 @@ describe("TabPane image paste", () => {
     expect(event.propagationStopped).toBe(false);
   });
 
-  it("does nothing for a paste with neither text nor image, or with no clipboard", async () => {
+  it("sends nothing for a paste with neither text, image nor copied file", async () => {
     runOn("Windows");
     const pane = openPane(1, recorder().handlers);
     await pane.start("new", FOLDER);
-    const empty = pasteEvent("", []);
-    const noClipboard = new FakePasteEvent(undefined);
-    containerOf(pane).dispatchPaste(empty);
-    containerOf(pane).dispatchPaste(noClipboard);
+    containerOf(pane).dispatchPaste(pasteEvent("", []));
     await settle();
     expect(calls("pty_write")).toEqual([]);
-    expect([empty.defaultPrevented, noClipboard.defaultPrevented]).toEqual([false, false]);
+    expect(terminalOf(pane).pasted).toEqual([]);
+  });
+
+  it("leaves a paste with no clipboard to xterm.js", async () => {
+    runOn("Windows");
+    const pane = openPane(1, recorder().handlers);
+    await pane.start("new", FOLDER);
+    const noClipboard = new FakePasteEvent(undefined);
+    containerOf(pane).dispatchPaste(noClipboard);
+    await settle();
+    expect(calls("clipboard_file_paths")).toEqual([]);
+    expect(noClipboard.defaultPrevented).toBe(false);
   });
 
   it("sends nothing before the session has started", async () => {
@@ -967,6 +978,62 @@ describe("TabPane image paste", () => {
     containerOf(second).dispatchPaste(pasteEvent("", [PNG]));
     await settle();
     expect(calls("pty_write")).toEqual([{ id: 2, data: "\x1bv" }]);
+  });
+});
+
+describe("TabPane copied files paste", () => {
+  /** Makes Rust answer `clipboard_file_paths` with `answer`, and every other command as before. */
+  function copiedFiles(answer: () => Promise<unknown>): void {
+    const fallback = tauri.invoke.getMockImplementation();
+    tauri.invoke.mockImplementation((command, args) =>
+      command === "clipboard_file_paths" ? answer() : (fallback?.(command, args) ?? Promise.resolve()),
+    );
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal("navigator", { userAgent: "Mozilla/5.0 (Windows) AppleWebKit/537.36" });
+  });
+
+  it("types the quoted paths of the copied files as a paste, not submitted", async () => {
+    copiedFiles(() => Promise.resolve([String.raw`C:\Users\Example\a.txt`, String.raw`C:\Users\Example\my notes.md`]));
+    const pane = openPane(1, recorder().handlers);
+    await pane.start("new", FOLDER);
+    const event = pasteEvent("", []);
+    containerOf(pane).dispatchPaste(event);
+    await settle();
+    expect(terminalOf(pane).pasted).toEqual([String.raw`C:\Users\Example\a.txt "C:\Users\Example\my notes.md"`]);
+    expect(calls("pty_write")).toEqual([]);
+    expect(event.defaultPrevented).toBe(true);
+    expect(event.propagationStopped).toBe(true);
+  });
+
+  it("types the path of a copied image file instead of the image key", async () => {
+    copiedFiles(() => Promise.resolve([String.raw`C:\Users\Example\photo.png`]));
+    const pane = openPane(1, recorder().handlers);
+    await pane.start("new", FOLDER);
+    containerOf(pane).dispatchPaste(pasteEvent("", [PNG]));
+    await settle();
+    expect(terminalOf(pane).pasted).toEqual([String.raw`C:\Users\Example\photo.png`]);
+    expect(calls("pty_write")).toEqual([]);
+  });
+
+  it("does not ask for copied files when the paste holds text", async () => {
+    const pane = openPane(1, recorder().handlers);
+    await pane.start("new", FOLDER);
+    containerOf(pane).dispatchPaste(pasteEvent("hello", []));
+    await settle();
+    expect(calls("clipboard_file_paths")).toEqual([]);
+  });
+
+  it("reports a failed read and still sends the image key", async () => {
+    copiedFiles(() => Promise.reject(new Error("refused")));
+    const { events, handlers } = recorder();
+    const pane = openPane(1, handlers);
+    await pane.start("new", FOLDER);
+    containerOf(pane).dispatchPaste(pasteEvent("", [PNG]));
+    await settle();
+    expect(events).toContain("error Error: refused");
+    expect(calls("pty_write")).toEqual([{ id: 1, data: "\x1bv" }]);
   });
 });
 

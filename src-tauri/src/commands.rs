@@ -386,6 +386,14 @@ pub fn tab_set_title(
     projects.set_tab_title(tab_id, title.as_deref())
 }
 
+/// Returns the full paths of the files copied to the system clipboard, in its
+/// order, or an empty list when it holds no file list (see
+/// [`crate::clipboard::file_paths`]). Always empty outside Windows.
+#[tauri::command(async)]
+pub fn clipboard_file_paths() -> Vec<String> {
+    crate::clipboard::file_paths()
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::{self, Write};
