@@ -46,6 +46,7 @@ import { runningSessions, UpdateFlow, type UpdateNotice } from "./updates";
 import { ReplayPane, TabPane } from "./tab-pane";
 import { afterRefusedStart, isProjectPaused, TabModel, tabName, type Tab, type TabState } from "./tabs";
 import { shortenLabel, TitleSaver } from "./tab-title";
+import { tabBarScroll } from "./tab-wheel";
 import { markerIcon, outlineDrawing } from "./marker-icons";
 import { markerColorValue, markerLook, projectInitials } from "./project-marker";
 import {
@@ -1542,9 +1543,10 @@ removeButton.addEventListener("click", () => {
 tabList.addEventListener(
   "wheel",
   (event) => {
-    if (event.deltaY === 0 || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+    const scroll = tabBarScroll(event);
+    if (scroll === undefined) return;
     event.preventDefault();
-    tabList.scrollLeft += event.deltaMode === WheelEvent.DOM_DELTA_LINE ? event.deltaY * 40 : event.deltaY;
+    tabList.scrollLeft += scroll;
   },
   { passive: false },
 );
