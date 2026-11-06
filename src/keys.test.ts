@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { decideKey, isToolsShortcut, type KeyInput } from "./keys";
+import { decideKey, imagePasteKey, isToolsShortcut, type KeyInput, type PasteContent } from "./keys";
 
 /** Builds a key event with no modifier, overridden by `fields`. */
 function key(fields: Partial<KeyInput>): KeyInput {
@@ -139,5 +139,48 @@ describe("isToolsShortcut", () => {
   it("ignores Ctrl+Shift+D held with the Meta key, and Ctrl+Shift with another key", () => {
     expect(isToolsShortcut({ ...ctrlShiftD, metaKey: true })).toBe(false);
     expect(isToolsShortcut({ ...ctrlShiftD, code: "KeyF", key: "F", keyCode: 70 })).toBe(false);
+  });
+});
+
+/** A paste holding `text` as plain text and items of the given kinds and types. */
+function paste(text: string, items: { kind: string; type: string }[]): PasteContent {
+  return { getData: (format) => (format === "text/plain" ? text : ""), items };
+}
+
+const PNG = { kind: "file", type: "image/png" };
+
+describe("imagePasteKey", () => {
+  it("sends Alt+V for an image without text under Windows", () => {
+    expect(imagePasteKey(paste("", [PNG]), "windows")).toBe("\x1bv");
+  });
+
+  it("sends Ctrl+V for an image without text elsewhere", () => {
+    expect(imagePasteKey(paste("", [PNG]), "posix")).toBe("\x16");
+  });
+
+  it("accepts any image type", () => {
+    expect(imagePasteKey(paste("", [{ kind: "file", type: "image/jpeg" }]), "posix")).toBe("\x16");
+  });
+
+  it("finds the image after other items", () => {
+    const items = [{ kind: "string", type: "text/html" }, { kind: "file", type: "application/pdf" }, PNG];
+    expect(imagePasteKey(paste("", items), "windows")).toBe("\x1bv");
+  });
+
+  it("leaves a paste with text to the text paste, even with an image", () => {
+    expect(imagePasteKey(paste("hello", [PNG]), "windows")).toBeUndefined();
+    expect(imagePasteKey(paste(" ", [PNG]), "posix")).toBeUndefined();
+  });
+
+  it("sends nothing for a paste with neither text nor image", () => {
+    expect(imagePasteKey(paste("", []), "windows")).toBeUndefined();
+  });
+
+  it("sends nothing for a file that is not an image", () => {
+    expect(imagePasteKey(paste("", [{ kind: "file", type: "application/pdf" }]), "posix")).toBeUndefined();
+  });
+
+  it("sends nothing for an image type carried as a string item", () => {
+    expect(imagePasteKey(paste("", [{ kind: "string", type: "image/png" }]), "windows")).toBeUndefined();
   });
 });

@@ -1,5 +1,5 @@
-import { TAB_ATTRIBUTE } from "./dropped-paths";
-import { decideKey } from "./keys";
+import { pathStyleOf, TAB_ATTRIBUTE } from "./dropped-paths";
+import { decideKey, imagePasteKey } from "./keys";
 import type { SpawnMode } from "./pty";
 import { isFailedResume } from "./resume";
 import { SessionSlot, type TerminalSize } from "./session";
@@ -183,6 +183,21 @@ export class TabPane extends Pane {
       }
       return false;
     });
+    this.container.addEventListener(
+      "paste",
+      (event) => {
+        const key = event.clipboardData
+          ? imagePasteKey(event.clipboardData, pathStyleOf(navigator.userAgent))
+          : undefined;
+        if (key === undefined || !this.slot.current) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        terminal.input(key, true);
+      },
+      { capture: true },
+    );
     this.endText = document.createElement("span");
     this.endNotice = document.createElement("div");
     this.endNotice.className = "end-notice";

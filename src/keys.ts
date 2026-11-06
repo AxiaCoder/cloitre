@@ -1,3 +1,5 @@
+import type { PathStyle } from "./dropped-paths";
+
 /** What the app does with a key event before xterm.js sees it. */
 export type KeyDecision =
   /** xterm.js handles the key and sends it to the session. */
@@ -74,4 +76,35 @@ export function isToolsShortcut(event: KeyInput): boolean {
     !event.metaKey &&
     event.keyCode === VIRTUAL_KEY_D
   );
+}
+
+/** What {@link imagePasteKey} reads from a paste: its text, and the kind and type of each item. */
+export interface PasteContent {
+  getData(format: string): string;
+  readonly items: Iterable<{ readonly kind: string; readonly type: string }>;
+}
+
+/** The key `claude` reads a clipboard image on under Windows: Alt+V. */
+const WINDOWS_IMAGE_KEY = "\x1bv";
+
+/** The key `claude` reads a clipboard image on elsewhere: Ctrl+V. */
+const POSIX_IMAGE_KEY = "\x16";
+
+/**
+ * Returns the key to send to the session so that `claude` reads the clipboard
+ * image itself, when `content` holds no text but holds an image: Alt+V in the
+ * `"windows"` style, Ctrl+V otherwise. Returns `undefined` when the paste holds
+ * text, which xterm.js pastes as before, or holds neither text nor image.
+ * Only the item kinds and types are read, never the image bytes.
+ */
+export function imagePasteKey(content: PasteContent, style: PathStyle): string | undefined {
+  if (content.getData("text/plain") !== "") {
+    return undefined;
+  }
+  for (const item of content.items) {
+    if (item.kind === "file" && item.type.startsWith("image/")) {
+      return style === "windows" ? WINDOWS_IMAGE_KEY : POSIX_IMAGE_KEY;
+    }
+  }
+  return undefined;
 }
