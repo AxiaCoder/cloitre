@@ -1,5 +1,16 @@
-import { describe, expect, it } from "vitest";
-import { clipboardPaste } from "./clipboard";
+import { invoke } from "@tauri-apps/api/core";
+import { describe, expect, it, vi } from "vitest";
+import { clipboardFilePaths, clipboardPaste } from "./clipboard";
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+
+describe("clipboardFilePaths", () => {
+  it("asks Rust for the copied files, without arguments", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce([String.raw`C:\a.txt`]);
+    await expect(clipboardFilePaths()).resolves.toEqual([String.raw`C:\a.txt`]);
+    expect(vi.mocked(invoke).mock.calls).toEqual([["clipboard_file_paths"]]);
+  });
+});
 
 describe("clipboardPaste", () => {
   it("types the copied files' paths, quoted and joined as a drop", () => {

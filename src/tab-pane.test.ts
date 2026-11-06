@@ -1035,6 +1035,56 @@ describe("TabPane copied files paste", () => {
     expect(events).toContain("error Error: refused");
     expect(calls("pty_write")).toEqual([{ id: 1, data: "\x1bv" }]);
   });
+
+  it("reports a failed read and sends nothing without an image", async () => {
+    copiedFiles(() => Promise.reject(new Error("refused")));
+    const { events, handlers } = recorder();
+    const pane = openPane(1, handlers);
+    await pane.start("new", FOLDER);
+    containerOf(pane).dispatchPaste(pasteEvent("", []));
+    await settle();
+    expect(events).toContain("error Error: refused");
+    expect(calls("pty_write")).toEqual([]);
+    expect(terminalOf(pane).pasted).toEqual([]);
+  });
+
+  it("sends the image key for a bitmap without copied file", async () => {
+    copiedFiles(() => Promise.resolve([]));
+    const pane = openPane(1, recorder().handlers);
+    await pane.start("new", FOLDER);
+    containerOf(pane).dispatchPaste(pasteEvent("", [PNG]));
+    await settle();
+    expect(calls("pty_write")).toEqual([{ id: 1, data: "\x1bv" }]);
+    expect(terminalOf(pane).pasted).toEqual([]);
+  });
+
+  it("types nothing when claude ends while the copied files are read", async () => {
+    let answer: (paths: string[]) => void = () => undefined;
+    copiedFiles(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const pane = openPane(1, recorder().handlers);
+    await pane.start("new", FOLDER);
+    containerOf(pane).dispatchPaste(pasteEvent("", [PNG]));
+    spawns[0].onExit.onmessage(0);
+    await settle();
+    answer([String.raw`C:\Users\Example\a.txt`]);
+    await settle();
+    expect(terminalOf(pane).pasted).toEqual([]);
+    expect(calls("pty_write")).toEqual([]);
+  });
+
+  it("types only the accepted paths when some copied paths are refused", async () => {
+    copiedFiles(() => Promise.resolve([String.raw`C:\Users\Example\a.txt`, 'C:\\bad"name.png']));
+    const pane = openPane(1, recorder().handlers);
+    await pane.start("new", FOLDER);
+    containerOf(pane).dispatchPaste(pasteEvent("", []));
+    await settle();
+    expect(terminalOf(pane).pasted).toEqual([String.raw`C:\Users\Example\a.txt`]);
+  });
 });
 
 describe("drop target marking", () => {
