@@ -464,6 +464,39 @@ mod tests {
     }
 
     #[test]
+    fn a_description_that_only_contains_the_artifact_prefix_counts_as_a_task() {
+        let send = |input: Vec<u8>| hook_message(&input, Some(OsStr::new("3")));
+        let line = |state: &str| Some(format!("{{\"tab\":3,\"state\":\"{state}\"}}\n").into_bytes());
+        let descriptions = [
+            "watch live updates for artifact https://claude.ai/code/artifact/a1",
+            " live updates for artifact https://claude.ai/code/artifact/a1",
+            "Live updates for artifact https://claude.ai/code/artifact/a1",
+            "LIVE UPDATES FOR ARTIFACT https://claude.ai/code/artifact/a1",
+            "live updates for artefact https://claude.ai/code/artifact/a1",
+        ];
+        for description in descriptions {
+            let tasks = serde_json::json!([{ "id": "m1", "type": "monitor", "status": "running", "description": description }]);
+            assert_eq!(send(tasks_notice("Stop", tasks.clone())), line("background"), "{description}");
+            assert_eq!(send(tasks_notice("SubagentStop", tasks)), None, "{description}");
+        }
+    }
+
+    #[test]
+    fn a_description_that_is_exactly_the_artifact_prefix_is_an_artifact_watch() {
+        let tasks = serde_json::json!([{ "id": "m1", "type": "monitor", "description": "live updates for artifact" }]);
+        let line = hook_message(&tasks_notice("Stop", tasks), Some(OsStr::new("3")));
+        assert_eq!(line, Some(b"{\"tab\":3,\"state\":\"done\"}\n".to_vec()));
+    }
+
+    #[test]
+    fn log_line_keeps_the_artifact_watches_of_a_stop() {
+        let tasks = serde_json::json!([artifact_watch("a1"), { "id": "b1", "type": "shell", "command": "pnpm dev" }]);
+        let line = log_line(&tasks_notice("Stop", tasks.clone()), Some(OsStr::new("3"))).unwrap();
+        let entry: serde_json::Value = serde_json::from_slice(&line).unwrap();
+        assert_eq!(entry["background_tasks"], tasks);
+    }
+
+    #[test]
     fn background_tasks_that_are_not_an_array_count_as_none() {
         let send = |input: Vec<u8>| hook_message(&input, Some(OsStr::new("3")));
         let line = |state: &str| Some(format!("{{\"tab\":3,\"state\":\"{state}\"}}\n").into_bytes());
