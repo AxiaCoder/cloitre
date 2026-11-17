@@ -115,7 +115,8 @@ pub struct StateMessage {
 
 /// Returns the state a hook event means: `event` is its `hook_event_name`,
 /// `tool` its `tool_name` when it has one, `background_tasks` the number of
-/// entries of its `background_tasks`, 0 when it has none. `None` for any event
+/// entries of its `background_tasks` that are not artifact watches (see
+/// [`is_artifact_watch`]), 0 when it has none. `None` for any event
 /// that tells nothing about the state, and for a `SubagentStop` while
 /// background tasks still run.
 pub fn state_for(event: &str, tool: Option<&str>, background_tasks: usize) -> Option<SessionState> {
