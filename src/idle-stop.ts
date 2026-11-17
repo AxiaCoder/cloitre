@@ -61,8 +61,8 @@ export class IdleClock {
   }
 
   /**
-   * Makes `delay` the delay of every timed tab, counted from when each became
-   * idle: a tab idle longer than `delay` already is reported at once.
+   * Makes `delay` the delay of every timed tab, counted from its last activity:
+   * a tab whose last activity is older than `delay` is reported at once.
    */
   setDelay(delay: IdleDelay): void {
     this.delay = delay;

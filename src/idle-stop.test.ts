@@ -106,12 +106,14 @@ describe("IdleClock", () => {
     expect(stopped).toEqual([]);
   });
 
-  it("applies a new delay to the tabs it times, from when they became idle", () => {
+  it("applies a new delay to the tabs it times, from their last activity", () => {
     const idle = clock(60);
     idle.sync([1]);
-    vi.advanceTimersByTime(10 * MINUTE);
+    vi.advanceTimersByTime(4 * MINUTE);
+    idle.touch(1);
+    vi.advanceTimersByTime(6 * MINUTE);
     idle.setDelay(15);
-    vi.advanceTimersByTime(5 * MINUTE - 1);
+    vi.advanceTimersByTime(9 * MINUTE - 1);
     expect(stopped).toEqual([]);
     vi.advanceTimersByTime(1);
     expect(stopped).toEqual([1]);
