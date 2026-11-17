@@ -36,6 +36,8 @@ import {
 import type { SpawnMode } from "./pty";
 import { ReplayDeck, type LoadedReplay } from "./replay-deck";
 import { ActivityStore, parseActivityReport, type SessionActivity } from "./session-activity";
+import { IdleClock, isIdle } from "./idle-stop";
+import { IDLE_DELAYS, idleDelayValue, loadIdleDelay, parseIdleDelay, saveIdleDelay } from "./settings";
 import { fillTexts, messages, texts } from "./strings";
 import { closeWarning, NO_WARNING, warningText as shownWarning, type WarningState } from "./warning-bar";
 import { listen } from "@tauri-apps/api/event";
@@ -83,6 +85,7 @@ const warningText = element("warning-text", HTMLSpanElement);
 const warningClose = element("warning-close", HTMLButtonElement);
 const projectList = element("project-list", HTMLUListElement);
 const addProjectButton = element("add-project", HTMLButtonElement);
+const settingsButton = element("open-settings", HTMLButtonElement);
 const updateNotice = element("update-notice", HTMLDivElement);
 const updateCompact = element("update-compact", HTMLButtonElement);
 const emptyState = element("empty-state", HTMLElement);
@@ -132,6 +135,12 @@ const projectIndicators = new Map<
 >();
 /** What the session of each session tab is doing, as far as the tabs show it. */
 const activities = new ActivityStore();
+/** The idle delay of the settings: how long a session tab may stay idle before its session stops. */
+let idleDelay = loadIdleDelay(localStorage);
+/** Times the idle session tabs, and stops the session of a tab idle for {@link idleDelay}. */
+const idleClock = new IdleClock(idleDelay, (tabId) => {
+  report(() => stopIdleTab(tabId));
+});
 /** The terminal of each open tab, by tab id: a session pane or the replay pane. */
 const panes = new Map<number, TabPane | ReplayPane>();
 /** The projects as last listed by Rust. */
@@ -150,6 +159,8 @@ let markerMenu: { element: HTMLDivElement; anchor: HTMLButtonElement } | undefin
 let removeDialog: { element: HTMLDivElement; projectId: number } | undefined;
 /** The open update dialog, the element it opened from, and how it answers the update flow, while one is open. */
 let updateDialog: { element: HTMLDivElement; opener: HTMLElement; answer: (confirmed: boolean) => void } | undefined;
+/** The dimmed backdrop of the open settings dialog, while one is open. */
+let settingsDialog: HTMLDivElement | undefined;
 /** The ids of the session tabs the last install stopped while they ran or started. */
 let stoppedForUpdate: number[] = [];
 /** Keeps a double click on a close button from closing the next tab too. */
@@ -371,6 +382,38 @@ function renderTabs(): void {
   }
   showRecording(shown instanceof TabPane ? shown.recording : undefined);
   renderSessionCounts();
+  watchIdleTabs();
+}
+
+/** Gives the idle clock every idle session tab, of every project (see {@link isIdle}). */
+function watchIdleTabs(): void {
+  idleClock.sync(
+    projects.flatMap((project) =>
+      tabs
+        .tabsOf(project.id)
+        .flatMap((tab) => (tab.kind === "session" && isIdle(tab.state, activities.of(tab.id)) ? [tab.id] : [])),
+    ),
+  );
+}
+
+/**
+ * Stops the session of session tab `tabId`, when it is still idle, and marks
+ * the tab exited, its pane saying how long it stayed idle and offering Resume
+ * and New session.
+ */
+async function stopIdleTab(tabId: number): Promise<void> {
+  const pane = panes.get(tabId);
+  if (!(pane instanceof TabPane) || !isIdle(sessionState(tabId), activities.of(tabId)) || idleDelay === "never") {
+    return;
+  }
+  const minutes = idleDelay;
+  await pane.slot.stop();
+  tabs.setState(tabId, "exited");
+  activities.forget(tabId);
+  pane.recording = undefined;
+  pane.showOffer({ idleFor: minutes });
+  renderTabs();
+  refreshRecordingsOrReport();
 }
 
 /**
@@ -432,6 +475,9 @@ function createPane(tabId: number): TabPane {
       if (activities.interrupt(tabId)) {
         renderTabs();
       }
+    },
+    onInput: () => {
+      idleClock.touch(tabId);
     },
     onTitle: (raw) => {
       const changed = tabs.setTitle(tabId, raw);
@@ -878,17 +924,17 @@ function dismissRemoveDialog(): void {
 
 /**
  * Keeps Tab and Shift+Tab of keyboard event `event` inside `dialog`, cycling
- * through its enabled buttons that are in the tab order.
+ * through its enabled buttons and selects that are in the tab order.
  */
 function trapFocus(dialog: HTMLElement, event: KeyboardEvent): void {
   if (event.key !== "Tab") {
     return;
   }
-  const stops = [...dialog.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")].filter(
-    (button) => button.tabIndex >= 0,
+  const stops = [...dialog.querySelectorAll<HTMLElement>("button:not(:disabled), select:not(:disabled)")].filter(
+    (control) => control.tabIndex >= 0,
   );
   const active = document.activeElement;
-  const placed = (stop: HTMLButtonElement, side: number): boolean =>
+  const placed = (stop: HTMLElement, side: number): boolean =>
     active !== null && (stop.compareDocumentPosition(active) & side) !== 0;
   const before = stops.filter((stop) => placed(stop, Node.DOCUMENT_POSITION_FOLLOWING)).length;
   const after = stops.filter((stop) => placed(stop, Node.DOCUMENT_POSITION_PRECEDING)).length;
@@ -1219,6 +1265,71 @@ function openUpdateDialog(version: string): Promise<boolean> {
   return answered;
 }
 
+/** Closes the settings dialog, if one is open, and gives focus back to the settings button. */
+function closeSettingsDialog(): void {
+  if (settingsDialog !== undefined) {
+    settingsDialog.remove();
+    settingsDialog = undefined;
+    settingsButton.focus();
+  }
+}
+
+/**
+ * Opens, over a dimmed window, the settings dialog, focused on its first
+ * setting. A setting applies as soon as it changes. Escape, Close or a click
+ * on the dimmed area close it.
+ */
+function openSettingsDialog(): void {
+  closeSettingsDialog();
+  const scrim = document.createElement("div");
+  scrim.className = "dialog-scrim";
+  const dialog = document.createElement("div");
+  dialog.className = "remove-dialog";
+  dialog.tabIndex = -1;
+  dialog.setAttribute("role", "dialog");
+  dialog.setAttribute("aria-modal", "true");
+  dialog.setAttribute("aria-labelledby", "settings-title");
+  const title = document.createElement("h2");
+  title.id = "settings-title";
+  title.className = "remove-title";
+  title.textContent = texts.settings;
+  const delaySelect = document.createElement("select");
+  delaySelect.id = "idle-delay";
+  delaySelect.append(...IDLE_DELAYS.map((delay) => new Option(messages.idleDelayOption(delay), idleDelayValue(delay))));
+  delaySelect.value = idleDelayValue(idleDelay);
+  delaySelect.addEventListener("change", () => {
+    idleDelay = parseIdleDelay(delaySelect.value);
+    saveIdleDelay(localStorage, idleDelay);
+    idleClock.setDelay(idleDelay);
+  });
+  const label = document.createElement("label");
+  label.htmlFor = delaySelect.id;
+  label.textContent = texts.idleStopAfter;
+  const row = document.createElement("div");
+  row.className = "settings-row";
+  row.append(label, delaySelect);
+  const close = document.createElement("button");
+  close.type = "button";
+  close.textContent = texts.close;
+  close.addEventListener("click", closeSettingsDialog);
+  const actions = document.createElement("div");
+  actions.className = "remove-actions";
+  actions.append(close);
+  dialog.append(title, row, actions);
+  dialog.addEventListener("keydown", (event) => {
+    trapFocus(dialog, event);
+  });
+  scrim.append(dialog);
+  scrim.addEventListener("click", (event) => {
+    if (event.target === scrim) {
+      closeSettingsDialog();
+    }
+  });
+  document.body.append(scrim);
+  settingsDialog = scrim;
+  delaySelect.focus();
+}
+
 /**
  * Gives project `projectId` marker color `color`, `null` for no color, and
  * marker icon `icon`, `null` for the initials, then redraws the rail with the
@@ -1528,6 +1639,8 @@ addProjectButton.addEventListener("click", () => {
   report(openFolder);
 });
 
+settingsButton.addEventListener("click", openSettingsDialog);
+
 emptyOpenButton.addEventListener("click", () => {
   report(openFolder);
 });
@@ -1612,7 +1725,9 @@ updateCompact.addEventListener("click", () => {
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
-    if (updateDialog !== undefined) {
+    if (settingsDialog !== undefined) {
+      closeSettingsDialog();
+    } else if (updateDialog !== undefined) {
       dismissUpdateDialog();
     } else if (removeDialog === undefined) {
       dismissMarkerMenu();
@@ -1642,6 +1757,7 @@ listen("session-state", (event) => {
   if (!reported || tab?.kind !== "session" || (tab.state !== "running" && tab.state !== "starting")) {
     return;
   }
+  idleClock.touch(reported.tab);
   if (activities.report(reported.tab, reported.state, seenTabId() === reported.tab, reported.agent)) {
     renderTabs();
   }

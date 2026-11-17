@@ -162,3 +162,16 @@ describe("the session activity texts", () => {
     expect(messages.projectStatusTitle("example")).toBe("example");
   });
 });
+
+describe("the idle stop texts", () => {
+  it("names each idle delay option", () => {
+    expect(
+      (["never", 5, 15, 30, 60, 120, 240] as const).map((delay) => messages.idleDelayOption(delay)),
+    ).toEqual(["Never", "5 minutes", "15 minutes", "30 minutes", "1 hour", "2 hours", "4 hours"]);
+  });
+
+  it("says how long a stopped session stayed idle", () => {
+    expect(messages.idleStopped(15)).toBe("Stopped after 15 minutes without activity.");
+    expect(messages.idleStopped(240)).toBe("Stopped after 4 hours without activity.");
+  });
+});

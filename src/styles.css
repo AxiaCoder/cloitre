@@ -423,6 +423,14 @@ button.primary:hover {
   color: var(--crit);
 }
 
+.settings-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+}
+
 .remove-actions {
   display: flex;
   flex-wrap: wrap;
@@ -517,14 +525,20 @@ button.danger:hover {
   color: var(--crit);
 }
 
-#add-project {
+#add-project,
+#open-settings {
   margin: var(--sp-4);
   padding: var(--sp-3) var(--sp-4);
   background: none;
   color: var(--muted);
 }
 
-#add-project:hover {
+#open-settings {
+  margin-bottom: 0;
+}
+
+#add-project:hover,
+#open-settings:hover {
   background: var(--ink-2);
   color: var(--text);
 }
@@ -1022,7 +1036,8 @@ button.info:hover {
   .rail h2,
   .project-text,
   .project-count,
-  #add-project .add-label {
+  #add-project .add-label,
+  #open-settings .add-label {
     display: none;
   }
 
@@ -1035,9 +1050,14 @@ button.info:hover {
     padding: var(--sp-3) 0;
   }
 
-  #add-project {
+  #add-project,
+  #open-settings {
     margin: var(--sp-4) var(--sp-2);
     padding: var(--sp-2) 0;
+  }
+
+  #open-settings {
+    margin-bottom: 0;
   }
 
   .update-notice:not([hidden]) {

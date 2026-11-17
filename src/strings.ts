@@ -5,6 +5,7 @@
  */
 
 import type { SessionActivity } from "./session-activity";
+import type { IdleDelay } from "./settings";
 
 /** The fixed texts of the interface, by key. `index.html` names them in `data-text`, `data-label` and `data-title`. */
 export const texts = {
@@ -66,6 +67,8 @@ export const texts = {
   updateSignatureFailed: "The file's signature does not match. Nothing changed and your sessions are still running.",
   updateNetworkFailed: "The download stopped. Check your connection.",
   updateInstallFailed: "The installer could not start. Reopen your tabs with Resume.",
+  settings: "Settings",
+  idleStopAfter: "Stop idle sessions after",
 } as const;
 
 /** The key of a fixed text. */
@@ -167,6 +170,10 @@ export const messages = {
   },
   /** The status of recording `name` replayed to its end looking for a marker. */
   noMarkerLeft: (name: string) => `${name}: no marker left, end of recording`,
+  /** The option of the idle delay setting for `delay`: "Never", or a duration. */
+  idleDelayOption: (delay: IdleDelay) => (delay === "never" ? "Never" : duration(delay)),
+  /** The start notice of a session stopped after `minutes` minutes without activity. */
+  idleStopped: (minutes: number) => `Stopped after ${duration(minutes)} without activity.`,
 } as const;
 
 /** Returns whether `key` names a fixed text. */
@@ -237,6 +244,15 @@ function projectStatus(status?: ProjectStatus): string | undefined {
     return undefined;
   }
   return status === "paused" ? "Paused" : activityName(status);
+}
+
+/** `minutes` in words: whole hours from 60 minutes on, minutes below. */
+function duration(minutes: number): string {
+  if (minutes >= 60 && minutes % 60 === 0) {
+    const hours = minutes / 60;
+    return hours === 1 ? "1 hour" : `${String(hours)} hours`;
+  }
+  return minutes === 1 ? "1 minute" : `${String(minutes)} minutes`;
 }
 
 /** `word` with its first letter upper-cased. */

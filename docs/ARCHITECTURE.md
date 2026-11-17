@@ -300,6 +300,10 @@ When the main window is asked to close, Rust counts the sessions whose process s
 
 `claude` processes do not survive the app: every session is stopped when it exits. Reopening a tab offers `"resume"` or `"new"`.
 
+## Idle sessions
+
+A session tab is idle when its session runs and shows no activity: not waiting for an answer, not stopped on an error, no finished turn left unseen, not working (background tasks included). A starting session is never idle. Once a tab has been idle for the delay of the settings dialog (gear button of the rail: Never, 5, 15 or 30 minutes, 1, 2 or 4 hours; 1 hour by default), the webview stops its session through `pty_kill`, as an update does, and the tab offers `"resume"` or `"new"`, saying how long it stayed idle. Any activity Rust reports, and any input sent to the session, restarts the time. The delay is kept in the webview's local storage under `cloitre.idleStopDelay`; Rust knows nothing of it. A new delay applies at once, counted from when each tab became idle.
+
 ## Updates
 
 A release build looks for a newer version once, at startup, through the updater plugin (`tauri-plugin-updater`). A development build (`pnpm tauri dev`, `pnpm tauri build --debug`) never does: Rust registers the plugin only when `debug_assertions` is off (`CHECKS_FOR_UPDATES` in `src-tauri/src/lib.rs`), so the webview's check is refused and shows nothing.

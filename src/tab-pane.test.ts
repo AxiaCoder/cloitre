@@ -257,6 +257,7 @@ function recorder() {
     onRetry: (mode) => events.push(`retry ${mode}`),
     onAnswer: () => events.push("answer"),
     onInterrupt: () => events.push("interrupt"),
+    onInput: () => undefined,
     onTitle: (title) => events.push(`title ${title}`),
   };
   return { events, handlers };
@@ -505,6 +506,18 @@ describe("TabPane start notice", () => {
     expect(events).toEqual(["exit 1", "resume", "restart"]);
   });
 
+  it("says how long a session stopped for idleness stayed idle, and offers Resume and New session", () => {
+    const { events, handlers } = recorder();
+    const pane = openPane(1, handlers);
+    pane.showOffer({ idleFor: 60 });
+    const { notice, text, resume, newSession } = startNoticeOf(pane);
+    expect(notice.hidden).toBe(false);
+    expect(text.textContent).toBe("Stopped after 1 hour without activity.");
+    resume.click();
+    newSession.click();
+    expect(events).toEqual(["resume", "restart"]);
+  });
+
   it("shows the end notice when a resumed session ends after the failure window", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const pane = openPane(1, recorder().handlers);
@@ -722,6 +735,18 @@ describe("TabPane input", () => {
     terminalOf(second).dataListener("ls");
     await settle();
     expect(calls("pty_write")).toEqual([{ id: 2, data: "ls" }]);
+  });
+
+  it("tells the page about every input it sends", async () => {
+    const { handlers } = recorder();
+    const inputs: string[] = [];
+    const pane = openPane(1, { ...handlers, onInput: () => inputs.push("input") });
+    await pane.start("new", FOLDER);
+    for (const data of ["a", "\r", "\x03"]) {
+      terminalOf(pane).dataListener(data);
+      await settle();
+    }
+    expect(inputs).toEqual(["input", "input", "input"]);
   });
 
   it("tells the page about input that may answer or interrupt, and still sends it", async () => {
