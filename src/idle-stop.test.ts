@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { IdleClock, isIdle } from "./idle-stop";
-import type { SessionActivity } from "./session-activity";
+import { ActivityStore, type ReportedState, type SessionActivity } from "./session-activity";
+import type { TabState } from "./tabs";
 
 const MINUTE = 60_000;
 
@@ -135,6 +136,132 @@ describe("IdleClock", () => {
     vi.advanceTimersByTime(60 * MINUTE - 1);
     expect(stopped).toEqual([]);
     vi.advanceTimersByTime(1);
+    expect(stopped).toEqual([1]);
+  });
+});
+
+describe("the idle stop over reported activity", () => {
+  let stopped: number[];
+  let activities: ActivityStore;
+  let states: Map<number, TabState>;
+  let idle: IdleClock;
+
+  /** Gives the clock every idle tab, as the page does after each change. */
+  function watch(): void {
+    idle.sync([...states].flatMap(([tabId, state]) => (isIdle(state, activities.of(tabId)) ? [tabId] : [])));
+  }
+
+  /** Applies report `state` to tab `tabId` as the page does: restarts its time, then lists the idle tabs again. */
+  function report(tabId: number, state: ReportedState, seen = true): void {
+    idle.touch(tabId);
+    activities.report(tabId, state, seen);
+    watch();
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    stopped = [];
+    activities = new ActivityStore();
+    states = new Map([[1, "running"]]);
+    idle = new IdleClock(60, (tabId) => {
+      stopped.push(tabId);
+      states.set(tabId, "exited");
+      watch();
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("never stops a session whose turn ended with background tasks still running", () => {
+    report(1, "prompted");
+    report(1, "background");
+    vi.advanceTimersByTime(8 * 60 * MINUTE);
+    expect(stopped).toEqual([]);
+  });
+
+  it("starts the time once the background tasks settle on a tab in view", () => {
+    report(1, "prompted");
+    report(1, "background");
+    vi.advanceTimersByTime(3 * 60 * MINUTE);
+    report(1, "settled");
+    vi.advanceTimersByTime(60 * MINUTE - 1);
+    expect(stopped).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(stopped).toEqual([1]);
+  });
+
+  it("keeps waiting on background tasks through an interrupt", () => {
+    report(1, "prompted");
+    report(1, "background");
+    activities.interrupt(1);
+    watch();
+    vi.advanceTimersByTime(8 * 60 * MINUTE);
+    expect(stopped).toEqual([]);
+  });
+
+  it("never stops a session whose finished turn is not seen yet, and times it once seen", () => {
+    report(1, "prompted");
+    report(1, "done", false);
+    vi.advanceTimersByTime(8 * 60 * MINUTE);
+    expect(stopped).toEqual([]);
+    activities.see(1);
+    watch();
+    vi.advanceTimersByTime(60 * MINUTE);
+    expect(stopped).toEqual([1]);
+  });
+
+  it("never stops a session whose background tasks settled out of view until it is seen", () => {
+    report(1, "prompted");
+    report(1, "background");
+    report(1, "settled", false);
+    vi.advanceTimersByTime(8 * 60 * MINUTE);
+    expect(stopped).toEqual([]);
+  });
+
+  it.each<ReportedState>(["blocked", "failed", "working"])("never stops a session reported %s", (state) => {
+    report(1, state);
+    vi.advanceTimersByTime(8 * 60 * MINUTE);
+    expect(stopped).toEqual([]);
+  });
+
+  it("never stops a session still starting", () => {
+    states.set(1, "starting");
+    watch();
+    vi.advanceTimersByTime(8 * 60 * MINUTE);
+    expect(stopped).toEqual([]);
+  });
+
+  it("restarts the time on any report, even one that leaves the tab idle", () => {
+    report(1, "done");
+    vi.advanceTimersByTime(50 * MINUTE);
+    report(1, "settled");
+    vi.advanceTimersByTime(50 * MINUTE);
+    expect(stopped).toEqual([]);
+    vi.advanceTimersByTime(10 * MINUTE);
+    expect(stopped).toEqual([1]);
+  });
+
+  it("times each idle tab on its own", () => {
+    states.set(2, "running");
+    watch();
+    vi.advanceTimersByTime(30 * MINUTE);
+    report(2, "prompted");
+    vi.advanceTimersByTime(30 * MINUTE);
+    expect(stopped).toEqual([1]);
+    report(2, "done");
+    vi.advanceTimersByTime(60 * MINUTE);
+    expect(stopped).toEqual([1, 2]);
+  });
+
+  it("reports at once, when Never is set back to a delay already passed, a tab idle all along", () => {
+    watch();
+    idle.setDelay("never");
+    vi.advanceTimersByTime(2 * 60 * MINUTE);
+    expect(stopped).toEqual([]);
+    idle.setDelay(5);
+    vi.advanceTimersByTime(0);
     expect(stopped).toEqual([1]);
   });
 });
