@@ -132,11 +132,25 @@ pub fn state_for(event: &str, tool: Option<&str>, background_tasks: usize) -> Op
     }
 }
 
+/// The start of the `description` Claude Code gives the background task that
+/// follows the updates of an artifact the session published.
+const ARTIFACT_WATCH_PREFIX: &str = "live updates for artifact";
+
+/// Tells whether `task`, one entry of a notice's `background_tasks`, is an
+/// artifact watch: a task whose `description` is a string starting with
+/// [`ARTIFACT_WATCH_PREFIX`]. Any other entry is a real background task.
+fn is_artifact_watch(task: &serde_json::Value) -> bool {
+    task.get("description")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|description| description.starts_with(ARTIFACT_WATCH_PREFIX))
+}
+
 /// Builds the line the hook sends for one notice: `input` is the JSON Claude
 /// Code sends on the hook's standard input, `tab_var` the value of
 /// [`TAB_ID_VAR`]. The line is a [`StateMessage`] in JSON, then `\n`; its
 /// `agent` is the input's `agent_id`, absent when the input has none. A
-/// `background_tasks` that is absent or not an array counts as empty.
+/// `background_tasks` that is absent or not an array counts as empty, and its
+/// artifact watches (see [`is_artifact_watch`]) are not counted.
 ///
 /// `None` when `input` is not JSON, has no `hook_event_name`, names an event
 /// [`state_for`] ignores, has an `agent_id` that is not an [`AgentId`], or
@@ -149,7 +163,7 @@ pub fn hook_message(input: &[u8], tab_var: Option<&OsStr>) -> Option<Vec<u8>> {
     let background_tasks = notice
         .get("background_tasks")
         .and_then(serde_json::Value::as_array)
-        .map_or(0, Vec::len);
+        .map_or(0, |tasks| tasks.iter().filter(|task| !is_artifact_watch(task)).count());
     let state = state_for(event, tool, background_tasks)?;
     let agent = match notice.get("agent_id") {
         None => None,
@@ -385,6 +399,68 @@ mod tests {
         assert_eq!(send(notice("SubagentStop", None)), line("settled"));
         assert_eq!(send(tasks_notice("SubagentStop", task.clone())), None);
         assert_eq!(send(tasks_notice("StopFailure", task)), line("failed"));
+    }
+
+    /// Builds the background task Claude Code arms to follow a published artifact.
+    fn artifact_watch(id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "description": format!("live updates for artifact https://claude.ai/code/artifact/{id} (auto-armed on publish)"),
+            "id": id,
+            "status": "running",
+            "type": "monitor",
+        })
+    }
+
+    #[test]
+    fn a_stop_with_only_artifact_watches_is_done() {
+        let send = |input: Vec<u8>| hook_message(&input, Some(OsStr::new("3")));
+        let line = |state: &str| Some(format!("{{\"tab\":3,\"state\":\"{state}\"}}\n").into_bytes());
+        let one = serde_json::json!([artifact_watch("a1")]);
+        let two = serde_json::json!([artifact_watch("a1"), artifact_watch("a2")]);
+        assert_eq!(send(tasks_notice("Stop", one)), line("done"));
+        assert_eq!(send(tasks_notice("Stop", two)), line("done"));
+    }
+
+    #[test]
+    fn a_subagent_stop_with_only_artifact_watches_is_settled() {
+        let send = |input: Vec<u8>| hook_message(&input, Some(OsStr::new("3")));
+        let line = |state: &str| Some(format!("{{\"tab\":3,\"state\":\"{state}\"}}\n").into_bytes());
+        let one = serde_json::json!([artifact_watch("a1")]);
+        let two = serde_json::json!([artifact_watch("a1"), artifact_watch("a2")]);
+        assert_eq!(send(tasks_notice("SubagentStop", one)), line("settled"));
+        assert_eq!(send(tasks_notice("SubagentStop", two)), line("settled"));
+    }
+
+    #[test]
+    fn an_artifact_watch_beside_another_task_stays_in_background() {
+        let send = |input: Vec<u8>| hook_message(&input, Some(OsStr::new("3")));
+        let line = |state: &str| Some(format!("{{\"tab\":3,\"state\":\"{state}\"}}\n").into_bytes());
+        let others = [
+            serde_json::json!({ "id": "b1", "type": "shell", "status": "running", "command": "pnpm dev" }),
+            serde_json::json!({ "id": "m1", "type": "monitor", "status": "running", "description": "watch build log" }),
+            serde_json::json!({ "id": "s1", "type": "subagent", "status": "running", "description": "explore the repo" }),
+        ];
+        for other in others {
+            let tasks = serde_json::json!([artifact_watch("a1"), other.clone()]);
+            assert_eq!(send(tasks_notice("Stop", tasks.clone())), line("background"), "{other}");
+            assert_eq!(send(tasks_notice("SubagentStop", tasks)), None, "{other}");
+        }
+    }
+
+    #[test]
+    fn a_monitor_without_a_text_description_counts_as_a_task() {
+        let send = |input: Vec<u8>| hook_message(&input, Some(OsStr::new("3")));
+        let line = |state: &str| Some(format!("{{\"tab\":3,\"state\":\"{state}\"}}\n").into_bytes());
+        let monitors = [
+            serde_json::json!({ "id": "m1", "type": "monitor", "status": "running" }),
+            serde_json::json!({ "id": "m1", "type": "monitor", "status": "running", "description": 3 }),
+            serde_json::json!({ "id": "m1", "type": "monitor", "status": "running", "description": null }),
+            serde_json::json!({ "id": "m1", "type": "monitor", "status": "running", "description": ["live updates for artifact"] }),
+        ];
+        for monitor in monitors {
+            let tasks = serde_json::json!([monitor.clone()]);
+            assert_eq!(send(tasks_notice("Stop", tasks)), line("background"), "{monitor}");
+        }
     }
 
     #[test]

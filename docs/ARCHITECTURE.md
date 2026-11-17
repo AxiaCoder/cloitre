@@ -264,7 +264,7 @@ Each tab keeps one Claude Code session id, the conversation `"resume"` reopens. 
 
 The app learns live what each tab's session is doing through Claude Code hooks, and tells the webview. Rust only carries the state; the webview decides what to show.
 
-- **Hook events**: `hooks.json` (see [Sessions](#sessions)) runs `"<exe>" state-hook` on these events. The hook reads `hook_event_name` from the JSON on its standard input, `tool_name` for `PreToolUse`, and the number of entries of `background_tasks` (the session's background tasks still in flight) for `Stop` and `SubagentStop`; a `background_tasks` that is absent or not an array counts as empty:
+- **Hook events**: `hooks.json` (see [Sessions](#sessions)) runs `"<exe>" state-hook` on these events. The hook reads `hook_event_name` from the JSON on its standard input, `tool_name` for `PreToolUse`, and the number of entries of `background_tasks` (the session's background tasks still in flight) for `Stop` and `SubagentStop`; a `background_tasks` that is absent or not an array counts as empty, and an artifact watch (an entry whose `description` starts with `live updates for artifact`, armed by Claude Code when the session publishes an artifact) is not counted:
 
   | Event | State |
   |---|---|
