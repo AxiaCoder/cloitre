@@ -70,6 +70,8 @@ export interface TabPaneHandlers {
   onAnswer(): void;
   /** The user sent input that interrupts the session (see {@link isInterruptInput}). */
   onInterrupt(): void;
+  /** The user sent input to the session: typed, pasted or dropped. */
+  onInput(): void;
   /** The session set the terminal title to `title`, as received, control characters included. */
   onTitle(title: string): void;
 }
@@ -77,13 +79,18 @@ export interface TabPaneHandlers {
 /**
  * Why the start notice offers Resume and New session: `"resume"` for a
  * restored tab, `{ failedWith }` after a resume that ended with exit code
- * `failedWith` within the failure window (see {@link isFailedResume}).
+ * `failedWith` within the failure window (see {@link isFailedResume}),
+ * `{ idleFor }` after the session was stopped for `idleFor` minutes without
+ * activity.
  */
-export type StartOffer = "resume" | { readonly failedWith: number };
+export type StartOffer = "resume" | { readonly failedWith: number } | { readonly idleFor: number };
 
 /** Returns the start notice text for `offer`. */
 function offerText(offer: StartOffer): string {
-  return offer === "resume" ? texts.resumeOffer : messages.resumeFailed(offer.failedWith);
+  if (offer === "resume") {
+    return texts.resumeOffer;
+  }
+  return "idleFor" in offer ? messages.idleStopped(offer.idleFor) : messages.resumeFailed(offer.failedWith);
 }
 
 /** Returns a new `<button>` of `className` showing `text`, that calls `onClick`. */
@@ -147,6 +154,7 @@ export class TabPane extends Pane {
     this.container.setAttribute(TAB_ATTRIBUTE, String(tabId));
     const terminal = this.view.terminal;
     terminal.onData((data) => {
+      handlers.onInput();
       if (isAnswerInput(data)) {
         handlers.onAnswer();
       }
