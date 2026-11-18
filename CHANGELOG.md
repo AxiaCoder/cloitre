@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.0](https://github.com/AxiaCoder/cloitre/compare/v0.7.0...v0.8.0) (2026-11-18)
+
+
+### Features
+
+* **tabs:** a session left idle stops after a set delay ([#92](https://github.com/AxiaCoder/cloitre/issues/92)) ([0cc4e9f](https://github.com/AxiaCoder/cloitre/commit/0cc4e9fe995be897afb4a61b05de728049b12020))
+
+
+### Bug Fixes
+
+* **tabs:** a drop left the file explorer in the foreground ([#95](https://github.com/AxiaCoder/cloitre/issues/95)) ([1d308e4](https://github.com/AxiaCoder/cloitre/commit/1d308e4f82f11809ae13ce0356f5934bcd9d8ec0))
+* **tabs:** closing a tab while claude was starting turned off its fullscreen renderer ([#96](https://github.com/AxiaCoder/cloitre/issues/96)) ([231ace4](https://github.com/AxiaCoder/cloitre/commit/231ace406de6158845eba4c35ee2d390f7833222))
+
 ## [0.7.0](https://github.com/AxiaCoder/cloitre/compare/v0.6.0...v0.7.0) (2026-11-17)
 
 
