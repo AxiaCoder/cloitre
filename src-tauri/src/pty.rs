@@ -295,6 +295,10 @@ impl PtyRegistry {
     /// Unregisters and stops every registered session, each as [`PtyRegistry::kill`]
     /// does. Called when the app exits and when the page reloads.
     ///
+    /// A process still within its start grace is stopped by a thread that dies
+    /// with the app: when the app exits, the caller must stop it otherwise; on
+    /// Windows its job does, at once.
+    ///
     /// A session still starting when this runs is refused and stopped by
     /// [`PtyRegistry::spawn`] instead.
     pub fn kill_all(&self) {

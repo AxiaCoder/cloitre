@@ -72,7 +72,7 @@ The session is released and its recording closed at once, and the call returns a
 - **Returns**: nothing.
 - **Refuses**: an unknown id.
 
-When the app exits (see [Closing the window](#closing-the-window)), and whenever the page starts loading (a reload of the webview), every session still registered is stopped, with the same 20-second spare after its launch, and every recording closed. On Windows, the processes of every session are also stopped when the app ends abruptly.
+When the app exits (see [Closing the window](#closing-the-window)), and whenever the page starts loading (a reload of the webview), every session still registered is released and every recording closed. On a reload, each process gets the same 20-second spare after its launch. When the app exits, the processes end with it: on Windows, the app's exit stops the processes of every session at once, including one launched less than 20 seconds ago, and also when the app ends abruptly.
 
 ### `recording_enabled`
 
@@ -313,7 +313,7 @@ A release build looks for a newer version once, at startup, through the updater 
 - **Where**: `plugins.updater.endpoints` in `tauri.conf.json` names `https://github.com/AxiaCoder/cloitre/releases/latest/download/latest.json`, the `latest.json` of the latest published release. A draft is not seen.
 - **Signature**: every installer is signed with the maintainer's key at release time (see `docs/RELEASING.md`); the public key is `plugins.updater.pubkey` in `tauri.conf.json`. Only the release build makes the signed update files: `release.yml` merges `src-tauri/tauri.release.conf.json`, which sets `bundle.createUpdaterArtifacts`, so a local build needs no private key. The plugin refuses a file whose signature is missing or does not match, and nothing is installed.
 - **Consent**: the startup check downloads nothing. A newer version shows a notice in the rail; a failed check shows nothing. Every install attempt, Try again included, asks first, saying how many sessions run at that moment and will stop; Cancel changes nothing.
-- **Order**: the update downloads while the sessions keep running. Then the webview stops every session through `pty_kill`, and only then asks the plugin to install. On Windows the plugin starts the NSIS installer and exits the app without asking the window to close, so the confirmation of [Closing the window](#closing-the-window) is not shown; the installer starts the app again. The tabs come back, each offering `"resume"` or `"new"`.
+- **Order**: the update downloads while the sessions keep running. Then the webview stops every session through `pty_kill`, and only then asks the plugin to install. A session launched less than 20 seconds before keeps running until the app exits for the install, which stops it. On Windows the plugin starts the NSIS installer and exits the app without asking the window to close, so the confirmation of [Closing the window](#closing-the-window) is not shown; the installer starts the app again. The tabs come back, each offering `"resume"` or `"new"`.
 - **Failure**: a download or a signature that fails leaves the sessions running and shows why, with Try again. An installer that fails to start comes after the sessions were stopped: the tabs that ran one show as ended, each offering `"resume"` or `"new"`.
 
 ## Recordings
