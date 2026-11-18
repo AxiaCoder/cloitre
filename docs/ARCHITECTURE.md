@@ -43,7 +43,7 @@ Starts `claude` for a tab, in its project's folder, in a new pseudo-terminal.
   An app started from the desktop may have a `PATH` without the folder of `claude`; the install locations cover that case. A `.cmd` is started directly: Windows runs it through `cmd.exe`, which parses the whole command line. No argument may enter that command line unless Rust has checked its exact form first.
  The working directory is the canonical folder of the tab's project. `TERM=xterm-256color`, `COLORTERM=truecolor` and `CLOITRE_TAB_ID=<tabId>` (in decimal, built by Rust from the integer `tabId`) are added to the inherited environment. The webview cannot pass any folder, argument or environment variable.
 - **Records** (development build only): the session to a new file of the recordings folder, starting with its size, then deletes the oldest recording files beyond the kept count (see [Recordings](#recordings)). A file that cannot be created leaves the session unrecorded; the session starts anyway. A file created for a session that then fails to start is deleted.
-- **Refuses**: a size of zero columns or rows; a `tabId` of 0 ("the tab id must be at least 1"); a tab id no project holds ("no tab with id <id>"); a project whose folder no longer exists ("the folder of project <name> no longer exists: choose its new location"); a project folder that no longer resolves to a project, compared by canonical path ("the folder is not in the project list"); in mode `"new"`, a read-only project list or a failed save; `claude` found neither on the `PATH` nor at the install locations (the message lists every location tried); a pseudo-terminal that cannot be opened; a start overtaken by a page reload: when every session is stopped at any point after `pty_spawn` starts running (folder check and `claude` lookup included), its process is stopped too and the call fails with "the session was stopped because the page reloaded while it was starting".
+- **Refuses**: a size of zero columns or rows; a `tabId` of 0 ("the tab id must be at least 1"); a tab id no project holds ("no tab with id <id>"); a project whose folder no longer exists ("the folder of project <name> no longer exists: choose its new location"); a project folder that no longer resolves to a project, compared by canonical path ("the folder is not in the project list"); in mode `"new"`, a read-only project list or a failed save; `claude` found neither on the `PATH` nor at the install locations (the message lists every location tried); a pseudo-terminal that cannot be opened; a start overtaken by a page reload: when every session is stopped at any point after `pty_spawn` starts running (folder check and `claude` lookup included), its process is stopped too, with the same 20-second spare after its launch as `pty_kill`, and the call fails with "the session was stopped because the page reloaded while it was starting".
 
 ### `pty_write`
 
@@ -66,11 +66,13 @@ Changes the size of a session's terminal.
 
 Stops a session's process, closes its pseudo-terminal and closes its recording. On Windows, the processes the session started are stopped too, even those with their own console. Also used to release a session whose process has already exited.
 
+The session is released and its recording closed at once, and the call returns at once. A process launched less than 20 seconds ago keeps running until those 20 seconds have passed, then is stopped: `claude` counts a stop during its fullscreen start, which completes about 15 seconds after the launch, as a failed start, and falls back to its classic renderer on the next launch on the machine.
+
 - **Arguments**: `id` (integer).
 - **Returns**: nothing.
 - **Refuses**: an unknown id.
 
-When the app exits (see [Closing the window](#closing-the-window)), and whenever the page starts loading (a reload of the webview), every session still registered is stopped and every recording closed. On Windows, the processes of every session are also stopped when the app ends abruptly.
+When the app exits (see [Closing the window](#closing-the-window)), and whenever the page starts loading (a reload of the webview), every session still registered is stopped, with the same 20-second spare after its launch, and every recording closed. On Windows, the processes of every session are also stopped when the app ends abruptly.
 
 ### `recording_enabled`
 

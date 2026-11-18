@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
@@ -19,11 +19,17 @@ const READ_BUFFER_SIZE: usize = 8192;
 /// remaining output to be read.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// How long after its launch a session's process is spared from being stopped:
+/// `claude` counts a stop during its fullscreen start as a failed start, and
+/// that start completes about 15 seconds after the launch.
+const START_GRACE: Duration = Duration::from_secs(20);
+
 /// The controlling side of a pseudo-terminal, shared between the registry and
 /// the thread that closes it when the process ends. `None` once closed.
 type SharedMaster = Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>;
 
-/// One running session: the controlling side of its pseudo-terminal and a handle to stop it.
+/// One running session: the controlling side of its pseudo-terminal, a handle
+/// to stop it and the time its process was launched.
 ///
 /// On Windows, `job` holds the process and everything it starts; `None` when
 /// the process could not be put in a job.
@@ -33,6 +39,7 @@ struct PtySession {
     killer: Box<dyn ChildKiller + Send + Sync>,
     #[cfg(windows)]
     job: Option<windows_job::Job>,
+    launched: Instant,
 }
 
 impl PtySession {
@@ -45,17 +52,45 @@ impl PtySession {
         }
         let _ = self.killer.kill();
     }
+
+    /// Tells whether the session's process has exited: its pseudo-terminal is closed.
+    fn has_exited(&self) -> bool {
+        lock(&self.master).is_none()
+    }
+
+    /// Stops the session once `grace` has passed since its launch: at once when
+    /// it has, or when the process has already exited; otherwise from a thread
+    /// that waits for the time left, so the caller never waits.
+    fn stop_after_grace(mut self, grace: Duration) {
+        let left = grace.saturating_sub(self.launched.elapsed());
+        if left.is_zero() || self.has_exited() {
+            self.stop();
+            return;
+        }
+        thread::spawn(move || {
+            thread::sleep(left);
+            self.stop();
+        });
+    }
 }
 
 /// The running sessions, by id. Ids start at 1 and are never reused.
 ///
 /// The epoch counts the calls to [`PtyRegistry::kill_all`]; it only changes
-/// while `sessions` is locked.
-#[derive(Default)]
+/// while `sessions` is locked. A session is never stopped before `start_grace`
+/// has passed since its launch.
 pub struct PtyRegistry {
     next_id: AtomicU32,
     epoch: AtomicU64,
     sessions: Mutex<HashMap<u32, PtySession>>,
+    start_grace: Duration,
+}
+
+impl Default for PtyRegistry {
+    /// An empty registry that spares each session for [`START_GRACE`] after its launch.
+    fn default() -> Self {
+        Self::with_start_grace(START_GRACE)
+    }
 }
 
 /// Builds a terminal size from columns and rows.
@@ -87,6 +122,16 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl PtyRegistry {
+    /// An empty registry that spares each session for `start_grace` after its launch.
+    pub fn with_start_grace(start_grace: Duration) -> Self {
+        Self {
+            next_id: AtomicU32::new(0),
+            epoch: AtomicU64::new(0),
+            sessions: Mutex::new(HashMap::new()),
+            start_grace,
+        }
+    }
+
     /// Returns the current epoch, to pass to [`PtyRegistry::spawn`].
     ///
     /// The caller reads it as soon as it receives the request to start a session,
@@ -126,6 +171,7 @@ impl PtyRegistry {
         let mut reader = pair.master.try_clone_reader().map_err(pty_error)?;
         let writer = pair.master.take_writer().map_err(pty_error)?;
         let mut child = pair.slave.spawn_command(command).map_err(pty_error)?;
+        let launched = Instant::now();
         drop(pair.slave);
         let killer = child.clone_killer();
         #[cfg(windows)]
@@ -169,9 +215,10 @@ impl PtyRegistry {
             killer,
             #[cfg(windows)]
             job,
+            launched,
         };
-        self.insert(epoch, session).map_err(|mut refused| {
-            refused.stop();
+        self.insert(epoch, session).map_err(|refused| {
+            refused.stop_after_grace(self.start_grace);
             AppError::SpawnCancelled
         })
     }
@@ -222,16 +269,18 @@ impl PtyRegistry {
     /// Stops the process of session `id`, and on Windows every process it
     /// started, and closes its pseudo-terminal.
     ///
-    /// The session is unregistered even when the process had already exited,
-    /// which makes the reader thread end.
+    /// The session is unregistered at once, even when the process had already
+    /// exited. A process launched less than the start grace ago keeps running,
+    /// with its output still read, until that grace has passed; this call does
+    /// not wait for it.
     ///
     /// # Errors
     /// [`AppError::UnknownPty`].
     pub fn kill(&self, id: u32) -> Result<(), AppError> {
-        let mut session = lock(&self.sessions)
+        let session = lock(&self.sessions)
             .remove(&id)
             .ok_or(AppError::UnknownPty(id))?;
-        session.stop();
+        session.stop_after_grace(self.start_grace);
         Ok(())
     }
 
@@ -239,11 +288,12 @@ impl PtyRegistry {
     pub fn running_count(&self) -> usize {
         lock(&self.sessions)
             .values()
-            .filter(|session| lock(&session.master).is_some())
+            .filter(|session| !session.has_exited())
             .count()
     }
 
-    /// Stops every registered session. Called when the app exits and when the page reloads.
+    /// Unregisters and stops every registered session, each as [`PtyRegistry::kill`]
+    /// does. Called when the app exits and when the page reloads.
     ///
     /// A session still starting when this runs is refused and stopped by
     /// [`PtyRegistry::spawn`] instead.
@@ -253,8 +303,8 @@ impl PtyRegistry {
             self.epoch.fetch_add(1, Ordering::SeqCst);
             registered.drain().map(|(_, session)| session).collect()
         };
-        for mut session in sessions {
-            session.stop();
+        for session in sessions {
+            session.stop_after_grace(self.start_grace);
         }
     }
 }
@@ -264,6 +314,11 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
+
+    /// A registry that stops sessions at once, however recently they were launched.
+    fn immediate() -> PtyRegistry {
+        PtyRegistry::with_start_grace(Duration::ZERO)
+    }
 
     #[test]
     fn size_refuses_zero_columns_or_rows() {
@@ -279,26 +334,26 @@ mod tests {
 
     #[test]
     fn write_to_unknown_id_is_refused() {
-        let registry = PtyRegistry::default();
+        let registry = immediate();
         assert_eq!(registry.write(1, b"x"), Err(AppError::UnknownPty(1)));
     }
 
     #[test]
     fn resize_of_unknown_id_is_refused() {
-        let registry = PtyRegistry::default();
+        let registry = immediate();
         let size = pty_size(80, 24).unwrap();
         assert_eq!(registry.resize(3, size), Err(AppError::UnknownPty(3)));
     }
 
     #[test]
     fn kill_of_unknown_id_is_refused() {
-        let registry = PtyRegistry::default();
+        let registry = immediate();
         assert_eq!(registry.kill(2), Err(AppError::UnknownPty(2)));
     }
 
     #[test]
     fn kill_all_on_empty_registry_does_nothing() {
-        PtyRegistry::default().kill_all();
+        immediate().kill_all();
     }
 
     /// How long a test waits for a short-lived process to print or exit.
@@ -363,7 +418,7 @@ mod tests {
 
     #[test]
     fn spawn_forwards_output_and_exit_code() {
-        let registry = PtyRegistry::default();
+        let registry = immediate();
         let (output_tx, output_rx) = mpsc::channel();
         let (exit_tx, exit_rx) = mpsc::channel();
         let id = registry
@@ -394,7 +449,7 @@ mod tests {
     fn exit_is_reported_after_the_last_output() {
         let marker = "cloitre-last-words";
         for _ in 0..10 {
-            let registry = PtyRegistry::default();
+            let registry = immediate();
             let (output_tx, events) = mpsc::channel();
             let exit_tx = output_tx.clone();
             let id = registry
@@ -436,7 +491,7 @@ mod tests {
 
     #[test]
     fn only_sessions_whose_process_runs_are_counted() {
-        let registry = PtyRegistry::default();
+        let registry = immediate();
         assert_eq!(registry.running_count(), 0);
         let size = pty_size(80, 24).unwrap();
         let waiting = registry
@@ -472,7 +527,7 @@ mod tests {
 
     #[test]
     fn resize_after_exit_is_accepted() {
-        let registry = PtyRegistry::default();
+        let registry = immediate();
         let (output_tx, output_rx) = mpsc::channel();
         let (exit_tx, exit_rx) = mpsc::channel();
         let id = registry
@@ -496,7 +551,7 @@ mod tests {
 
     #[test]
     fn write_after_exit_is_accepted() {
-        let registry = PtyRegistry::default();
+        let registry = immediate();
         let (output_tx, output_rx) = mpsc::channel();
         let (exit_tx, exit_rx) = mpsc::channel();
         let id = registry
@@ -520,7 +575,7 @@ mod tests {
 
     #[test]
     fn live_session_accepts_write_and_resize_until_killed() {
-        let registry = PtyRegistry::default();
+        let registry = immediate();
         let id = registry
             .spawn(
                 registry.epoch(),
@@ -539,7 +594,7 @@ mod tests {
 
     #[test]
     fn spawn_overtaken_by_kill_all_is_refused_and_stopped() {
-        let registry = PtyRegistry::default();
+        let registry = immediate();
         let started_in = registry.epoch();
         registry.kill_all();
         let (exit_tx, exit_rx) = mpsc::channel();
@@ -569,7 +624,7 @@ mod tests {
         )
         .unwrap();
         let session = crate::session::SessionId::generate();
-        let registry = PtyRegistry::default();
+        let registry = immediate();
         let (output_tx, output_rx) = mpsc::channel();
         let (exit_tx, exit_rx) = mpsc::channel();
         let id = registry
@@ -700,7 +755,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn kill_stops_a_process_the_session_started_in_its_own_console() {
-        let registry = PtyRegistry::default();
+        let registry = immediate();
         let (id, child) = spawn_session_with_detached_child(&registry);
 
         assert_eq!(registry.kill(id), Ok(()));
@@ -715,7 +770,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn kill_all_stops_the_processes_every_session_started() {
-        let registry = PtyRegistry::default();
+        let registry = immediate();
         let (_, first) = spawn_session_with_detached_child(&registry);
         let (_, second) = spawn_session_with_detached_child(&registry);
 
@@ -732,7 +787,7 @@ mod tests {
 
     #[test]
     fn session_ids_are_distinct_and_kill_all_releases_them() {
-        let registry = PtyRegistry::default();
+        let registry = immediate();
         let size = pty_size(80, 24).unwrap();
         let first = registry
             .spawn(registry.epoch(), wait_quietly(10), size, |_| {}, |_| {})
@@ -748,7 +803,7 @@ mod tests {
 
     #[test]
     fn spawn_after_kill_all_is_registered() {
-        let registry = PtyRegistry::default();
+        let registry = immediate();
         registry.kill_all();
         let id = registry
             .spawn(
@@ -760,5 +815,103 @@ mod tests {
             )
             .unwrap();
         assert_eq!(registry.kill(id), Ok(()));
+    }
+
+    /// Start grace of the tests that check the delayed stop.
+    const TEST_GRACE: Duration = Duration::from_secs(3);
+
+    /// Spawns in `registry` a session that waits quietly for 30 seconds, and
+    /// returns its id with the receiver of its exit notice.
+    fn spawn_long_session(
+        registry: &PtyRegistry,
+        epoch: u64,
+    ) -> (Result<u32, AppError>, mpsc::Receiver<u32>) {
+        let (exit_tx, exit_rx) = mpsc::channel();
+        let spawned = registry.spawn(
+            epoch,
+            wait_quietly(30),
+            pty_size(80, 24).unwrap(),
+            |_| {},
+            move |code| {
+                let _ = exit_tx.send(code);
+            },
+        );
+        (spawned, exit_rx)
+    }
+
+    /// Asserts that the process behind `exit_rx`, launched at `launched`, is
+    /// still running shortly after a stop was requested, then ends once the
+    /// start grace has passed.
+    fn assert_stopped_after_grace(launched: Instant, exit_rx: &mpsc::Receiver<u32>) {
+        assert!(
+            exit_rx.recv_timeout(Duration::from_millis(500)).is_err(),
+            "the process was stopped during its start"
+        );
+        assert!(
+            exit_rx.recv_timeout(PROCESS_TIMEOUT).is_ok(),
+            "the process was never stopped"
+        );
+        assert!(launched.elapsed() >= TEST_GRACE);
+    }
+
+    #[test]
+    fn kill_during_the_start_grace_unregisters_at_once_and_stops_after_it() {
+        let registry = PtyRegistry::with_start_grace(TEST_GRACE);
+        let launched = Instant::now();
+        let (spawned, exit_rx) = spawn_long_session(&registry, registry.epoch());
+        let id = spawned.unwrap();
+
+        let asked = Instant::now();
+        assert_eq!(registry.kill(id), Ok(()));
+        assert!(
+            asked.elapsed() < Duration::from_secs(1),
+            "kill waited for the grace"
+        );
+        assert_eq!(registry.write(id, b"x"), Err(AppError::UnknownPty(id)));
+
+        assert_stopped_after_grace(launched, &exit_rx);
+    }
+
+    #[test]
+    fn kill_all_during_the_start_grace_stops_after_it() {
+        let registry = PtyRegistry::with_start_grace(TEST_GRACE);
+        let launched = Instant::now();
+        let (spawned, exit_rx) = spawn_long_session(&registry, registry.epoch());
+        let id = spawned.unwrap();
+
+        registry.kill_all();
+        assert_eq!(registry.kill(id), Err(AppError::UnknownPty(id)));
+
+        assert_stopped_after_grace(launched, &exit_rx);
+    }
+
+    #[test]
+    fn spawn_overtaken_by_kill_all_stops_its_process_after_the_start_grace() {
+        let registry = PtyRegistry::with_start_grace(TEST_GRACE);
+        let started_in = registry.epoch();
+        registry.kill_all();
+        let launched = Instant::now();
+        let (spawned, exit_rx) = spawn_long_session(&registry, started_in);
+        assert_eq!(spawned, Err(AppError::SpawnCancelled));
+
+        assert_stopped_after_grace(launched, &exit_rx);
+    }
+
+    #[test]
+    fn kill_after_the_start_grace_stops_at_once() {
+        let registry = PtyRegistry::with_start_grace(Duration::from_millis(500));
+        let (spawned, exit_rx) = spawn_long_session(&registry, registry.epoch());
+        let id = spawned.unwrap();
+        thread::sleep(Duration::from_secs(1));
+
+        registry.kill(id).unwrap();
+
+        assert!(exit_rx.recv_timeout(Duration::from_secs(5)).is_ok());
+    }
+
+    #[test]
+    fn default_registry_spares_a_session_for_the_whole_start() {
+        assert_eq!(PtyRegistry::default().start_grace, START_GRACE);
+        assert!(START_GRACE >= Duration::from_secs(15));
     }
 }
