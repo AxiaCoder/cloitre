@@ -10,7 +10,7 @@ mod session;
 mod state;
 
 use tauri::webview::PageLoadEvent;
-use tauri::{AppHandle, Manager, RunEvent, Runtime, Window, WindowEvent};
+use tauri::{AppHandle, DragDropEvent, Manager, RunEvent, Runtime, Window, WindowEvent};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 use crate::commands::PickerGate;
@@ -77,6 +77,13 @@ fn focus_main_window<R: Runtime>(app: &AppHandle<R>) {
 /// page starts loading, false when it has finished.
 fn stops_sessions(event: PageLoadEvent) -> bool {
     event == PageLoadEvent::Started
+}
+
+/// Tells whether a window `event` must bring the main window to the front:
+/// true when files are dropped on it, false for every other event, including
+/// a drag that enters, moves over or leaves the window without dropping.
+fn brings_window_forward(event: &WindowEvent) -> bool {
+    matches!(event, WindowEvent::DragDrop(DragDropEvent::Drop { .. }))
 }
 
 /// Gives `config` the identity of this build: its [`session::IDENTIFIER`],
@@ -155,6 +162,9 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 confirm_close(window, api);
+            }
+            if brings_window_forward(event) {
+                focus_main_window(window.app_handle());
             }
         })
         .on_page_load(|webview, payload| {
@@ -288,6 +298,48 @@ mod tests {
     #[test]
     fn page_load_finish_keeps_sessions() {
         assert!(!stops_sessions(PageLoadEvent::Finished));
+    }
+
+    /// Gives the paths of one file dragged from the system file explorer.
+    fn dropped_paths() -> Vec<std::path::PathBuf> {
+        vec![std::path::PathBuf::from("C:\\work\\notes.txt")]
+    }
+
+    #[test]
+    fn dropping_files_brings_the_window_forward() {
+        let event = WindowEvent::DragDrop(tauri::DragDropEvent::Drop {
+            paths: dropped_paths(),
+            position: tauri::PhysicalPosition::new(120.0, 80.0),
+        });
+        assert!(brings_window_forward(&event));
+    }
+
+    #[test]
+    fn a_drag_entering_the_window_does_not_bring_it_forward() {
+        let event = WindowEvent::DragDrop(tauri::DragDropEvent::Enter {
+            paths: dropped_paths(),
+            position: tauri::PhysicalPosition::new(120.0, 80.0),
+        });
+        assert!(!brings_window_forward(&event));
+    }
+
+    #[test]
+    fn a_drag_moving_over_the_window_does_not_bring_it_forward() {
+        let event = WindowEvent::DragDrop(tauri::DragDropEvent::Over {
+            position: tauri::PhysicalPosition::new(120.0, 80.0),
+        });
+        assert!(!brings_window_forward(&event));
+    }
+
+    #[test]
+    fn a_drag_leaving_the_window_does_not_bring_it_forward() {
+        let event = WindowEvent::DragDrop(tauri::DragDropEvent::Leave);
+        assert!(!brings_window_forward(&event));
+    }
+
+    #[test]
+    fn a_non_drag_event_does_not_bring_the_window_forward() {
+        assert!(!brings_window_forward(&WindowEvent::Focused(true)));
     }
 
     #[test]
