@@ -49,6 +49,9 @@ const xterm = vi.hoisted(() => {
       if (addon instanceof FakeWebglAddon && state.webglFails) {
         throw new Error("WebGL2 not supported");
       }
+      if (addon instanceof FakeWebglAddon) {
+        state.events.push("webgl");
+      }
       this.loaded.push(addon);
     }
     /** Does nothing: there is no screen to attach to. */
@@ -85,6 +88,7 @@ vi.mock("@xterm/addon-webgl", () => ({ WebglAddon: xterm.FakeWebglAddon }));
 
 import {
   TerminalView,
+  applyRenderer,
   isRenderer,
   isUnicodeVersion,
   loadTerminalFonts,
@@ -193,7 +197,7 @@ describe("TerminalView visibility", () => {
   it("does not fit while hidden, even when asked or resized", () => {
     const { view, terminal } = openView();
     const fit = fitAddonOf(terminal);
-    view.setVisible(false);
+    view.hide();
     view.fit();
     observers[0]?.callback();
     view.clearAndFit();
@@ -203,8 +207,8 @@ describe("TerminalView visibility", () => {
   it("refits once shown again", () => {
     const { view, terminal } = openView();
     const fit = fitAddonOf(terminal);
-    view.setVisible(false);
-    view.setVisible(true);
+    view.hide();
+    view.show("dom", vi.fn());
     expect(fit.fits).toBe(1);
   });
 
@@ -212,15 +216,15 @@ describe("TerminalView visibility", () => {
     const { view, terminal } = openView();
     const fit = fitAddonOf(terminal);
     view.autoFit = false;
-    view.setVisible(false);
-    view.setVisible(true);
+    view.hide();
+    view.show("dom", vi.fn());
     expect(fit.fits).toBe(0);
   });
 
   it("drops WebGL for the DOM renderer when hidden", () => {
     const { view } = openView();
     view.setRenderer("webgl", vi.fn());
-    view.setVisible(false);
+    view.hide();
     expect(xterm.state.webglAddons[0]?.disposed).toBe(1);
     expect(view.setRenderer("webgl", vi.fn())).toBe("webgl");
     expect(xterm.state.webglAddons).toHaveLength(2);
@@ -231,6 +235,7 @@ describe("TerminalView.dispose", () => {
   it("stops observing its container, frees WebGL and disposes of the terminal", () => {
     const { view } = openView();
     view.setRenderer("webgl", vi.fn());
+    xterm.state.events.length = 0;
     view.dispose();
     expect(observers[0]?.disconnected).toBe(true);
     expect(xterm.state.webglAddons[0]?.disposed).toBe(1);
@@ -290,6 +295,147 @@ describe("TerminalView.setRenderer", () => {
     expect(addon.disposed).toBe(1);
     expect(view.setRenderer("webgl", vi.fn())).toBe("webgl");
     expect(xterm.state.webglAddons).toHaveLength(2);
+  });
+});
+
+describe("TerminalView.setRenderer, refitting the grid to the new renderer's cells", () => {
+  it("refits when switching to WebGL", () => {
+    const { view, terminal } = openView();
+    const fit = fitAddonOf(terminal);
+    view.setRenderer("webgl", vi.fn());
+    expect(fit.fits).toBe(1);
+  });
+
+  it("refits when switching back to DOM", () => {
+    const { view, terminal } = openView();
+    const fit = fitAddonOf(terminal);
+    view.setRenderer("webgl", vi.fn());
+    const fitsUnderWebgl = fit.fits;
+    view.setRenderer("dom", vi.fn());
+    expect(fit.fits).toBe(fitsUnderWebgl + 1);
+  });
+
+  it("refits when the WebGL context is lost and DOM takes over", () => {
+    const { view, terminal } = openView();
+    const fit = fitAddonOf(terminal);
+    view.setRenderer("webgl", vi.fn());
+    const fitsUnderWebgl = fit.fits;
+    xterm.state.webglAddons[0]?.loseContext?.();
+    expect(fit.fits).toBe(fitsUnderWebgl + 1);
+  });
+
+  it("leaves the grid alone while auto fit is off", () => {
+    const { view, terminal } = openView();
+    const fit = fitAddonOf(terminal);
+    view.autoFit = false;
+    view.setRenderer("webgl", vi.fn());
+    xterm.state.webglAddons[0]?.loseContext?.();
+    view.setRenderer("webgl", vi.fn());
+    view.setRenderer("dom", vi.fn());
+    expect(fit.fits).toBe(0);
+  });
+
+  it("does not fit while hidden", () => {
+    const { view, terminal } = openView();
+    const fit = fitAddonOf(terminal);
+    view.hide();
+    view.setRenderer("webgl", vi.fn());
+    xterm.state.webglAddons[0]?.loseContext?.();
+    view.setRenderer("webgl", vi.fn());
+    view.setRenderer("dom", vi.fn());
+    expect(fit.fits).toBe(0);
+  });
+});
+
+/** Opens a view, puts it on WebGL, hides it, and clears the fit count and event log. */
+function openHiddenWebglView() {
+  const opened = openView();
+  opened.view.setRenderer("webgl", vi.fn());
+  opened.view.hide();
+  const fit = fitAddonOf(opened.terminal);
+  fit.fits = 0;
+  xterm.state.events.length = 0;
+  return { ...opened, fit };
+}
+
+describe("TerminalView.show, fitting once to the renderer it shows", () => {
+  it("fits exactly once, after WebGL is loaded, when shown on WebGL", () => {
+    const { view, fit } = openHiddenWebglView();
+    expect(view.show("webgl", vi.fn())).toBe("webgl");
+    expect(fit.fits).toBe(1);
+    expect(xterm.state.events).toEqual(["webgl", "fit"]);
+  });
+
+  it("fits exactly once when shown on DOM", () => {
+    const { view, fit } = openHiddenWebglView();
+    expect(view.show("dom", vi.fn())).toBe("dom");
+    expect(fit.fits).toBe(1);
+    expect(xterm.state.webglAddons).toHaveLength(1);
+  });
+
+  it("returns dom and fits once on DOM when WebGL cannot start", () => {
+    const { view, fit } = openHiddenWebglView();
+    xterm.state.webglFails = true;
+    const onFallback = vi.fn();
+    expect(view.show("webgl", onFallback)).toBe("dom");
+    expect(fit.fits).toBe(1);
+    expect(onFallback).not.toHaveBeenCalled();
+  });
+
+  it("does not fit when auto fit is off", () => {
+    const { view, fit } = openHiddenWebglView();
+    view.autoFit = false;
+    view.show("webgl", vi.fn());
+    expect(fit.fits).toBe(0);
+  });
+
+  it("calls onFallback and refits on DOM when the WebGL context is lost later", () => {
+    const { view, fit } = openHiddenWebglView();
+    const onFallback = vi.fn();
+    view.show("webgl", onFallback);
+    xterm.state.webglAddons[1]?.loseContext?.();
+    expect(onFallback).toHaveBeenCalledOnce();
+    expect(fit.fits).toBe(2);
+  });
+
+  it("refits on a resize once shown", () => {
+    const { view, fit } = openHiddenWebglView();
+    view.show("webgl", vi.fn());
+    observers[0]?.callback();
+    expect(fit.fits).toBe(2);
+  });
+});
+
+describe("applyRenderer, showing a hidden view", () => {
+  it("shows the view on WebGL, fits it once and shows WebGL in the picker", () => {
+    const { view, fit } = openHiddenWebglView();
+    const picker = { value: "dom" };
+    const showStatus = vi.fn();
+    applyRenderer((renderer, onFallback) => view.show(renderer, onFallback), "webgl", picker, showStatus);
+    expect(picker.value).toBe("webgl");
+    expect(fit.fits).toBe(1);
+    expect(showStatus).not.toHaveBeenCalled();
+  });
+
+  it("sets the picker on DOM and says so when WebGL cannot start", () => {
+    const { view, fit } = openHiddenWebglView();
+    xterm.state.webglFails = true;
+    const picker = { value: "webgl" };
+    const showStatus = vi.fn();
+    applyRenderer((renderer, onFallback) => view.show(renderer, onFallback), "webgl", picker, showStatus);
+    expect(picker.value).toBe("dom");
+    expect(fit.fits).toBe(1);
+    expect(showStatus).toHaveBeenCalledWith("WebGL is not available, DOM renderer kept");
+  });
+
+  it("sets the picker back on DOM and says so when the WebGL context is lost later", () => {
+    const { view } = openHiddenWebglView();
+    const picker = { value: "dom" };
+    const showStatus = vi.fn();
+    applyRenderer((renderer, onFallback) => view.show(renderer, onFallback), "webgl", picker, showStatus);
+    xterm.state.webglAddons[1]?.loseContext?.();
+    expect(picker.value).toBe("dom");
+    expect(showStatus).toHaveBeenCalledWith("WebGL context lost, back to the DOM renderer");
   });
 });
 

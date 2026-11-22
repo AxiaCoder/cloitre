@@ -698,10 +698,19 @@ describe("TabPane, hidden and shown", () => {
     }
     expect(fakes.state.fits).toBe(fitsWhileShown);
     expect(calls("pty_resize")).toEqual([]);
-    pane.show();
+    pane.show("dom", () => undefined);
     await settle();
     expect(containerOf(pane).hidden).toBe(false);
     expect(calls("pty_resize")).toEqual([{ id: 1, cols: 140, rows: 50 }]);
+  });
+
+  it("is shown on the renderer it is asked for", async () => {
+    const pane = openPane(1, recorder().handlers);
+    await pane.start("new", FOLDER);
+    pane.hide();
+    expect(pane.show("webgl", () => undefined)).toBe("webgl");
+    pane.hide();
+    expect(pane.show("dom", () => undefined)).toBe("dom");
   });
 
   it("resizes its session when its container changes size while shown", async () => {

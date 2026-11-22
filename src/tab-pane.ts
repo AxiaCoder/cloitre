@@ -6,7 +6,7 @@ import { isFailedResume } from "./resume";
 import { SessionSlot, type TerminalSize } from "./session";
 import { isAnswerInput, isInterruptInput } from "./session-activity";
 import { messages, texts } from "./strings";
-import { TerminalView } from "./terminal-view";
+import { type Renderer, TerminalView } from "./terminal-view";
 
 /**
  * A terminal in a container of its own, for one tab. A hidden pane keeps
@@ -28,19 +28,19 @@ abstract class Pane {
   }
 
   /**
-   * Shows the pane and, unless a replay holds the grid, fits it to its container;
-   * a size that changed while hidden then reaches the session. The renderer
-   * stays the DOM one until the caller picks another.
+   * Shows the pane on `renderer` and, unless a replay holds the grid, fits it
+   * once to its container; a size that changed while hidden then reaches the
+   * session. Returns the renderer now in use, as {@link TerminalView.show} does.
    */
-  show(): void {
+  show(renderer: Renderer, onFallback: () => void): Renderer {
     this.container.hidden = false;
-    this.view.setVisible(true);
+    return this.view.show(renderer, onFallback);
   }
 
   /** Hides the pane and moves it to the DOM renderer; its terminal keeps writing what it receives. */
   hide(): void {
     this.container.hidden = true;
-    this.view.setVisible(false);
+    this.view.hide();
   }
 
   /** Disposes of the terminal and removes the container. */

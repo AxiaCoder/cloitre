@@ -152,17 +152,26 @@ export class TerminalView {
   }
 
   /**
-   * Tells the view whether its container is shown. Hiding it drops WebGL for
-   * the DOM renderer, freeing its context; the caller picks the renderer again
-   * once shown. Showing it refits the grid, unless auto fit is off.
+   * Tells the view its container is hidden and drops WebGL for the DOM
+   * renderer, freeing its context. The grid keeps its size until
+   * {@link TerminalView.show}.
    */
-  setVisible(visible: boolean): void {
-    this.visible = visible;
-    if (!visible) {
-      this.setRenderer("dom", () => undefined);
-    } else if (this.autoFit) {
-      this.fit();
-    }
+  hide(): void {
+    this.visible = false;
+    this.setRenderer("dom", () => undefined);
+  }
+
+  /**
+   * Shows the view on `renderer`, then fits the grid once to the cells of that
+   * renderer, unless auto fit is off. Returns the renderer now in use, as
+   * {@link TerminalView.setRenderer} does: `"dom"` when WebGL cannot start,
+   * without calling `onFallback`; a WebGL context lost later calls it.
+   */
+  show(renderer: Renderer, onFallback: () => void): Renderer {
+    const used = this.setRenderer(renderer, onFallback);
+    this.visible = true;
+    this.refit();
+    return used;
   }
 
   /**
@@ -171,6 +180,7 @@ export class TerminalView {
    */
   dispose(): void {
     this.resizeObserver.disconnect();
+    this.visible = false;
     this.setRenderer("dom", () => undefined);
     this.terminal.dispose();
   }
@@ -185,15 +195,27 @@ export class TerminalView {
     this.fit();
   }
 
+  /** Fits the grid to its container unless auto fit is off; see {@link TerminalView.fit}. */
+  private refit(): void {
+    if (this.autoFit) {
+      this.fit();
+    }
+  }
+
   /**
    * Switches the renderer and returns the one now in use: asking for WebGL
    * returns `"dom"` when the webview cannot create a WebGL context. A WebGL
    * context lost later falls back to the DOM renderer and calls `onFallback`.
+   * Each change of renderer refits the grid to the new cell size, unless auto
+   * fit is off or the view is hidden.
    */
   setRenderer(renderer: Renderer, onFallback: () => void): Renderer {
     if (renderer === "dom") {
-      this.webglAddon?.dispose();
-      this.webglAddon = undefined;
+      if (this.webglAddon) {
+        this.webglAddon.dispose();
+        this.webglAddon = undefined;
+        this.refit();
+      }
       return "dom";
     }
     if (this.webglAddon) {
@@ -209,9 +231,11 @@ export class TerminalView {
     addon.onContextLoss(() => {
       addon.dispose();
       this.webglAddon = undefined;
+      this.refit();
       onFallback();
     });
     this.webglAddon = addon;
+    this.refit();
     return "webgl";
   }
 
@@ -238,7 +262,26 @@ export function showRenderer(
   picker: RendererPicker,
   showStatus: (message: string) => void,
 ): void {
-  picker.value = view.setRenderer(wanted, () => {
+  applyRenderer(
+    (renderer, onFallback) => view.setRenderer(renderer, onFallback),
+    wanted,
+    picker,
+    showStatus,
+  );
+}
+
+/**
+ * Asks `apply` for `wanted`, as {@link showRenderer} does, and keeps `picker`
+ * on the renderer `apply` returns. `apply` takes the renderer and the callback
+ * for a WebGL context lost later, such as {@link TerminalView.show}.
+ */
+export function applyRenderer(
+  apply: (renderer: Renderer, onFallback: () => void) => Renderer,
+  wanted: Renderer,
+  picker: RendererPicker,
+  showStatus: (message: string) => void,
+): void {
+  picker.value = apply(wanted, () => {
     picker.value = "dom";
     showStatus(texts.webglLost);
   });
