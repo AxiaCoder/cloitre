@@ -152,17 +152,13 @@ export class TerminalView {
   }
 
   /**
-   * Tells the view whether its container is shown. Hiding it drops WebGL for
-   * the DOM renderer, freeing its context. Showing it refits the grid, unless
-   * auto fit is off; {@link TerminalView.show} also picks the renderer first.
+   * Tells the view its container is hidden and drops WebGL for the DOM
+   * renderer, freeing its context. The grid keeps its size until
+   * {@link TerminalView.show}.
    */
-  setVisible(visible: boolean): void {
-    this.visible = visible;
-    if (!visible) {
-      this.setRenderer("dom", () => undefined);
-    } else if (this.autoFit) {
-      this.fit();
-    }
+  hide(): void {
+    this.visible = false;
+    this.setRenderer("dom", () => undefined);
   }
 
   /**

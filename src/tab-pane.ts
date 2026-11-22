@@ -31,9 +31,8 @@ abstract class Pane {
    * Shows the pane on `renderer` and, unless a replay holds the grid, fits it
    * once to its container; a size that changed while hidden then reaches the
    * session. Returns the renderer now in use, as {@link TerminalView.show} does.
-   * Without arguments, shows it on the DOM renderer.
    */
-  show(renderer: Renderer = "dom", onFallback: () => void = () => undefined): Renderer {
+  show(renderer: Renderer, onFallback: () => void): Renderer {
     this.container.hidden = false;
     return this.view.show(renderer, onFallback);
   }
@@ -41,7 +40,7 @@ abstract class Pane {
   /** Hides the pane and moves it to the DOM renderer; its terminal keeps writing what it receives. */
   hide(): void {
     this.container.hidden = true;
-    this.view.setVisible(false);
+    this.view.hide();
   }
 
   /** Disposes of the terminal and removes the container. */

@@ -197,7 +197,7 @@ describe("TerminalView visibility", () => {
   it("does not fit while hidden, even when asked or resized", () => {
     const { view, terminal } = openView();
     const fit = fitAddonOf(terminal);
-    view.setVisible(false);
+    view.hide();
     view.fit();
     observers[0]?.callback();
     view.clearAndFit();
@@ -207,8 +207,8 @@ describe("TerminalView visibility", () => {
   it("refits once shown again", () => {
     const { view, terminal } = openView();
     const fit = fitAddonOf(terminal);
-    view.setVisible(false);
-    view.setVisible(true);
+    view.hide();
+    view.show("dom", vi.fn());
     expect(fit.fits).toBe(1);
   });
 
@@ -216,15 +216,15 @@ describe("TerminalView visibility", () => {
     const { view, terminal } = openView();
     const fit = fitAddonOf(terminal);
     view.autoFit = false;
-    view.setVisible(false);
-    view.setVisible(true);
+    view.hide();
+    view.show("dom", vi.fn());
     expect(fit.fits).toBe(0);
   });
 
   it("drops WebGL for the DOM renderer when hidden", () => {
     const { view } = openView();
     view.setRenderer("webgl", vi.fn());
-    view.setVisible(false);
+    view.hide();
     expect(xterm.state.webglAddons[0]?.disposed).toBe(1);
     expect(view.setRenderer("webgl", vi.fn())).toBe("webgl");
     expect(xterm.state.webglAddons).toHaveLength(2);
@@ -338,7 +338,7 @@ describe("TerminalView.setRenderer, refitting the grid to the new renderer's cel
   it("does not fit while hidden", () => {
     const { view, terminal } = openView();
     const fit = fitAddonOf(terminal);
-    view.setVisible(false);
+    view.hide();
     view.setRenderer("webgl", vi.fn());
     xterm.state.webglAddons[0]?.loseContext?.();
     view.setRenderer("webgl", vi.fn());
@@ -351,7 +351,7 @@ describe("TerminalView.setRenderer, refitting the grid to the new renderer's cel
 function openHiddenWebglView() {
   const opened = openView();
   opened.view.setRenderer("webgl", vi.fn());
-  opened.view.setVisible(false);
+  opened.view.hide();
   const fit = fitAddonOf(opened.terminal);
   fit.fits = 0;
   xterm.state.events.length = 0;
