@@ -704,6 +704,15 @@ describe("TabPane, hidden and shown", () => {
     expect(calls("pty_resize")).toEqual([{ id: 1, cols: 140, rows: 50 }]);
   });
 
+  it("is shown on the renderer it is asked for, and on DOM by default", async () => {
+    const pane = openPane(1, recorder().handlers);
+    await pane.start("new", FOLDER);
+    pane.hide();
+    expect(pane.show("webgl")).toBe("webgl");
+    pane.hide();
+    expect(pane.show()).toBe("dom");
+  });
+
   it("resizes its session when its container changes size while shown", async () => {
     const pane = openPane(1, recorder().handlers);
     await pane.start("new", FOLDER);

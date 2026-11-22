@@ -62,6 +62,7 @@ import {
   TRASH_PATH,
 } from "./project-menu";
 import {
+  applyRenderer,
   isRenderer,
   isUnicodeVersion,
   loadTerminalFonts,
@@ -376,9 +377,14 @@ function renderTabs(): void {
     }
   }
   if (shown) {
-    shown.show();
+    const pane = shown;
     const wanted = rendererSelect.value;
-    showRenderer(shown.view, isRenderer(wanted) ? wanted : "webgl", rendererSelect, showStatus);
+    applyRenderer(
+      (renderer, onFallback) => pane.show(renderer, onFallback),
+      isRenderer(wanted) ? wanted : "webgl",
+      rendererSelect,
+      showStatus,
+    );
   }
   showRecording(shown instanceof TabPane ? shown.recording : undefined);
   renderSessionCounts();
