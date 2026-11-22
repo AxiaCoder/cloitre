@@ -7,8 +7,9 @@
 //! same executable is the program writing inside it.
 #![cfg(windows)]
 
-use std::ffi::{CStr, c_void};
+use std::ffi::{OsString, c_void};
 use std::io::{Read, Write};
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc;
@@ -34,8 +35,8 @@ unsafe extern "system" {
     fn GetStdHandle(which: u32) -> *mut c_void;
     fn GetConsoleMode(console: *mut c_void, mode: *mut u32) -> i32;
     fn SetConsoleMode(console: *mut c_void, mode: u32) -> i32;
-    fn GetModuleHandleA(name: *const i8) -> *mut c_void;
-    fn GetModuleFileNameA(module: *mut c_void, buffer: *mut u8, size: u32) -> u32;
+    fn GetModuleHandleW(name: *const u16) -> *mut c_void;
+    fn GetModuleFileNameW(module: *mut c_void, buffer: *mut u16, size: u32) -> u32;
 }
 
 /// Folder holding the vendored `conpty.dll` and `x64/OpenConsole.exe`.
@@ -105,19 +106,22 @@ fn write_sample() {
 /// Returns the file `conpty.dll` was loaded from in this process, or `None`
 /// when it is not loaded.
 fn loaded_conpty() -> Option<PathBuf> {
-    let name: &CStr = c"conpty.dll";
-    let mut buffer = [0u8; 1024];
+    let name: Vec<u16> = std::ffi::OsStr::new("conpty.dll")
+        .encode_wide()
+        .chain([0])
+        .collect();
+    let mut buffer = [0u16; 1024];
     // SAFETY: `name` is NUL-terminated and `buffer` holds the size passed.
     let length = unsafe {
-        let module = GetModuleHandleA(name.as_ptr());
+        let module = GetModuleHandleW(name.as_ptr());
         if module.is_null() {
             return None;
         }
-        GetModuleFileNameA(module, buffer.as_mut_ptr(), buffer.len() as u32)
+        GetModuleFileNameW(module, buffer.as_mut_ptr(), buffer.len() as u32)
     };
-    Some(PathBuf::from(
-        String::from_utf8_lossy(&buffer[..length as usize]).into_owned(),
-    ))
+    Some(PathBuf::from(OsString::from_wide(
+        &buffer[..length as usize],
+    )))
 }
 
 /// Opens a pseudo-terminal, runs this executable as the writer inside it, and
