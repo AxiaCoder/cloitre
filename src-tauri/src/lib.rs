@@ -1,5 +1,6 @@
 mod clipboard;
 mod commands;
+mod dll_search;
 mod error;
 mod folder;
 mod launch;
@@ -19,6 +20,7 @@ use crate::pty::PtyRegistry;
 use crate::recording::RecordingRegistry;
 use crate::session::{HookSettings, PendingSessions};
 
+pub use crate::dll_search::restrict_dll_search;
 pub use crate::session::{HOOK_ARG, run_hook};
 pub use crate::state::{STATE_HOOK_ARG, run_state_hook};
 
@@ -123,11 +125,14 @@ const CHECKS_FOR_UPDATES: bool = !cfg!(debug_assertions);
 /// and their recordings closed whenever they are stopped; a release build
 /// records nothing and registers no `recording_*` command but `recording_enabled`.
 /// Only a release build registers the updater plugin (see [`CHECKS_FOR_UPDATES`]).
+/// Before anything else, DLLs loaded by bare name are limited to the
+/// executable's folder and `System32` (see [`restrict_dll_search`]).
 ///
 /// # Panics
-/// When the Tauri runtime cannot start.
+/// When the DLL search cannot be restricted, or the Tauri runtime cannot start.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    restrict_dll_search().expect("restrict the DLL search to the app folder and System32");
     let mut context = tauri::generate_context!();
     apply_build_identity(context.config_mut());
     let mut builder = tauri::Builder::default()
