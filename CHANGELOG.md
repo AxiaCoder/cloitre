@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.8.0](https://github.com/AxiaCoder/cloitre/compare/v0.7.0...v0.8.0) (2026-11-26)
+
+
+### Features
+
+* **tabs:** a session left idle stops after a set delay ([#92](https://github.com/AxiaCoder/cloitre/issues/92)) ([0cc4e9f](https://github.com/AxiaCoder/cloitre/commit/0cc4e9fe995be897afb4a61b05de728049b12020))
+
+
+### Bug Fixes
+
+* **pty:** a missing conpty.dll was looked for in the current folder and PATH ([#99](https://github.com/AxiaCoder/cloitre/issues/99)) ([605d150](https://github.com/AxiaCoder/cloitre/commit/605d1502bbcfd29663f1794d16d3e273841db1e7))
+* **tabs:** a drop left the file explorer in the foreground ([#95](https://github.com/AxiaCoder/cloitre/issues/95)) ([1d308e4](https://github.com/AxiaCoder/cloitre/commit/1d308e4f82f11809ae13ce0356f5934bcd9d8ec0))
+* **tabs:** a tab title could reorder or hide its label with invisible format characters ([#101](https://github.com/AxiaCoder/cloitre/issues/101)) ([a9b264b](https://github.com/AxiaCoder/cloitre/commit/a9b264b3bd1d90cef0c7604fd59ba844166f8721))
+* **tabs:** closing a tab while claude was starting turned off its fullscreen renderer ([#96](https://github.com/AxiaCoder/cloitre/issues/96)) ([231ace4](https://github.com/AxiaCoder/cloitre/commit/231ace406de6158845eba4c35ee2d390f7833222))
+* **tabs:** switching projects resized the session to a DOM-renderer width first ([#98](https://github.com/AxiaCoder/cloitre/issues/98)) ([b504084](https://github.com/AxiaCoder/cloitre/commit/b5040849dda1723c1ad2c36629eb6be64b0e7f78))
+
 ## [0.7.0](https://github.com/AxiaCoder/cloitre/compare/v0.6.0...v0.7.0) (2026-11-17)
 
 
