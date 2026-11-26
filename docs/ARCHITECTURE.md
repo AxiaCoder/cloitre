@@ -190,11 +190,11 @@ Remembers a tab as the active tab of its project, so that the next run brings it
 
 ### `tab_set_title`
 
-Saves the title a tab's session set in its terminal, so that the next run shows it on the restored tab. Saves nothing when the tab already has that title. Before sending a title, the webview strips control characters and the status symbol Claude Code puts before it (`✳`, `◐`, `◑`), then cuts it to 256 characters. A title with no topic left once cleaned (a status symbol alone, or `claude` and `Claude Code`, the names Claude Code sets before its session has a topic, also when it resumes one) changes nothing: the tab keeps its title and nothing is sent. It sends a title once it has stayed unchanged for one second, so a title that changes many times a second is written once.
+Saves the title a tab's session set in its terminal, so that the next run shows it on the restored tab. Saves nothing when the tab already has that title. Before sending a title, the webview strips control characters, the invisible format characters that can reorder or hide its text (U+00AD, U+061C, U+180E, U+200B, U+200E, U+200F, U+202A to U+202E, U+2060 to U+2064, U+2066 to U+2069, U+FEFF; the zero-width joiner and non-joiner U+200C and U+200D are kept for composed emoji) and the status symbol Claude Code puts before it (`✳`, `◐`, `◑`), then cuts it to 256 characters. A title with no topic left once cleaned (a status symbol alone, or `claude` and `Claude Code`, the names Claude Code sets before its session has a topic, also when it resumes one) changes nothing: the tab keeps its title and nothing is sent. It sends a title once it has stayed unchanged for one second, so a title that changes many times a second is written once.
 
 - **Arguments**: `tabId` (integer, a tab id), `title` (string, at most 256 characters, or `null`; `null` or an empty string clears the title).
 - **Returns**: nothing.
-- **Refuses**: a title longer than 256 characters or holding a control character ("the tab title must be at most 256 characters, without control characters"); an unknown tab id ("no tab with id <id>"); a read-only project list; a failed save.
+- **Refuses**: a title longer than 256 characters or holding a control character or one of the invisible format characters the webview strips ("the tab title must be at most 256 characters, without control characters"); an unknown tab id ("no tab with id <id>"); a read-only project list; a failed save.
 
 ### `clipboard_file_paths`
 

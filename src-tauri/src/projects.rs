@@ -90,6 +90,28 @@ pub struct Tab {
 /// The longest tab title [`ProjectStore::set_tab_title`] accepts, in characters.
 pub const MAX_TAB_TITLE: usize = 256;
 
+/// Tells whether `c` is an invisible format character that can reorder or
+/// hide a title's text: soft hyphen, direction marks, bidirectional
+/// embeddings, overrides and isolates, zero-width space, word joiner,
+/// invisible operators, Mongolian vowel separator and byte order mark. The
+/// zero-width joiner and non-joiner (U+200C, U+200D) are not, as composed emoji
+/// use them. `isInvisibleFormat` in `src/tab-title.ts` holds the same list.
+fn is_invisible_format(c: char) -> bool {
+    matches!(
+        c,
+        '\u{ad}'
+            | '\u{61c}'
+            | '\u{180e}'
+            | '\u{200b}'
+            | '\u{200e}'
+            | '\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{feff}'
+    )
+}
+
 /// One tab as the webview receives it: its session id stays in Rust.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TabView {
@@ -444,12 +466,16 @@ impl ProjectStore {
     ///
     /// # Errors
     /// [`AppError::InvalidTabTitle`] for a title longer than [`MAX_TAB_TITLE`]
-    /// characters or holding a control character; [`AppError::UnknownTab`]; a
+    /// characters or holding a control character or an invisible format
+    /// character (see [`is_invisible_format`]); [`AppError::UnknownTab`]; a
     /// read-only store; a failed save.
     pub fn set_tab_title(&self, tab: u32, title: Option<&str>) -> Result<(), AppError> {
         let title = title.filter(|title| !title.is_empty());
         if let Some(title) = title
-            && (title.chars().count() > MAX_TAB_TITLE || title.chars().any(char::is_control))
+            && (title.chars().count() > MAX_TAB_TITLE
+                || title
+                    .chars()
+                    .any(|c| c.is_control() || is_invisible_format(c)))
         {
             return Err(AppError::InvalidTabTitle);
         }
@@ -1805,6 +1831,40 @@ mod tests {
             store.set_tab_title(9, Some("Lost")),
             Err(AppError::UnknownTab(9))
         );
+    }
+
+    #[test]
+    fn a_tab_title_with_an_invisible_format_character_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let tab = store.open_tab(a.id).unwrap().id;
+        store.set_tab_title(tab, Some("Kept")).unwrap();
+        let invisible = [
+            '\u{ad}', '\u{61c}', '\u{180e}', '\u{200b}', '\u{200e}', '\u{200f}', '\u{202a}',
+            '\u{202b}', '\u{202c}', '\u{202d}', '\u{202e}', '\u{2060}', '\u{2061}', '\u{2062}',
+            '\u{2063}', '\u{2064}', '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}', '\u{feff}',
+        ];
+        for format in invisible {
+            let title = format!("a{format}b");
+            assert_eq!(
+                store.set_tab_title(tab, Some(&title)),
+                Err(AppError::InvalidTabTitle),
+                "{title:?}"
+            );
+        }
+        assert_eq!(listed_title(&store, tab), Some("Kept".to_string()));
+    }
+
+    #[test]
+    fn a_tab_title_with_zero_width_joiners_is_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let tab = store.open_tab(a.id).unwrap().id;
+        let family = "Team \u{1F468}\u{200d}\u{1F469}\u{200d}\u{1F467} a\u{200c}b";
+        assert_eq!(store.set_tab_title(tab, Some(family)), Ok(()));
+        assert_eq!(listed_title(&store, tab), Some(family.to_string()));
     }
 
     #[test]
