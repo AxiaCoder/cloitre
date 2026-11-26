@@ -1857,6 +1857,19 @@ mod tests {
     }
 
     #[test]
+    fn a_tab_title_with_a_character_next_to_the_refused_ranges_is_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let a = store.add(&folder(dir.path(), "a")).unwrap();
+        let tab = store.open_tab(a.id).unwrap().id;
+        for neighbour in ['\u{200a}', '\u{2029}', '\u{202f}', '\u{205f}', '\u{2065}'] {
+            let title = format!("a{neighbour}b");
+            assert_eq!(store.set_tab_title(tab, Some(&title)), Ok(()), "{title:?}");
+            assert_eq!(listed_title(&store, tab), Some(title));
+        }
+    }
+
+    #[test]
     fn a_tab_title_with_zero_width_joiners_is_accepted() {
         let dir = tempfile::tempdir().unwrap();
         let store = store_in(dir.path());

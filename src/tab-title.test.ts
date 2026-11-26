@@ -41,6 +41,15 @@ describe("cleanTitle", () => {
     expect(invisible.filter((char) => cleaned.includes(char))).toEqual([]);
   });
 
+  it("keeps the characters next to the ranges of the closed list", () => {
+    const neighbours = [0x200a, 0x2029, 0x202f, 0x205f, 0x2065].map((code) =>
+      String.fromCodePoint(code),
+    );
+    for (const char of neighbours) {
+      expect(cleanTitle(`a${char}b`)).toBe(`a${char}b`);
+    }
+  });
+
   it("keeps the zero-width joiners of a composed emoji", () => {
     const family = "\u{1F468}\u200d\u{1F469}\u200d\u{1F467}";
     expect(cleanTitle(`Team ${family}`)).toBe(`Team ${family}`);
