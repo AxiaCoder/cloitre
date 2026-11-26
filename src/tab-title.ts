@@ -22,15 +22,42 @@ function isControl(code: number): boolean {
 }
 
 /**
+ * Whether code point `code` is an invisible format character that can reorder
+ * or hide a title's text: soft hyphen, direction marks, bidirectional
+ * embeddings, overrides and isolates, zero-width space, word joiner, invisible
+ * operators, Mongolian vowel separator and byte order mark. The zero-width
+ * joiner and non-joiner (U+200C, U+200D) are not, as composed emoji use them.
+ * Rust's `is_invisible_format` in `src-tauri/src/projects.rs` holds the same list.
+ */
+function isInvisibleFormat(code: number): boolean {
+  return (
+    code === 0xad ||
+    code === 0x61c ||
+    code === 0x180e ||
+    code === 0x200b ||
+    code === 0x200e ||
+    code === 0x200f ||
+    (code >= 0x202a && code <= 0x202e) ||
+    (code >= 0x2060 && code <= 0x2064) ||
+    (code >= 0x2066 && code <= 0x2069) ||
+    code === 0xfeff
+  );
+}
+
+/**
  * Returns the title a tab keeps for `raw`, the title its terminal received:
- * without control characters, without Claude Code's leading status symbol,
+ * without control characters or invisible format characters (see
+ * `isInvisibleFormat`), without Claude Code's leading status symbol,
  * trimmed and cut to {@link MAX_TITLE_LENGTH} code points. Returns `null` when
  * nothing is left or when only a name Claude Code sets before its session has
  * a topic is left.
  */
 export function cleanTitle(raw: string): string | null {
   const kept = Array.from(raw)
-    .filter((char) => !isControl(char.codePointAt(0) ?? 0))
+    .filter((char) => {
+      const code = char.codePointAt(0) ?? 0;
+      return !isControl(code) && !isInvisibleFormat(code);
+    })
     .join("")
     .trim()
     .replace(STATUS_SYMBOL, "");

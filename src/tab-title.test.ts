@@ -18,6 +18,44 @@ describe("cleanTitle", () => {
     expect(cleanTitle(" a\u0007b\u001b[c\u007f\u009bd\n ")).toBe("ab[cd");
   });
 
+  it("drops a right-to-left override that would reverse the title", () => {
+    expect(cleanTitle("ab\u202ecd")).toBe("abcd");
+  });
+
+  it("drops a zero-width space that would hide part of the title", () => {
+    expect(cleanTitle("a\u200bb")).toBe("ab");
+  });
+
+  it("returns null for a title made only of invisible format characters", () => {
+    expect(cleanTitle("\u202e")).toBeNull();
+    expect(cleanTitle(" \u200b\ufeff ")).toBeNull();
+  });
+
+  it("drops every invisible format character of the closed list", () => {
+    const invisible = [
+      0x00ad, 0x061c, 0x180e, 0x200b, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c,
+      0x202d, 0x202e, 0x2060, 0x2061, 0x2062, 0x2063, 0x2064, 0x2066, 0x2067,
+      0x2068, 0x2069, 0xfeff,
+    ].map((code) => String.fromCodePoint(code));
+    const cleaned = cleanTitle(`a${invisible.join("b")}c`) ?? "";
+    expect(invisible.filter((char) => cleaned.includes(char))).toEqual([]);
+  });
+
+  it("keeps the characters next to the ranges of the closed list", () => {
+    const neighbours = [0x200a, 0x2029, 0x202f, 0x205f, 0x2065].map((code) =>
+      String.fromCodePoint(code),
+    );
+    for (const char of neighbours) {
+      expect(cleanTitle(`a${char}b`)).toBe(`a${char}b`);
+    }
+  });
+
+  it("keeps the zero-width joiners of a composed emoji", () => {
+    const family = "\u{1F468}\u200d\u{1F469}\u200d\u{1F467}";
+    expect(cleanTitle(`Team ${family}`)).toBe(`Team ${family}`);
+    expect(cleanTitle("a\u200cb")).toBe("a\u200cb");
+  });
+
   it("returns null for an empty or blank title", () => {
     expect(cleanTitle("")).toBeNull();
     expect(cleanTitle(" \u0007\t ")).toBeNull();
