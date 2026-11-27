@@ -1,20 +1,27 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import type { SessionActivity } from "./session-activity";
 import type { KeepAwake } from "./settings";
+
+/** What keeping the computer awake needs to know of a session tab. */
+export interface SessionWork {
+  /** Whether the session works, even while one of its subagents waits for an answer. */
+  working: boolean;
+  /** Whether the session, or one of its subagents, waits for an answer. */
+  blocked: boolean;
+}
 
 /**
  * Returns whether the computer should be kept from sleeping under choice
- * `setting`, given the activity of every session tab: `"working"` asks for a
- * working session, `"working-or-blocked"` for one working or waiting for an
- * answer, `"never"` for nothing.
+ * `setting`, given every session tab: `"working"` asks for a working session,
+ * `"working-or-blocked"` for one working or waiting for an answer, `"never"`
+ * for nothing.
  */
-export function shouldKeepAwake(setting: KeepAwake, activities: Iterable<SessionActivity | undefined>): boolean {
+export function shouldKeepAwake(setting: KeepAwake, sessions: Iterable<SessionWork>): boolean {
   if (setting === "never") {
     return false;
   }
-  for (const activity of activities) {
-    if (activity === "working" || (setting === "working-or-blocked" && activity === "blocked")) {
+  for (const session of sessions) {
+    if (session.working || (setting === "working-or-blocked" && session.blocked)) {
       return true;
     }
   }

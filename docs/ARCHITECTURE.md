@@ -225,10 +225,10 @@ Reads the full paths of the files copied to the system clipboard, such as a Copy
 
 ### `keep_awake`
 
-Keeps the system from sleeping, or lets it sleep again. The webview sends the state it wants only when it changes, each call after the previous one has resolved, and sends it once when it starts, even `false`, so a reloaded webview never leaves a request a previous one made (see [Keeping the computer awake](#keeping-the-computer-awake)). On Windows a dedicated thread, started on the first call, holds the request: `SetThreadExecutionState` keeps a request per thread, and commands run on a pool of threads, so a request lifted from another thread would remove nothing. That thread applies `ES_CONTINUOUS | ES_SYSTEM_REQUIRED` for `true` and `ES_CONTINUOUS` for `false`, never `ES_DISPLAY_REQUIRED`. The request ends with the app's process.
+Keeps the system from sleeping, or lets it sleep again. The webview sends the state it wants only when it changes, each call after the previous one has resolved, and sends it once when it starts, even `false`, so a reloaded webview never leaves a request a previous one made (see [Keeping the computer awake](#keeping-the-computer-awake)). On Windows a dedicated thread, started on the first call, holds the request: `SetThreadExecutionState` keeps a request per thread, and commands run on a pool of threads, so a request lifted from another thread would remove nothing. That thread applies `ES_CONTINUOUS | ES_SYSTEM_REQUIRED` for `true` and `ES_CONTINUOUS` for `false`, never `ES_DISPLAY_REQUIRED`, and answers each call with its previous execution state, which the call waits for and the command ignores. The request ends with the app's process.
 
 - **Arguments**: `on` (boolean): `true` to keep the system awake, `false` to let it sleep.
-- **Returns**: nothing, once the state is handed to the thread, before it is applied. Does nothing outside Windows.
+- **Returns**: nothing, once the thread has applied the state. Does nothing outside Windows.
 - **Refuses**: nothing.
 
 ## Projects
@@ -335,7 +335,7 @@ A session tab is idle when its session runs and shows no activity: not waiting f
 
 ## Keeping the computer awake
 
-The settings dialog chooses when the computer is kept from sleeping: Never, While a session works, or While a session works or waits for an answer (the default). A session works as in [Idle sessions](#idle-sessions), background tasks included; it waits for an answer when its tab is blocked on a question or a permission. The webview recomputes the state over the session tabs of every project on each render and when the choice changes, and calls [`keep_awake`](#keep_awake) when the state changes. The choice is kept in the webview's local storage under `cloitre.keepAwake`; Rust knows nothing of it. Only system sleep is held off: the screen may still turn off, and closing the lid or pressing the power button still puts the computer to sleep.
+The settings dialog chooses when the computer is kept from sleeping: Never, While a session works, or While a session works or waits for an answer (the default). A session works as in [Idle sessions](#idle-sessions), background tasks included; it waits for an answer when its tab is blocked on a question or a permission. A subagent waiting for an answer does not stop a tab whose main conversation works from counting as working, although the tab shows blocked. The webview recomputes the state over the session tabs of every project on each render and when the choice changes, and calls [`keep_awake`](#keep_awake) when the state changes. The choice is kept in the webview's local storage under `cloitre.keepAwake`; Rust knows nothing of it. Only system sleep is held off: the screen may still turn off, and closing the lid or pressing the power button still puts the computer to sleep.
 
 ## Updates
 

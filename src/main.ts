@@ -420,10 +420,16 @@ function watchIdleTabs(): void {
 
 /** Keeps the computer awake, or lets it sleep, as {@link keepAwakeChoice} and the session tabs of every project ask. */
 function syncKeepAwake(): void {
-  const sessionActivities = projects.flatMap((project) =>
-    tabs.tabsOf(project.id).flatMap((tab) => (tab.kind === "session" ? [activities.of(tab.id)] : [])),
+  const sessions = projects.flatMap((project) =>
+    tabs
+      .tabsOf(project.id)
+      .flatMap((tab) =>
+        tab.kind === "session"
+          ? [{ working: activities.isWorking(tab.id), blocked: activities.isBlocked(tab.id) }]
+          : [],
+      ),
   );
-  report(() => keepAwakeSync.update(shouldKeepAwake(keepAwakeChoice, sessionActivities)));
+  report(() => keepAwakeSync.update(shouldKeepAwake(keepAwakeChoice, sessions)));
 }
 
 /**

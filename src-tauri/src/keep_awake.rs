@@ -7,16 +7,19 @@ mod windows;
 /// computer to sleep.
 ///
 /// On Windows the request is held by a dedicated thread, started on the first
-/// call, so that a later call made from any thread replaces it. Does nothing
-/// elsewhere. Returns at once, before the request is applied.
-pub fn set(on: bool) {
+/// call, so that a later call made from any thread replaces it. Waits until
+/// that thread has applied the request, and returns the thread's previous
+/// execution state flags, or `None` when Windows refused the request or the
+/// thread did not answer. Does nothing elsewhere and returns `None`.
+pub fn set(on: bool) -> Option<u32> {
     #[cfg(windows)]
     {
-        windows::set(on);
+        windows::set(on)
     }
     #[cfg(not(windows))]
     {
         let _ = on;
+        None
     }
 }
 
@@ -26,7 +29,7 @@ mod tests {
 
     #[test]
     fn does_nothing_outside_windows() {
-        set(true);
-        set(false);
+        assert_eq!(set(true), None);
+        assert_eq!(set(false), None);
     }
 }

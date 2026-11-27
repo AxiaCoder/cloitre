@@ -191,6 +191,19 @@ export class ActivityStore {
     return this.working.has(tabId) ? "working" : undefined;
   }
 
+  /**
+   * Returns whether tab `tabId` works, whatever it shows: a subagent waiting
+   * for an answer does not stop it, its main conversation waiting does.
+   */
+  isWorking(tabId: number): boolean {
+    return this.working.has(tabId) && !(this.blocks.get(tabId)?.has(MAIN_AGENT) ?? false);
+  }
+
+  /** Returns whether tab `tabId` waits for an answer, for its main conversation or a subagent. */
+  isBlocked(tabId: number): boolean {
+    return this.blocks.has(tabId);
+  }
+
   /** Returns the most urgent activity of tabs `tabIds`, blocked, failed, done then working, or `undefined` when none shows one. */
   mostUrgent(tabIds: Iterable<number>): SessionActivity | undefined {
     let found: SessionActivity | undefined;

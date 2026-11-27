@@ -1,33 +1,40 @@
-use std::sync::mpsc::{self, Sender};
 use std::sync::OnceLock;
+use std::sync::mpsc::{self, Sender};
 use std::thread;
 
 use windows_sys::Win32::System::Power::{
-    SetThreadExecutionState, ES_CONTINUOUS, ES_SYSTEM_REQUIRED, EXECUTION_STATE,
+    ES_CONTINUOUS, ES_SYSTEM_REQUIRED, EXECUTION_STATE, SetThreadExecutionState,
 };
 
-/// The sender of the thread that holds the keep-awake request, once started.
-static REQUESTS: OnceLock<Sender<bool>> = OnceLock::new();
+/// A state for the keep-awake thread, with the channel its answer goes back on.
+type Request = (bool, Sender<EXECUTION_STATE>);
 
-/// Hands `on` to the keep-awake thread, starting it on the first call.
+/// The sender of the thread that holds the keep-awake request, once started.
+static REQUESTS: OnceLock<Sender<Request>> = OnceLock::new();
+
+/// Hands `on` to the keep-awake thread, starting it on the first call, and
+/// waits until the thread has applied it.
 ///
 /// `SetThreadExecutionState` holds its request per thread: applying every
 /// state on the same thread is what lets a later "off" remove an earlier "on".
-pub fn set(on: bool) {
+/// Returns the keep-awake thread's previous execution state, or `None` when
+/// Windows refused the state or the thread did not answer.
+pub fn set(on: bool) -> Option<EXECUTION_STATE> {
     let requests = REQUESTS.get_or_init(|| {
-        let (sender, receiver) = mpsc::channel::<bool>();
+        let (sender, receiver) = mpsc::channel::<Request>();
         thread::Builder::new()
             .name("keep-awake".into())
             .spawn(move || {
-                for on in receiver {
-                    apply(on);
+                for (on, answer) in receiver {
+                    let _ = answer.send(apply(on));
                 }
             })
             .expect("failed to start the keep-awake thread");
         sender
     });
-    // The thread only stops when the sender is dropped, which a static never is.
-    let _ = requests.send(on);
+    let (answer, answers) = mpsc::channel();
+    requests.send((on, answer)).ok()?;
+    answers.recv().ok().filter(|&previous| previous != 0)
 }
 
 /// Returns the execution state that keeps the system awake (`on`) or clears
@@ -72,9 +79,11 @@ mod tests {
     }
 
     #[test]
-    fn set_hands_states_to_the_thread_without_panicking() {
-        set(true);
-        set(false);
-        assert!(REQUESTS.get().is_some());
+    fn set_applies_on_and_off_on_the_same_thread() {
+        set(true).expect("Windows refused on");
+        let after_on = set(false).expect("Windows refused off");
+        assert_eq!(after_on & ES_SYSTEM_REQUIRED, ES_SYSTEM_REQUIRED);
+        let after_off = set(false).expect("Windows refused the second off");
+        assert_eq!(after_off & ES_SYSTEM_REQUIRED, 0);
     }
 }

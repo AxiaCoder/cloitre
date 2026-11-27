@@ -515,3 +515,29 @@ describe("ActivityStore turn woken by background tasks", () => {
     expect(store.of(1)).toBe("done");
   });
 });
+
+describe("ActivityStore work and blocks behind the shown activity", () => {
+  it("still reports working a tab whose subagent is blocked while its main conversation works", () => {
+    const store = new ActivityStore();
+    store.report(1, "prompted", false);
+    store.report(1, "working", false);
+    store.report(1, "blocked", false, "a1");
+    expect(store.of(1)).toBe("blocked");
+    expect(store.isWorking(1)).toBe(true);
+    expect(store.isBlocked(1)).toBe(true);
+  });
+
+  it("does not report working a tab whose main conversation is blocked", () => {
+    const store = new ActivityStore();
+    store.report(1, "prompted", false);
+    store.report(1, "blocked", false);
+    expect(store.isWorking(1)).toBe(false);
+    expect(store.isBlocked(1)).toBe(true);
+  });
+
+  it("reports neither working nor blocked a tab without activity", () => {
+    const store = new ActivityStore();
+    expect(store.isWorking(1)).toBe(false);
+    expect(store.isBlocked(1)).toBe(false);
+  });
+});
