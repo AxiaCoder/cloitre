@@ -1,23 +1,379 @@
+use std::collections::{HashMap, HashSet};
 use std::io;
+use std::mem::offset_of;
 use std::ptr;
 
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
-use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-    SetInformationJobObject, TerminateJobObject,
+use windows_sys::Wdk::System::Threading::{
+    NtQueryInformationProcess, ProcessCommandLineInformation,
 };
-use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, ERROR_MORE_DATA, HANDLE, INVALID_HANDLE_VALUE, LocalFree, UNICODE_STRING,
+};
+use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+};
+use windows_sys::Win32::System::JobObjects::{
+    AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT,
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_BASIC_PROCESS_ID_LIST,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicProcessIdList,
+    JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
+    TerminateJobObject,
+};
+use windows_sys::Win32::System::Threading::{
+    OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_SYNCHRONIZE,
+    PROCESS_TERMINATE, TerminateProcess, WaitForSingleObject,
+};
+use windows_sys::Win32::UI::Shell::CommandLineToArgvW;
+use windows_sys::core::BOOL;
 
 /// Exit code given to the processes stopped by [`Job::terminate`].
 const TERMINATED_EXIT_CODE: u32 = 1;
+
+/// Executable names, lowercase, of the browsers `claude` may start for Claude
+/// in Chrome. [`Job::stop_sparing_browsers`] leaves an ordinary browser of these
+/// and its descendants running, and stops one started for automation (see
+/// [`AUTOMATION_FLAGS`]).
+const BROWSER_EXES: [&str; 5] = [
+    "chrome.exe",
+    "msedge.exe",
+    "brave.exe",
+    "vivaldi.exe",
+    "opera.exe",
+];
+
+/// Switch names, lowercase and without prefix, of which at least one marks a
+/// browser started for automation (Puppeteer, Playwright, chromedriver,
+/// chrome-devtools-mcp); the browser Claude in Chrome makes `claude` open has none.
+const AUTOMATION_FLAGS: [&str; 4] = [
+    "enable-automation",
+    "remote-debugging-pipe",
+    "remote-debugging-port",
+    "headless",
+];
+
+/// Prefixes that make an argument a switch, as Chromium reads them on Windows,
+/// longest first.
+const SWITCH_PREFIXES: [&str; 3] = ["--", "-", "/"];
+
+/// Argument after which Chromium reads no more switches.
+const SWITCH_TERMINATOR: &str = "--";
+
+/// Argument, compared in any case, after which Chromium reads no more
+/// switches: it takes the rest of the command line as one argument, as when
+/// it opens a link as the system's web browser.
+const SINGLE_ARGUMENT_SWITCH: &str = "--single-argument";
+
+/// Switch that Chromium gives, with a non-empty value, to every child process
+/// of a browser (renderer, GPU process, utility, crash handler), never to the
+/// browser process itself.
+const TYPE_SWITCH: &str = "type";
+
+/// Most passes [`Job::stop_sparing_browsers`] makes over the job before it
+/// gives up sparing the browsers and stops every process.
+const STOP_PASSES: usize = 5;
+
+/// Milliseconds [`Job::stop_sparing_browsers`] waits for each process it stops to end.
+const STOP_WAIT_MILLIS: u32 = 1_000;
+
+/// A process as a system snapshot lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProcessEntry {
+    pid: u32,
+    /// Id of the process that started it; that process may have ended and its
+    /// id been given to another one.
+    parent: u32,
+    /// File name of its executable, without the folder.
+    exe: String,
+    /// Whether it is a browser started for automation; set only for the
+    /// browsers of a job, `false` elsewhere.
+    automated: bool,
+    /// Whether it is a child process of a browser, one whose last `type`
+    /// switch has a non-empty value; set only for the browsers of a job, `false` elsewhere.
+    browser_child: bool,
+}
+
+/// Tells whether `exe` is the file name of a browser of [`BROWSER_EXES`], any case.
+fn is_browser(exe: &str) -> bool {
+    BROWSER_EXES
+        .iter()
+        .any(|browser| exe.eq_ignore_ascii_case(browser))
+}
+
+/// Splits `command_line` into its arguments, the program first, with the
+/// rules of `CommandLineToArgvW`, which Chromium uses on Windows. An empty
+/// command line, or one the system cannot split, has no argument.
+fn arguments(command_line: &str) -> Vec<String> {
+    if command_line.is_empty() {
+        return Vec::new();
+    }
+    let wide: Vec<u16> = command_line
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut count: i32 = 0;
+    // SAFETY: `wide` is nul-terminated and outlives the call.
+    let list = unsafe { CommandLineToArgvW(wide.as_ptr(), &raw mut count) };
+    if list.is_null() {
+        return Vec::new();
+    }
+    // SAFETY: on success `list` holds `count` pointers to nul-terminated
+    // UTF-16 strings, all inside one block freed below.
+    let pointers = unsafe { std::slice::from_raw_parts(list, usize::try_from(count).unwrap_or(0)) };
+    let arguments = pointers
+        .iter()
+        .map(|&argument| {
+            // SAFETY: `argument` is nul-terminated, so every unit read up to
+            // the nul lies inside the block.
+            let length = (0..)
+                .take_while(|&i| unsafe { *argument.add(i) } != 0)
+                .count();
+            // SAFETY: `argument` holds `length` units before its nul.
+            String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(argument, length) })
+        })
+        .collect();
+    // SAFETY: `list` was allocated by `CommandLineToArgvW` and is freed only here.
+    unsafe { LocalFree(list.cast()) };
+    arguments
+}
+
+/// Returns the switches of `command_line` as Chromium reads them on Windows:
+/// each argument after the program, trimmed, that starts with one of
+/// [`SWITCH_PREFIXES`] and has a name after it, up to a lone
+/// [`SWITCH_TERMINATOR`] or a [`SINGLE_ARGUMENT_SWITCH`]. Each comes as its name, lowercase and without prefix,
+/// and its value: what follows the first `=`, `None` without one.
+fn switches(command_line: &str) -> Vec<(String, Option<String>)> {
+    arguments(command_line)
+        .iter()
+        .skip(1)
+        .map(|argument| argument.trim())
+        .take_while(|&argument| {
+            argument != SWITCH_TERMINATOR && !argument.eq_ignore_ascii_case(SINGLE_ARGUMENT_SWITCH)
+        })
+        .filter_map(|argument| {
+            let switch = SWITCH_PREFIXES.iter().find_map(|prefix| {
+                argument
+                    .strip_prefix(prefix)
+                    .filter(|switch| !switch.is_empty())
+            })?;
+            let (name, value) = match switch.split_once('=') {
+                Some((name, value)) => (name, Some(value.to_owned())),
+                None => (switch, None),
+            };
+            Some((name.to_ascii_lowercase(), value))
+        })
+        .collect()
+}
+
+/// Tells whether `command_line` holds one of the [`AUTOMATION_FLAGS`] as a
+/// switch (see [`switches`]), any case, with or without a value.
+fn is_automation_command_line(command_line: &str) -> bool {
+    switches(command_line)
+        .iter()
+        .any(|(name, _)| AUTOMATION_FLAGS.contains(&name.as_str()))
+}
+
+/// Tells whether `command_line` is that of a child process of a browser: its
+/// last [`TYPE_SWITCH`] (see [`switches`]) has a non-empty value. Chromium
+/// runs a process without one, or with an empty one, as the browser itself.
+fn is_browser_child_command_line(command_line: &str) -> bool {
+    switches(command_line)
+        .into_iter()
+        .rev()
+        .find(|(name, _)| name == TYPE_SWITCH)
+        .and_then(|(_, value)| value)
+        .is_some_and(|value| !value.is_empty())
+}
+
+/// Tells whether a browser whose command line is `command_line` was started
+/// for automation. An unread command line, `None`, counts as an ordinary browser.
+fn is_automated(command_line: Option<&str>) -> bool {
+    command_line.is_some_and(is_automation_command_line)
+}
+
+/// Tells whether a browser executable whose command line is `command_line`
+/// runs a child process of a browser rather than a browser itself. An unread
+/// command line, `None`, counts as a browser itself.
+fn is_browser_child(command_line: Option<&str>) -> bool {
+    command_line.is_some_and(is_browser_child_command_line)
+}
+
+/// Returns the ids of the processes of `job` to spare: every ordinary browser
+/// root and every process descending from one. A browser root is a browser of
+/// [`BROWSER_EXES`] not marked `browser_child`, whatever its parent; it is
+/// ordinary when not marked `automated`. From each process, the chain of
+/// parents is followed up to the first browser root: the process is spared
+/// when that root is ordinary, not when it is automated, nor when the chain
+/// ends before a root. A chain of parents is followed only through processes
+/// of `job` listed in `processes`, so a stale parent id, or a parent outside
+/// the job, ends it.
+fn spared_processes(processes: &[ProcessEntry], job: &HashSet<u32>) -> HashSet<u32> {
+    let members: HashMap<u32, &ProcessEntry> = processes
+        .iter()
+        .filter(|process| job.contains(&process.pid))
+        .map(|process| (process.pid, process))
+        .collect();
+    members
+        .keys()
+        .copied()
+        .filter(|&pid| descends_from_ordinary_browser(pid, &members))
+        .collect()
+}
+
+/// Tells whether `process` is a browser root: a browser of [`BROWSER_EXES`]
+/// that is not a child process of a browser.
+fn is_browser_root(process: &ProcessEntry) -> bool {
+    is_browser(&process.exe) && !process.browser_child
+}
+
+/// Tells whether the first browser root met going up from process `pid`
+/// through its parents in `members`, `pid` included, is ordinary (see
+/// [`spared_processes`]). A loop in the parent chain ends the walk.
+fn descends_from_ordinary_browser(pid: u32, members: &HashMap<u32, &ProcessEntry>) -> bool {
+    let mut seen = HashSet::new();
+    let mut current = pid;
+    while seen.insert(current) {
+        let Some(process) = members.get(&current) else {
+            return false;
+        };
+        if is_browser_root(process) {
+            return !process.automated;
+        }
+        current = process.parent;
+    }
+    false
+}
+
+/// Reads the command line of process `pid` when it is in `job`. `None` when
+/// the process cannot be opened, is not in the job, or its command line cannot
+/// be read.
+fn command_line_in_job(job: HANDLE, pid: u32) -> Option<String> {
+    // SAFETY: plain call; a null result is checked below.
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if process.is_null() {
+        return None;
+    }
+    let mut in_job: BOOL = 0;
+    // SAFETY: both handles are open for the whole call.
+    let checked = unsafe { IsProcessInJob(process, job, &raw mut in_job) };
+    let command_line = if checked != 0 && in_job != 0 {
+        query_command_line(process)
+    } else {
+        None
+    };
+    // SAFETY: `process` is open and closed only here.
+    unsafe { CloseHandle(process) };
+    command_line
+}
+
+/// Reads the command line of `process`, open with at least
+/// `PROCESS_QUERY_LIMITED_INFORMATION`. `None` when the system refuses it.
+fn query_command_line(process: HANDLE) -> Option<String> {
+    let mut length: u32 = 0;
+    // SAFETY: a null buffer of length 0 only asks for the length needed.
+    unsafe {
+        NtQueryInformationProcess(
+            process,
+            ProcessCommandLineInformation,
+            ptr::null_mut(),
+            0,
+            &raw mut length,
+        )
+    };
+    if (length as usize) < size_of::<UNICODE_STRING>() {
+        return None;
+    }
+    let mut buffer = vec![0usize; (length as usize).div_ceil(size_of::<usize>())];
+    // SAFETY: `buffer` is aligned for a `UNICODE_STRING`, its length in bytes
+    // is the one given, and it outlives the call.
+    let status = unsafe {
+        NtQueryInformationProcess(
+            process,
+            ProcessCommandLineInformation,
+            buffer.as_mut_ptr().cast(),
+            (buffer.len() * size_of::<usize>()) as u32,
+            &raw mut length,
+        )
+    };
+    if status < 0 {
+        return None;
+    }
+    // SAFETY: on success the buffer starts with a `UNICODE_STRING` whose text
+    // lies further in the same buffer.
+    let text = unsafe { &*buffer.as_ptr().cast::<UNICODE_STRING>() };
+    if text.Buffer.is_null() {
+        return Some(String::new());
+    }
+    // SAFETY: `text.Buffer` holds `text.Length` bytes of UTF-16 inside `buffer`.
+    let units = unsafe { std::slice::from_raw_parts(text.Buffer, usize::from(text.Length) / 2) };
+    Some(String::from_utf16_lossy(units))
+}
+
+/// Lists every running process of the system.
+///
+/// # Errors
+/// The system error when the snapshot cannot be taken.
+fn process_snapshot() -> io::Result<Vec<ProcessEntry>> {
+    // SAFETY: plain call; an invalid handle is checked below.
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    let mut entry = PROCESSENTRY32W {
+        dwSize: size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
+    let mut processes = Vec::new();
+    // SAFETY: `snapshot` is open and `entry` has its size set, as the call expects.
+    let mut listed = unsafe { Process32FirstW(snapshot, &raw mut entry) };
+    while listed != 0 {
+        let name = &entry.szExeFile;
+        let length = name.iter().position(|&c| c == 0).unwrap_or(name.len());
+        processes.push(ProcessEntry {
+            pid: entry.th32ProcessID,
+            parent: entry.th32ParentProcessID,
+            exe: String::from_utf16_lossy(&name[..length]),
+            automated: false,
+            browser_child: false,
+        });
+        // SAFETY: same as above.
+        listed = unsafe { Process32NextW(snapshot, &raw mut entry) };
+    }
+    // SAFETY: `snapshot` is open and closed only here.
+    unsafe { CloseHandle(snapshot) };
+    Ok(processes)
+}
+
+/// Stops process `pid` if it is still in `job`, without waiting; returns its
+/// open handle, which the caller waits on and closes, or `None` when nothing
+/// was stopped. The job check keeps the id of an ended process, given to
+/// another process since, from being stopped.
+fn terminate_member(job: HANDLE, pid: u32) -> Option<HANDLE> {
+    let access = PROCESS_TERMINATE | PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION;
+    // SAFETY: plain call; a null result is checked below.
+    let process = unsafe { OpenProcess(access, 0, pid) };
+    if process.is_null() {
+        return None;
+    }
+    let mut in_job: BOOL = 0;
+    // SAFETY: both handles are open for the whole call.
+    let checked = unsafe { IsProcessInJob(process, job, &raw mut in_job) };
+    // SAFETY: `process` is open.
+    if checked != 0 && in_job != 0 && unsafe { TerminateProcess(process, TERMINATED_EXIT_CODE) } != 0
+    {
+        return Some(process);
+    }
+    // SAFETY: `process` is open; on this path it is closed only here.
+    unsafe { CloseHandle(process) };
+    None
+}
 
 /// A Windows job object holding a session's process and every process it starts,
 /// including those that open their own console. None of them may leave it:
 /// a start with `CREATE_BREAKAWAY_FROM_JOB` is refused as access denied.
 ///
-/// Dropping it closes the job, which stops every process still in it. The
-/// system closes the job the same way when the app ends, even abruptly.
+/// Dropping it closes the job, which stops every process still in it, unless
+/// [`Job::stop_sparing_browsers`] lifted that limit. The system closes the job
+/// the same way when the app ends, even abruptly.
 pub struct Job(HANDLE);
 
 // SAFETY: a job handle is a kernel object handle, valid from any thread; `Job`
@@ -50,13 +406,24 @@ impl Job {
             return Err(io::Error::last_os_error());
         }
         let job = Job(handle);
+        job.set_limits(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)?;
+        Ok(job)
+    }
+
+    /// Replaces the job's limits with `flags`. Without
+    /// `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, closing the job leaves its
+    /// processes running. No flag given here lets a process break away.
+    ///
+    /// # Errors
+    /// The system error of the call that failed.
+    fn set_limits(&self, flags: JOB_OBJECT_LIMIT) -> io::Result<()> {
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        limits.BasicLimitInformation.LimitFlags = flags;
         // SAFETY: `limits` is the structure this information class expects, the
         // length given is its size, and it outlives the call.
         let set = unsafe {
             SetInformationJobObject(
-                job.0,
+                self.0,
                 JobObjectExtendedLimitInformation,
                 (&raw const limits).cast(),
                 size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
@@ -65,7 +432,100 @@ impl Job {
         if set == 0 {
             return Err(io::Error::last_os_error());
         }
-        Ok(job)
+        Ok(())
+    }
+
+    /// Returns the ids of the processes in the job.
+    ///
+    /// # Errors
+    /// The system error of the call that failed.
+    fn process_ids(&self) -> io::Result<HashSet<u32>> {
+        let header =
+            offset_of!(JOBOBJECT_BASIC_PROCESS_ID_LIST, ProcessIdList) / size_of::<usize>();
+        let mut capacity = 64;
+        loop {
+            let mut buffer = vec![0usize; header + capacity];
+            // SAFETY: `buffer` is aligned for the structure, its length in bytes
+            // is the one given, and it outlives the call.
+            let queried = unsafe {
+                QueryInformationJobObject(
+                    self.0,
+                    JobObjectBasicProcessIdList,
+                    buffer.as_mut_ptr().cast(),
+                    (buffer.len() * size_of::<usize>()) as u32,
+                    ptr::null_mut(),
+                )
+            };
+            let error = io::Error::last_os_error();
+            if queried == 0 && error.raw_os_error() != Some(ERROR_MORE_DATA as i32) {
+                return Err(error);
+            }
+            // SAFETY: the buffer starts with the structure's two counts.
+            let list = unsafe { &*buffer.as_ptr().cast::<JOBOBJECT_BASIC_PROCESS_ID_LIST>() };
+            let assigned = list.NumberOfAssignedProcesses as usize;
+            let listed = list.NumberOfProcessIdsInList as usize;
+            if queried != 0 && assigned <= listed {
+                return Ok(buffer[header..header + listed]
+                    .iter()
+                    .map(|&pid| pid as u32)
+                    .collect());
+            }
+            capacity = assigned.max(capacity * 2);
+        }
+    }
+
+    /// Stops every process in the job except the ordinary browsers of
+    /// [`BROWSER_EXES`] and their descendants, then lets closing the job leave
+    /// those running. A browser root is a browser process unless the last
+    /// [`TYPE_SWITCH`] of its command line has a non-empty value; one whose
+    /// command line holds one of the [`AUTOMATION_FLAGS`] is stopped with its descendants. A browser whose
+    /// command line cannot be read counts as an ordinary root. With no ordinary
+    /// browser in the job, stops everything as [`Job::terminate`] does.
+    ///
+    /// The job is read again after each pass, for processes started during it.
+    /// After [`STOP_PASSES`] passes that each still found a process to stop, or
+    /// on any system error, every process is stopped, browsers included. Each
+    /// pass waits up to [`STOP_WAIT_MILLIS`] per stopped process. Failures are
+    /// ignored, as in [`Job::terminate`].
+    pub fn stop_sparing_browsers(&self) {
+        for _ in 0..STOP_PASSES {
+            let Ok(members) = self.process_ids() else {
+                break;
+            };
+            let Ok(mut processes) = process_snapshot() else {
+                break;
+            };
+            for process in processes
+                .iter_mut()
+                .filter(|process| members.contains(&process.pid) && is_browser(&process.exe))
+            {
+                let command_line = command_line_in_job(self.0, process.pid);
+                process.automated = is_automated(command_line.as_deref());
+                process.browser_child = is_browser_child(command_line.as_deref());
+            }
+            let spared = spared_processes(&processes, &members);
+            if spared.is_empty() {
+                break;
+            }
+            if members.len() == spared.len() {
+                if self.set_limits(0).is_ok() {
+                    return;
+                }
+                break;
+            }
+            let stopped: Vec<HANDLE> = members
+                .difference(&spared)
+                .filter_map(|&pid| terminate_member(self.0, pid))
+                .collect();
+            for process in stopped {
+                // SAFETY: `process` is open and closed only here.
+                unsafe {
+                    WaitForSingleObject(process, STOP_WAIT_MILLIS);
+                    CloseHandle(process);
+                }
+            }
+        }
+        self.terminate();
     }
 
     /// Puts process `pid` in the job.
@@ -95,7 +555,8 @@ impl Job {
 }
 
 impl Drop for Job {
-    /// Closes the job handle, which stops every process still in the job.
+    /// Closes the job handle, which stops every process still in the job,
+    /// unless [`Job::stop_sparing_browsers`] lifted that limit.
     fn drop(&mut self) {
         // SAFETY: `self.0` is open and closed only here.
         unsafe { CloseHandle(self.0) };
@@ -112,12 +573,11 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
 
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
     use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
-    use windows_sys::Win32::System::JobObjects::IsProcessInJob;
-    use windows_sys::Win32::System::Threading::{
-        CREATE_BREAKAWAY_FROM_JOB, PROCESS_SYNCHRONIZE, TerminateProcess, WaitForSingleObject,
-    };
-    use windows_sys::core::BOOL;
+    use windows_sys::Win32::System::Threading::CREATE_BREAKAWAY_FROM_JOB;
 
     use super::*;
 
@@ -205,11 +665,13 @@ mod tests {
     }
 
     impl Drop for Process {
-        /// Stops the process if it still runs and closes its handle.
+        /// Stops the process if it still runs, waits up to 5 seconds for it to
+        /// end, so its executable can be deleted, and closes its handle.
         fn drop(&mut self) {
             // SAFETY: `self.0` is open and closed only here.
             unsafe {
                 TerminateProcess(self.0, TERMINATED_EXIT_CODE);
+                WaitForSingleObject(self.0, 5_000);
                 CloseHandle(self.0);
             }
         }
@@ -308,5 +770,644 @@ mod tests {
             breakaway_ended,
             "a child started with CREATE_BREAKAWAY_FROM_JOB survived terminate"
         );
+    }
+
+    /// Builds a snapshot entry.
+    fn entry(pid: u32, parent: u32, exe: &str) -> ProcessEntry {
+        ProcessEntry {
+            pid,
+            parent,
+            exe: exe.to_owned(),
+            automated: false,
+            browser_child: false,
+        }
+    }
+
+    /// Builds a snapshot entry for a child process of a browser: a renderer,
+    /// the GPU process, a utility.
+    fn child(pid: u32, parent: u32, exe: &str) -> ProcessEntry {
+        ProcessEntry {
+            browser_child: true,
+            ..entry(pid, parent, exe)
+        }
+    }
+
+    /// Builds a snapshot entry for a browser started for automation.
+    fn automated(pid: u32, parent: u32, exe: &str) -> ProcessEntry {
+        ProcessEntry {
+            automated: true,
+            ..entry(pid, parent, exe)
+        }
+    }
+
+    /// Builds a set of process ids.
+    fn ids(pids: &[u32]) -> HashSet<u32> {
+        pids.iter().copied().collect()
+    }
+
+    #[test]
+    fn a_browser_and_all_its_descendants_are_spared() {
+        let processes = [
+            entry(1, 0, "claude.exe"),
+            entry(2, 1, "chrome.exe"),
+            child(3, 2, "chrome.exe"),
+            entry(4, 2, "cmd.exe"),
+            entry(5, 4, "claude.exe"),
+            entry(6, 1, "node.exe"),
+            entry(7, 6, "bash.exe"),
+        ];
+        let spared = spared_processes(&processes, &ids(&[1, 2, 3, 4, 5, 6, 7]));
+        assert_eq!(spared, ids(&[2, 3, 4, 5]));
+    }
+
+    #[test]
+    fn every_browser_name_is_recognised_in_any_case() {
+        let processes = [
+            entry(1, 0, "Chrome.EXE"),
+            entry(2, 0, "MSEDGE.exe"),
+            entry(3, 0, "brave.exe"),
+            entry(4, 0, "Vivaldi.exe"),
+            entry(5, 0, "OPERA.EXE"),
+            entry(6, 0, "notchrome.exe"),
+            entry(7, 0, "chrome.exe.bak"),
+        ];
+        let spared = spared_processes(&processes, &ids(&[1, 2, 3, 4, 5, 6, 7]));
+        assert_eq!(spared, ids(&[1, 2, 3, 4, 5]));
+    }
+
+    #[test]
+    fn a_parent_outside_the_job_ends_the_chain() {
+        let processes = [
+            entry(10, 20, "node.exe"),
+            entry(20, 0, "chrome.exe"),
+            entry(11, 30, "node.exe"),
+        ];
+        let spared = spared_processes(&processes, &ids(&[10, 11, 30]));
+        assert!(spared.is_empty(), "spared {spared:?}");
+    }
+
+    #[test]
+    fn a_job_without_browser_spares_nothing() {
+        let processes = [
+            entry(1, 0, "claude.exe"),
+            entry(2, 1, "bash.exe"),
+            entry(3, 2, "node.exe"),
+        ];
+        assert!(spared_processes(&processes, &ids(&[1, 2, 3])).is_empty());
+    }
+
+    #[test]
+    fn a_loop_in_the_parent_chain_spares_nothing() {
+        let processes = [entry(1, 2, "node.exe"), entry(2, 1, "bash.exe")];
+        assert!(spared_processes(&processes, &ids(&[1, 2])).is_empty());
+    }
+
+    #[test]
+    fn each_automation_flag_is_recognised_alone_or_with_a_value_in_any_case() {
+        for command_line in [
+            r#""C:\Apps\chrome.exe" --enable-automation"#,
+            r#""C:\Apps\chrome.exe" --REMOTE-DEBUGGING-PIPE --no-first-run"#,
+            r#""C:\Apps\chrome.exe" --remote-debugging-port=9222"#,
+            r#""C:\Apps\chrome.exe" --Headless"#,
+            r#""C:\Apps\chrome.exe" --headless=new about:blank"#,
+            r#"chrome.exe --user-data-dir=C:\Temp\x "--remote-debugging-port=0""#,
+            r#""C:\Apps\chrome.exe" -headless"#,
+            r#""C:\Apps\chrome.exe" /Remote-Debugging-Pipe"#,
+            r#""C:\Apps\chrome.exe" -enable-automation=1"#,
+            r#""C:\Apps\chrome.exe" " --headless ""#,
+        ] {
+            assert!(is_automation_command_line(command_line), "{command_line}");
+        }
+    }
+
+    #[test]
+    fn a_command_line_without_automation_flag_is_ordinary() {
+        for command_line in [
+            "",
+            r#""C:\Apps\chrome.exe""#,
+            r#""C:\Apps\chrome.exe" --no-first-run --restore-last-session"#,
+            r#""C:\Apps\chrome.exe" --type=renderer --enable-automation-x"#,
+            r#""C:\Apps\chrome.exe" --remote-debugging-portal=1"#,
+            r#""C:\Apps\chrome.exe" ---headless /remote-debugging-portal"#,
+            r#""C:\Apps\chrome.exe" - / -- --headless"#,
+            r#""C:\Apps --headless\chrome.exe" --type=gpu-process"#,
+            r#""C:\Apps\chrome.exe" --user-data-dir="C:\x --remote-debugging-pipe""#,
+            "--headless",
+        ] {
+            assert!(!is_automation_command_line(command_line), "{command_line}");
+        }
+    }
+
+    #[test]
+    fn an_unread_command_line_counts_as_ordinary() {
+        assert!(!is_automated(None));
+        assert!(is_automated(Some("chrome.exe --headless")));
+        assert!(!is_automated(Some("chrome.exe")));
+    }
+
+    #[test]
+    fn an_automated_browser_and_its_descendants_are_not_spared() {
+        let processes = [
+            entry(1, 0, "claude.exe"),
+            automated(2, 1, "chrome.exe"),
+            child(3, 2, "chrome.exe"),
+            entry(4, 2, "node.exe"),
+            entry(5, 3, "cmd.exe"),
+        ];
+        let spared = spared_processes(&processes, &ids(&[1, 2, 3, 4, 5]));
+        assert!(spared.is_empty(), "spared {spared:?}");
+    }
+
+    #[test]
+    fn ordinary_and_automated_browsers_side_by_side() {
+        let processes = [
+            entry(1, 0, "claude.exe"),
+            entry(2, 1, "chrome.exe"),
+            child(3, 2, "chrome.exe"),
+            entry(4, 1, "node.exe"),
+            automated(5, 4, "chrome.exe"),
+            child(6, 5, "chrome.exe"),
+            entry(7, 5, "cmd.exe"),
+        ];
+        let spared = spared_processes(&processes, &ids(&[1, 2, 3, 4, 5, 6, 7]));
+        assert_eq!(spared, ids(&[2, 3]));
+    }
+
+    #[test]
+    fn arguments_split_on_whitespace_outside_quotes_and_drop_the_quotes() {
+        assert_eq!(arguments(""), Vec::<String>::new());
+        assert_eq!(arguments(r#""""#), vec![String::new()]);
+        assert_eq!(arguments("a.exe \t --x=1   b"), vec!["a.exe", "--x=1", "b"]);
+        assert_eq!(
+            arguments(r#""C:\A B\c.exe" --d="e f" g"h i"j"#),
+            vec![r"C:\A B\c.exe", "--d=e f", "gh ij"]
+        );
+        assert_eq!(
+            arguments(r#"a.exe "C:\x\\" \"q\" C:\y\z"#),
+            vec!["a.exe", r"C:\x\", r#""q""#, r"C:\y\z"]
+        );
+    }
+
+    #[test]
+    fn an_automation_flag_with_an_empty_value_or_after_an_empty_argument_is_recognised() {
+        assert!(is_automation_command_line("chrome.exe --headless="));
+        assert!(is_automation_command_line(
+            r#"chrome.exe "" --enable-automation"#
+        ));
+        assert!(is_automation_command_line(
+            "chrome.exe\t--remote-debugging-pipe"
+        ));
+    }
+
+    #[test]
+    fn an_automated_browser_started_by_an_ordinary_root_is_not_spared() {
+        let processes = [
+            entry(1, 0, "claude.exe"),
+            entry(2, 1, "chrome.exe"),
+            automated(3, 2, "chrome.exe"),
+            child(4, 3, "chrome.exe"),
+        ];
+        let spared = spared_processes(&processes, &ids(&[1, 2, 3, 4]));
+        assert_eq!(spared, ids(&[2]));
+    }
+
+    #[test]
+    fn an_automated_browser_started_through_a_child_of_an_ordinary_root_is_not_spared() {
+        let processes = [
+            entry(1, 0, "claude.exe"),
+            entry(2, 1, "chrome.exe"),
+            entry(3, 2, "cmd.exe"),
+            automated(4, 3, "chrome.exe"),
+            child(5, 4, "chrome.exe"),
+        ];
+        let spared = spared_processes(&processes, &ids(&[1, 2, 3, 4, 5]));
+        assert_eq!(spared, ids(&[2, 3]));
+    }
+
+    #[test]
+    fn an_automated_browser_whose_browser_parent_is_outside_the_job_is_not_spared() {
+        let processes = [
+            entry(1, 0, "claude.exe"),
+            entry(9, 0, "chrome.exe"),
+            automated(2, 9, "chrome.exe"),
+            child(3, 2, "chrome.exe"),
+        ];
+        let spared = spared_processes(&processes, &ids(&[1, 2, 3]));
+        assert!(spared.is_empty(), "spared {spared:?}");
+    }
+
+    #[test]
+    fn an_ordinary_browser_whose_browser_parent_is_outside_the_job_is_spared() {
+        let processes = [
+            entry(1, 0, "claude.exe"),
+            automated(9, 0, "chrome.exe"),
+            entry(2, 9, "chrome.exe"),
+            child(3, 2, "chrome.exe"),
+        ];
+        let spared = spared_processes(&processes, &ids(&[1, 2, 3]));
+        assert_eq!(spared, ids(&[2, 3]));
+    }
+
+    #[test]
+    fn a_type_switch_with_a_value_marks_a_browser_child_with_any_prefix() {
+        for command_line in [
+            r#""C:\Apps\chrome.exe" --type=renderer --lang=en"#,
+            r#""C:\Apps\chrome.exe" -type=gpu-process"#,
+            r#""C:\Apps\chrome.exe" /TYPE=utility"#,
+            r#""C:\Apps\chrome.exe" --type= --type=crashpad-handler"#,
+        ] {
+            assert!(is_browser_child_command_line(command_line), "{command_line}");
+        }
+    }
+
+    #[test]
+    fn a_command_line_without_a_type_value_is_a_browser_itself() {
+        for command_line in [
+            "",
+            r#""C:\Apps\chrome.exe""#,
+            r#""C:\Apps\chrome.exe" --type"#,
+            r#""C:\Apps\chrome.exe" --type="#,
+            r#""C:\Apps\chrome.exe" --type=renderer --type="#,
+            r#""C:\Apps\chrome.exe" -- --type=renderer"#,
+            r#""C:\Apps\chrome.exe" --typed=renderer"#,
+            r#""C:\--type=renderer\chrome.exe" --no-first-run"#,
+        ] {
+            assert!(!is_browser_child_command_line(command_line), "{command_line}");
+        }
+    }
+
+    #[test]
+    fn switches_after_single_argument_are_not_read() {
+        for command_line in [
+            r#""C:\Apps\chrome.exe" --single-argument https://x/ --type=renderer /headless"#,
+            r#""C:\Apps\chrome.exe" --SINGLE-ARGUMENT --type=renderer --headless"#,
+        ] {
+            assert!(!is_automation_command_line(command_line), "{command_line}");
+            assert!(!is_browser_child_command_line(command_line), "{command_line}");
+        }
+    }
+
+    #[test]
+    fn an_unread_command_line_counts_as_a_browser_itself() {
+        assert!(!is_browser_child(None));
+        assert!(is_browser_child(Some("chrome.exe --type=renderer")));
+        assert!(!is_browser_child(Some("chrome.exe")));
+    }
+
+    #[test]
+    fn a_browser_child_whose_root_is_gone_is_not_spared() {
+        let processes = [
+            entry(1, 0, "claude.exe"),
+            child(3, 2, "chrome.exe"),
+            entry(4, 3, "node.exe"),
+            child(5, 1, "chrome.exe"),
+        ];
+        let spared = spared_processes(&processes, &ids(&[1, 3, 4, 5]));
+        assert!(spared.is_empty(), "spared {spared:?}");
+    }
+
+    #[test]
+    fn an_ordinary_browser_whose_parent_id_was_reused_by_an_automated_one_is_spared() {
+        let processes = [
+            entry(1, 0, "claude.exe"),
+            automated(2, 1, "chrome.exe"),
+            child(5, 2, "chrome.exe"),
+            entry(3, 2, "chrome.exe"),
+            child(4, 3, "chrome.exe"),
+        ];
+        let spared = spared_processes(&processes, &ids(&[1, 2, 3, 4, 5]));
+        assert_eq!(spared, ids(&[3, 4]));
+    }
+
+    #[test]
+    fn the_command_line_of_a_process_outside_the_job_is_not_read() {
+        let mut child = long_process();
+        let job = Job::assign(child.id()).unwrap();
+        let in_job = command_line_in_job(job.0, child.id());
+        let missing = command_line_in_job(job.0, 0);
+        let outside = command_line_in_job(job.0, std::process::id());
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(
+            in_job
+                .as_deref()
+                .is_some_and(|line| line.contains("127.0.0.1")),
+            "read {in_job:?}"
+        );
+        assert_eq!(missing, None);
+        assert_eq!(outside, None);
+    }
+
+    #[test]
+    fn stopping_a_job_without_browser_stops_its_process() {
+        let mut child = long_process();
+        let job = Job::assign(child.id()).unwrap();
+        job.stop_sparing_browsers();
+        let ended = ends_soon(&mut child);
+        let _ = child.kill();
+        assert!(ended, "the process survived stop_sparing_browsers");
+    }
+
+    /// Starts `program`, a copy of `cmd.exe`, so that it waits for a line on its
+    /// stdin, then starts a `ping` of about 30 seconds and waits for it.
+    fn gated_shell(program: &Path) -> Child {
+        Command::new(program)
+            .raw_arg(r#"/d /c "set /p x= & ping -n 30 127.0.0.1 >nul""#)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("the shell starts")
+    }
+
+    /// Releases a [`gated_shell`] and waits up to 5 seconds for the `ping` it
+    /// starts; returns that `ping`'s id.
+    fn release(shell: &mut Child) -> u32 {
+        writeln!(shell.stdin.take().unwrap(), "go").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            let child = process_snapshot()
+                .unwrap()
+                .into_iter()
+                .find(|process| {
+                    process.parent == shell.id() && process.exe.eq_ignore_ascii_case("ping.exe")
+                });
+            if let Some(child) = child {
+                return child.pid;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        panic!("the shell {} started no ping", shell.id());
+    }
+
+    /// Makes an empty folder of its own under the system's temporary folder.
+    fn scratch_folder() -> PathBuf {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let folder = env::temp_dir().join(format!(
+            "cloitre-browser-test-{}-{stamp}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&folder).unwrap();
+        folder
+    }
+
+    #[test]
+    fn stopping_spares_a_browser_and_its_child_and_stops_the_rest() {
+        let system = PathBuf::from(env::var_os("SystemRoot").expect("SystemRoot is set"));
+        let cmd = system.join("System32").join("cmd.exe");
+        let folder = scratch_folder();
+        let browser_exe = folder.join("chrome.exe");
+        fs::copy(&cmd, &browser_exe).unwrap();
+
+        let mut shell = gated_shell(&cmd);
+        let mut browser = gated_shell(&browser_exe);
+        let job = Job::assign(shell.id()).unwrap();
+        job.add(browser.id()).unwrap();
+        let shell_child = Process::open(release(&mut shell));
+        let browser_child = Process::open(release(&mut browser));
+        let shell_process = Process::open(shell.id());
+        let browser_process = Process::open(browser.id());
+
+        job.stop_sparing_browsers();
+        drop(job);
+        let shell_ended = shell_process.ends_within(5_000);
+        let shell_child_ended = shell_child.ends_within(5_000);
+        let browser_ended = browser_process.ends_within(1_000);
+        let browser_child_ended = browser_child.ends_within(0);
+
+        drop((shell_child, browser_child, shell_process, browser_process));
+        let _ = shell.wait();
+        let _ = browser.wait();
+        let _ = fs::remove_dir_all(&folder);
+
+        assert!(shell_ended, "a process outside the browser survived");
+        assert!(shell_child_ended, "the child of that process survived");
+        assert!(!browser_ended, "the browser was stopped");
+        assert!(!browser_child_ended, "the child of the browser was stopped");
+    }
+
+    #[test]
+    fn stopping_stops_an_automated_browser_and_spares_an_ordinary_one() {
+        let system = PathBuf::from(env::var_os("SystemRoot").expect("SystemRoot is set"));
+        let cmd = system.join("System32").join("cmd.exe");
+        let folder = scratch_folder();
+        let browser_exe = folder.join("chrome.exe");
+        fs::copy(&cmd, &browser_exe).unwrap();
+
+        let mut ordinary = gated_shell(&browser_exe);
+        let mut automated = Command::new(&browser_exe)
+            .raw_arg(
+                r#"/d /c "set /p x= & ping -n 30 127.0.0.1 >nul & rem" --remote-debugging-pipe"#,
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("the shell starts");
+        let job = Job::assign(ordinary.id()).unwrap();
+        job.add(automated.id()).unwrap();
+        let automated_line = command_line_in_job(job.0, automated.id());
+        let ordinary_child = Process::open(release(&mut ordinary));
+        let automated_child = Process::open(release(&mut automated));
+        let ordinary_process = Process::open(ordinary.id());
+        let automated_process = Process::open(automated.id());
+
+        job.stop_sparing_browsers();
+        drop(job);
+        let automated_ended = automated_process.ends_within(5_000);
+        let automated_child_ended = automated_child.ends_within(5_000);
+        let ordinary_ended = ordinary_process.ends_within(1_000);
+        let ordinary_child_ended = ordinary_child.ends_within(0);
+
+        drop((
+            ordinary_child,
+            automated_child,
+            ordinary_process,
+            automated_process,
+        ));
+        let _ = ordinary.wait();
+        let _ = automated.wait();
+        let _ = fs::remove_dir_all(&folder);
+
+        assert!(
+            automated_line
+                .as_deref()
+                .is_some_and(is_automation_command_line),
+            "read {automated_line:?}"
+        );
+        assert!(automated_ended, "the automated browser survived");
+        assert!(
+            automated_child_ended,
+            "the child of the automated browser survived"
+        );
+        assert!(!ordinary_ended, "the ordinary browser was stopped");
+        assert!(
+            !ordinary_child_ended,
+            "the child of the ordinary browser was stopped"
+        );
+    }
+
+    /// Waits up to 5 seconds for a process named `exe`, any case, started by
+    /// process `parent`; returns its id.
+    fn child_named(parent: u32, exe: &str) -> u32 {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            let child = process_snapshot()
+                .unwrap()
+                .into_iter()
+                .find(|process| process.parent == parent && process.exe.eq_ignore_ascii_case(exe));
+            if let Some(child) = child {
+                return child.pid;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        panic!("process {parent} started no {exe}");
+    }
+
+    #[test]
+    fn stopping_a_job_without_browser_stops_every_process() {
+        let system = PathBuf::from(env::var_os("SystemRoot").expect("SystemRoot is set"));
+        let mut shell = gated_shell(&system.join("System32").join("cmd.exe"));
+        let job = Job::assign(shell.id()).unwrap();
+        let shell_child = Process::open(release(&mut shell));
+        let shell_process = Process::open(shell.id());
+
+        job.stop_sparing_browsers();
+        let shell_ended = shell_process.ends_within(5_000);
+        let shell_child_ended = shell_child.ends_within(5_000);
+
+        drop((shell_child, shell_process, job));
+        let _ = shell.wait();
+        assert!(shell_ended, "the session's process survived");
+        assert!(shell_child_ended, "the child of that process survived");
+    }
+
+    #[test]
+    fn stopping_spares_a_browser_the_session_process_started() {
+        let system = PathBuf::from(env::var_os("SystemRoot").expect("SystemRoot is set"));
+        let cmd = system.join("System32").join("cmd.exe");
+        let folder = scratch_folder();
+        let browser_exe = folder.join("chrome.exe");
+        fs::copy(&cmd, &browser_exe).unwrap();
+
+        let mut shell = Command::new(&cmd)
+            .raw_arg(format!(
+                r#"/d /c "set /p x= & "{}" /d /c ping -n 30 127.0.0.1 >nul""#,
+                browser_exe.display()
+            ))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("the shell starts");
+        let job = Job::assign(shell.id()).unwrap();
+        writeln!(shell.stdin.take().unwrap(), "go").unwrap();
+        let browser_pid = child_named(shell.id(), "chrome.exe");
+        let browser_child = Process::open(child_named(browser_pid, "ping.exe"));
+        let browser = Process::open(browser_pid);
+        let shell_process = Process::open(shell.id());
+
+        job.stop_sparing_browsers();
+        drop(job);
+        let shell_ended = shell_process.ends_within(5_000);
+        let browser_ended = browser.ends_within(1_000);
+        let browser_child_ended = browser_child.ends_within(0);
+
+        drop((browser_child, browser, shell_process));
+        let _ = shell.wait();
+        let _ = fs::remove_dir_all(&folder);
+        assert!(shell_ended, "the process that started the browser survived");
+        assert!(!browser_ended, "the browser was stopped");
+        assert!(!browser_child_ended, "the child of the browser was stopped");
+    }
+
+    #[test]
+    fn stopping_spares_an_ordinary_browser_started_by_an_automated_one_and_stops_its_child_process()
+    {
+        let system = PathBuf::from(env::var_os("SystemRoot").expect("SystemRoot is set"));
+        let folder = scratch_folder();
+        let browser_exe = folder.join("chrome.exe");
+        fs::copy(system.join("System32").join("cmd.exe"), &browser_exe).unwrap();
+
+        let mut automated = Command::new(&browser_exe)
+            .raw_arg(format!(
+                concat!(
+                    r#"/d /c set /p x= "#,
+                    r#"& start "" /b "{0}" /d /c ping -n 30 127.0.0.1 ^& rem %CLOITRE_TEST_TYPE% "#,
+                    r#"& "{0}" /d /c ping -n 30 127.0.0.1 & rem --remote-debugging-pipe"#,
+                ),
+                browser_exe.display()
+            ))
+            .env("CLOITRE_TEST_TYPE", "--type=renderer")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("the shell starts");
+        let job = Job::assign(automated.id()).unwrap();
+        let automated_line = command_line_in_job(job.0, automated.id());
+        writeln!(automated.stdin.take().unwrap(), "go").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let browsers = loop {
+            let browsers: Vec<u32> = process_snapshot()
+                .unwrap()
+                .into_iter()
+                .filter(|process| {
+                    process.parent == automated.id()
+                        && process.exe.eq_ignore_ascii_case("chrome.exe")
+                })
+                .map(|process| process.pid)
+                .collect();
+            if browsers.len() == 2 || Instant::now() >= deadline {
+                break browsers;
+            }
+            thread::sleep(Duration::from_millis(50));
+        };
+        assert_eq!(browsers.len(), 2, "started {browsers:?}");
+        let (renderer, ordinary): (Vec<u32>, Vec<u32>) =
+            browsers.into_iter().partition(|&pid| {
+                command_line_in_job(job.0, pid)
+                    .as_deref()
+                    .is_some_and(is_browser_child_command_line)
+            });
+        assert_eq!((renderer.len(), ordinary.len()), (1, 1));
+        let renderer_child = Process::open(child_named(renderer[0], "ping.exe"));
+        let ordinary_child = Process::open(child_named(ordinary[0], "ping.exe"));
+        let renderer = Process::open(renderer[0]);
+        let ordinary = Process::open(ordinary[0]);
+        let automated_process = Process::open(automated.id());
+
+        job.stop_sparing_browsers();
+        drop(job);
+        let automated_ended = automated_process.ends_within(5_000);
+        let renderer_ended = renderer.ends_within(5_000);
+        let renderer_child_ended = renderer_child.ends_within(5_000);
+        let ordinary_ended = ordinary.ends_within(1_000);
+        let ordinary_child_ended = ordinary_child.ends_within(0);
+
+        drop((
+            renderer_child,
+            ordinary_child,
+            renderer,
+            ordinary,
+            automated_process,
+        ));
+        let _ = automated.wait();
+        let _ = fs::remove_dir_all(&folder);
+        assert!(
+            automated_line
+                .as_deref()
+                .is_some_and(|line| is_automation_command_line(line)
+                    && !is_browser_child_command_line(line)),
+            "read {automated_line:?}"
+        );
+        assert!(automated_ended, "the automated browser survived");
+        assert!(renderer_ended, "the child process of the automated browser survived");
+        assert!(renderer_child_ended, "the process under that child survived");
+        assert!(!ordinary_ended, "the ordinary browser was stopped");
+        assert!(!ordinary_child_ended, "the child of the ordinary browser was stopped");
     }
 }
