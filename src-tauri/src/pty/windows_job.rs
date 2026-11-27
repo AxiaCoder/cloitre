@@ -58,6 +58,11 @@ const SWITCH_PREFIXES: [&str; 3] = ["--", "-", "/"];
 /// Argument after which Chromium reads no more switches.
 const SWITCH_TERMINATOR: &str = "--";
 
+/// Argument, compared in any case, after which Chromium reads no more
+/// switches: it takes the rest of the command line as one argument, as when
+/// it opens a link as the system's web browser.
+const SINGLE_ARGUMENT_SWITCH: &str = "--single-argument";
+
 /// Switch that Chromium gives, with a non-empty value, to every child process
 /// of a browser (renderer, GPU process, utility, crash handler), never to the
 /// browser process itself.
@@ -82,8 +87,8 @@ struct ProcessEntry {
     /// Whether it is a browser started for automation; set only for the
     /// browsers of a job, `false` elsewhere.
     automated: bool,
-    /// Whether it is a child process of a browser, one whose command line
-    /// holds a `type` switch; set only for the browsers of a job, `false` elsewhere.
+    /// Whether it is a child process of a browser, one whose last `type`
+    /// switch has a non-empty value; set only for the browsers of a job, `false` elsewhere.
     browser_child: bool,
 }
 
@@ -134,14 +139,16 @@ fn arguments(command_line: &str) -> Vec<String> {
 /// Returns the switches of `command_line` as Chromium reads them on Windows:
 /// each argument after the program, trimmed, that starts with one of
 /// [`SWITCH_PREFIXES`] and has a name after it, up to a lone
-/// [`SWITCH_TERMINATOR`]. Each comes as its name, lowercase and without prefix,
+/// [`SWITCH_TERMINATOR`] or a [`SINGLE_ARGUMENT_SWITCH`]. Each comes as its name, lowercase and without prefix,
 /// and its value: what follows the first `=`, `None` without one.
 fn switches(command_line: &str) -> Vec<(String, Option<String>)> {
     arguments(command_line)
         .iter()
         .skip(1)
         .map(|argument| argument.trim())
-        .take_while(|&argument| argument != SWITCH_TERMINATOR)
+        .take_while(|&argument| {
+            argument != SWITCH_TERMINATOR && !argument.eq_ignore_ascii_case(SINGLE_ARGUMENT_SWITCH)
+        })
         .filter_map(|argument| {
             let switch = SWITCH_PREFIXES.iter().find_map(|prefix| {
                 argument
@@ -469,9 +476,9 @@ impl Job {
 
     /// Stops every process in the job except the ordinary browsers of
     /// [`BROWSER_EXES`] and their descendants, then lets closing the job leave
-    /// those running. A browser root is a browser process whose command line
-    /// has no [`TYPE_SWITCH`]; one whose command line holds one of the
-    /// [`AUTOMATION_FLAGS`] is stopped with its descendants. A browser whose
+    /// those running. A browser root is a browser process unless the last
+    /// [`TYPE_SWITCH`] of its command line has a non-empty value; one whose
+    /// command line holds one of the [`AUTOMATION_FLAGS`] is stopped with its descendants. A browser whose
     /// command line cannot be read counts as an ordinary root. With no ordinary
     /// browser in the job, stops everything as [`Job::terminate`] does.
     ///
@@ -1030,6 +1037,17 @@ mod tests {
     }
 
     #[test]
+    fn switches_after_single_argument_are_not_read() {
+        for command_line in [
+            r#""C:\Apps\chrome.exe" --single-argument https://x/ --type=renderer /headless"#,
+            r#""C:\Apps\chrome.exe" --SINGLE-ARGUMENT --type=renderer --headless"#,
+        ] {
+            assert!(!is_automation_command_line(command_line), "{command_line}");
+            assert!(!is_browser_child_command_line(command_line), "{command_line}");
+        }
+    }
+
+    #[test]
     fn an_unread_command_line_counts_as_a_browser_itself() {
         assert!(!is_browser_child(None));
         assert!(is_browser_child(Some("chrome.exe --type=renderer")));
@@ -1317,18 +1335,20 @@ mod tests {
         let mut automated = Command::new(&browser_exe)
             .raw_arg(format!(
                 concat!(
-                    r#"/d /c "set /p x= "#,
-                    r#"& start "" /b "{0}" /d /c ping -n 30 127.0.0.1 ^& rem --type=renderer "#,
-                    r#"& "{0}" /d /c ping -n 30 127.0.0.1 & rem" --remote-debugging-pipe"#,
+                    r#"/d /c set /p x= "#,
+                    r#"& start "" /b "{0}" /d /c ping -n 30 127.0.0.1 ^& rem %CLOITRE_TEST_TYPE% "#,
+                    r#"& "{0}" /d /c ping -n 30 127.0.0.1 & rem --remote-debugging-pipe"#,
                 ),
                 browser_exe.display()
             ))
+            .env("CLOITRE_TEST_TYPE", "--type=renderer")
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
             .expect("the shell starts");
         let job = Job::assign(automated.id()).unwrap();
+        let automated_line = command_line_in_job(job.0, automated.id());
         writeln!(automated.stdin.take().unwrap(), "go").unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         let browsers = loop {
@@ -1377,6 +1397,13 @@ mod tests {
         ));
         let _ = automated.wait();
         let _ = fs::remove_dir_all(&folder);
+        assert!(
+            automated_line
+                .as_deref()
+                .is_some_and(|line| is_automation_command_line(line)
+                    && !is_browser_child_command_line(line)),
+            "read {automated_line:?}"
+        );
         assert!(automated_ended, "the automated browser survived");
         assert!(renderer_ended, "the child process of the automated browser survived");
         assert!(renderer_child_ended, "the process under that child survived");
