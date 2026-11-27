@@ -4,6 +4,7 @@ mod commands;
 mod dll_search;
 mod error;
 mod folder;
+mod keep_awake;
 mod launch;
 mod projects;
 mod pty;
@@ -207,7 +208,8 @@ pub fn run() {
             commands::tab_close,
             commands::tab_activate,
             commands::tab_set_title,
-            commands::clipboard_file_paths
+            commands::clipboard_file_paths,
+            commands::keep_awake
         ])
         .build(context)
         .expect("error while building the app")
@@ -424,6 +426,7 @@ mod tests {
             "allow-tab-activate",
             "allow-tab-set-title",
             "allow-clipboard-file-paths",
+            "allow-keep-awake",
             "core:event:allow-listen",
             "core:event:allow-unlisten",
             "updater:allow-check",

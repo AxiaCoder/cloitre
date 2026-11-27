@@ -5,7 +5,7 @@
  */
 
 import type { SessionActivity } from "./session-activity";
-import type { IdleDelay } from "./settings";
+import type { IdleDelay, KeepAwake } from "./settings";
 
 /** The fixed texts of the interface, by key. `index.html` names them in `data-text`, `data-label` and `data-title`. */
 export const texts = {
@@ -69,6 +69,7 @@ export const texts = {
   updateInstallFailed: "The installer could not start. Reopen your tabs with Resume.",
   settings: "Settings",
   idleStopAfter: "Stop idle sessions after",
+  keepAwake: "Keep the computer awake",
 } as const;
 
 /** The key of a fixed text. */
@@ -172,6 +173,11 @@ export const messages = {
   noMarkerLeft: (name: string) => `${name}: no marker left, end of recording`,
   /** The option of the idle delay setting for `delay`: "Never", or a duration. */
   idleDelayOption: (delay: IdleDelay) => (delay === "never" ? "Never" : duration(delay)),
+  /** The option of the keep-awake setting for `choice`. */
+  keepAwakeOption: (choice: KeepAwake) =>
+    ({ never: "Never", working: "While a session works", "working-or-blocked": "While a session works or waits for an answer" })[
+      choice
+    ],
   /** The start notice of a session stopped after `minutes` minutes without activity. */
   idleStopped: (minutes: number) => `Stopped after ${duration(minutes)} without activity.`,
 } as const;

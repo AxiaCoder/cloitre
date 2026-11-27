@@ -37,3 +37,33 @@ export function loadIdleDelay(storage: SettingsStorage): IdleDelay {
 export function saveIdleDelay(storage: SettingsStorage, delay: IdleDelay): void {
   storage.setItem(IDLE_DELAY_KEY, idleDelayValue(delay));
 }
+
+/**
+ * When the computer is kept from sleeping: never, while a session works, or
+ * while a session works or waits for an answer.
+ */
+export type KeepAwake = "never" | "working" | "working-or-blocked";
+
+/** Every keep-awake choice the settings dialog offers, in the order it lists them. */
+export const KEEP_AWAKE_CHOICES: readonly KeepAwake[] = ["never", "working", "working-or-blocked"];
+
+/** The keep-awake choice when none, or an unknown one, is stored. */
+export const DEFAULT_KEEP_AWAKE: KeepAwake = "working-or-blocked";
+
+/** The local storage key of the keep-awake choice. */
+export const KEEP_AWAKE_KEY = "cloitre.keepAwake";
+
+/** Returns the keep-awake choice `value` names, or {@link DEFAULT_KEEP_AWAKE} when it names none, `null` included. */
+export function parseKeepAwake(value: string | null): KeepAwake {
+  return KEEP_AWAKE_CHOICES.find((choice) => choice === value) ?? DEFAULT_KEEP_AWAKE;
+}
+
+/** Returns the keep-awake choice stored in `storage`, or {@link DEFAULT_KEEP_AWAKE} when none or an unknown one is. */
+export function loadKeepAwake(storage: SettingsStorage): KeepAwake {
+  return parseKeepAwake(storage.getItem(KEEP_AWAKE_KEY));
+}
+
+/** Stores keep-awake choice `choice` in `storage`. */
+export function saveKeepAwake(storage: SettingsStorage, choice: KeepAwake): void {
+  storage.setItem(KEEP_AWAKE_KEY, choice);
+}
