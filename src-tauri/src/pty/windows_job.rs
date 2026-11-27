@@ -1305,4 +1305,82 @@ mod tests {
         assert!(!browser_ended, "the browser was stopped");
         assert!(!browser_child_ended, "the child of the browser was stopped");
     }
+
+    #[test]
+    fn stopping_spares_an_ordinary_browser_started_by_an_automated_one_and_stops_its_child_process()
+    {
+        let system = PathBuf::from(env::var_os("SystemRoot").expect("SystemRoot is set"));
+        let folder = scratch_folder();
+        let browser_exe = folder.join("chrome.exe");
+        fs::copy(system.join("System32").join("cmd.exe"), &browser_exe).unwrap();
+
+        let mut automated = Command::new(&browser_exe)
+            .raw_arg(format!(
+                concat!(
+                    r#"/d /c "set /p x= "#,
+                    r#"& start "" /b "{0}" /d /c ping -n 30 127.0.0.1 ^& rem --type=renderer "#,
+                    r#"& "{0}" /d /c ping -n 30 127.0.0.1 & rem" --remote-debugging-pipe"#,
+                ),
+                browser_exe.display()
+            ))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("the shell starts");
+        let job = Job::assign(automated.id()).unwrap();
+        writeln!(automated.stdin.take().unwrap(), "go").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let browsers = loop {
+            let browsers: Vec<u32> = process_snapshot()
+                .unwrap()
+                .into_iter()
+                .filter(|process| {
+                    process.parent == automated.id()
+                        && process.exe.eq_ignore_ascii_case("chrome.exe")
+                })
+                .map(|process| process.pid)
+                .collect();
+            if browsers.len() == 2 || Instant::now() >= deadline {
+                break browsers;
+            }
+            thread::sleep(Duration::from_millis(50));
+        };
+        assert_eq!(browsers.len(), 2, "started {browsers:?}");
+        let (renderer, ordinary): (Vec<u32>, Vec<u32>) =
+            browsers.into_iter().partition(|&pid| {
+                command_line_in_job(job.0, pid)
+                    .as_deref()
+                    .is_some_and(is_browser_child_command_line)
+            });
+        assert_eq!((renderer.len(), ordinary.len()), (1, 1));
+        let renderer_child = Process::open(child_named(renderer[0], "ping.exe"));
+        let ordinary_child = Process::open(child_named(ordinary[0], "ping.exe"));
+        let renderer = Process::open(renderer[0]);
+        let ordinary = Process::open(ordinary[0]);
+        let automated_process = Process::open(automated.id());
+
+        job.stop_sparing_browsers();
+        drop(job);
+        let automated_ended = automated_process.ends_within(5_000);
+        let renderer_ended = renderer.ends_within(5_000);
+        let renderer_child_ended = renderer_child.ends_within(5_000);
+        let ordinary_ended = ordinary.ends_within(1_000);
+        let ordinary_child_ended = ordinary_child.ends_within(0);
+
+        drop((
+            renderer_child,
+            ordinary_child,
+            renderer,
+            ordinary,
+            automated_process,
+        ));
+        let _ = automated.wait();
+        let _ = fs::remove_dir_all(&folder);
+        assert!(automated_ended, "the automated browser survived");
+        assert!(renderer_ended, "the child process of the automated browser survived");
+        assert!(renderer_child_ended, "the process under that child survived");
+        assert!(!ordinary_ended, "the ordinary browser was stopped");
+        assert!(!ordinary_child_ended, "the child of the ordinary browser was stopped");
+    }
 }
