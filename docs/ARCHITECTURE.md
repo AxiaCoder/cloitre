@@ -64,7 +64,7 @@ Changes the size of a session's terminal.
 
 ### `pty_kill`
 
-Stops a session's process, closes its pseudo-terminal and closes its recording. On Windows, the processes the session started are stopped too, even those with their own console; none of them can leave the session's job. A web page the session opens through the [browser mode](#browser-mode) is opened by the app, outside the job, and survives. Also used to release a session whose process has already exited.
+Stops a session's process, closes its pseudo-terminal and closes its recording. On Windows, the processes the session started are stopped too, even those with their own console; none of them can leave the session's job. A web browser in the job (`chrome.exe`, `msedge.exe`, `brave.exe`, `vivaldi.exe` or `opera.exe`, any case) and every process descending from it are spared and keep running, as described under [Job](#browser-mode). A web page the session opens through the [browser mode](#browser-mode) is opened by the app, outside the job, and survives. Also used to release a session whose process has already exited.
 
 #### Browser mode
 
@@ -75,7 +75,7 @@ On Windows, every session gets `BROWSER` set to the app's own executable, unless
 - **Web URL** (`http://` or `https://`, any case, followed by a host, printable ASCII only, no space and no double quote; at most 16 KiB): sent to the running app through the [URL pipe](#url-pipe), exit code 0 once written. When the app cannot be reached (no pipe, a pipe served by another user, any write error) or the URL is longer than 16 KiB, the browser mode runs the opener itself, inside the session's job, waits for it and exits with its code.
 - **URL of another scheme** (`vscode:`, `slack:`, `jetbrains:`…, which Claude Code also opens through `BROWSER`): a scheme as RFC 3986 writes it (a letter, then letters, digits, `+`, `-` or `.`) of at least two characters, then `:`, the scheme neither `http`, `https` nor `file` (any case), the whole URL printable ASCII, no space and no double quote. The browser mode runs the opener itself, inside the session's job, waits for it and exits with its code.
 - **Refuses**: any other argument (a path, a drive letter such as `C:`, `file:`, an `http` or `https` URL without a host): nothing is opened, exit code 1. A failure to start the opener also exits with code 1.
-- **Job**: the session's job allows no breakaway: a process of the session that asks for it (`CREATE_BREAKAWAY_FROM_JOB`) is refused, so every process of the session is stopped with it. Only the app, outside every session's job, opens a web page for a session; the browser it starts, when no browser was running, survives `pty_kill`. A browser started by the opener of the browser mode itself (app unreachable, other scheme) is in the job and stops with the tab.
+- **Job**: the session's job allows no breakaway: a process of the session that asks for it (`CREATE_BREAKAWAY_FROM_JOB`) is refused, so every process of the session is stopped with it, except a browser. Only the app, outside every session's job, opens a web page for a session; the browser it starts, when no browser was running, survives `pty_kill`. A browser that lands in the job anyway (started by the opener of the browser mode itself, or by `claude` for Claude in Chrome) survives too: at the stop, Rust reads the job's processes and a process snapshot (id, parent id, executable name), spares every process whose executable is one of `chrome.exe`, `msedge.exe`, `brave.exe`, `vivaldi.exe`, `opera.exe` (any case) and every process descending from one through a chain of parents that are all in the job, and stops the others one by one. It reads the job again after each pass, at most 5 passes, until only spared processes remain; then it lifts the job's stop-on-close limit, so closing the job leaves them running. With no browser in the job, after 5 passes that each still found a process to stop, or on a system error, the whole job is stopped, browser included.
 
 ##### URL pipe
 
@@ -83,7 +83,7 @@ On Windows, every session gets `BROWSER` set to the app's own executable, unless
 - **Message**: the URL alone, UTF-8, no line end, at most 16 KiB; the client closes the pipe after writing.
 - **What the app does**: checks the message again as a web URL (same rule as above), then starts the opener with it, outside every session's job, without waiting for it.
 - **Refuses**: a message longer than 16 KiB, not UTF-8, or not a web URL: dropped without a word, nothing is started.
-- **Limit**: a Chrome started by the Claude in Chrome extension does not go through `BROWSER` and stays in the job: closing the tab stops it.
+- **Limit**: a Chrome started by the Claude in Chrome extension does not go through `BROWSER` and lands in the job; closing the tab spares it (see Job above). If the app ends without stopping its sessions, abruptly for instance, the system closes the job and stops that browser.
 
 The session is released and its recording closed at once, and the call returns at once. A process launched less than 20 seconds ago keeps running until those 20 seconds have passed, then is stopped: `claude` counts a stop during its fullscreen start, which completes about 15 seconds after the launch, as a failed start, and falls back to its classic renderer on the next launch on the machine.
 

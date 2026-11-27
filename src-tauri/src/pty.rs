@@ -43,12 +43,13 @@ struct PtySession {
 }
 
 impl PtySession {
-    /// Stops the session's process and, on Windows, every process it started.
+    /// Stops the session's process and, on Windows, every process it started
+    /// except a web browser and its descendants, which survive the session.
     /// Failures are ignored: an already exited process makes the kill fail.
     fn stop(&mut self) {
         #[cfg(windows)]
         if let Some(job) = &self.job {
-            job.terminate();
+            job.stop_sparing_browsers();
         }
         let _ = self.killer.kill();
     }
