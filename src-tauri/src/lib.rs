@@ -1,3 +1,4 @@
+mod browser;
 mod clipboard;
 mod commands;
 mod dll_search;
@@ -20,6 +21,7 @@ use crate::pty::PtyRegistry;
 use crate::recording::RecordingRegistry;
 use crate::session::{HookSettings, PendingSessions};
 
+pub use crate::browser::run_browser_mode;
 pub use crate::dll_search::restrict_dll_search;
 pub use crate::session::{HOOK_ARG, run_hook};
 pub use crate::state::{STATE_HOOK_ARG, run_state_hook};

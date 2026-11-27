@@ -6,7 +6,7 @@ The webview (TypeScript, xterm.js) draws the terminal and handles everything the
 
 The Windows build ships Microsoft's ConPTY release next to the executable: `conpty.dll`, `x64/OpenConsole.exe` and its licence as `conpty-LICENSE.txt`, copied from `vendor/conpty/` by `bundle.resources` in `src-tauri/tauri.windows.conf.json` (merged on Windows only, so macOS ships none of them). On Windows, Tauri's resource folder is the executable's folder, in a development build too.
 
-- `portable-pty` loads `conpty.dll` from the executable's folder before the one in Windows, and `conpty.dll` starts `x64/OpenConsole.exe` from its own folder. With the bundled release, the bytes `claude` writes reach xterm.js unchanged; the ConPTY built into Windows rewrites some of them, which breaks composed emojis. `portable-pty` loads it by bare name, so `run()` first restricts the DLL search of the whole process to the executable's folder and `System32` (`restrict_dll_search` in `src-tauri/src/dll_search.rs`): when `conpty.dll` is missing from the executable's folder, a copy in the current directory or a `PATH` folder is never loaded, and `portable-pty` falls back to the ConPTY built into Windows. A failure to restrict the search stops the app. The hook modes (`session-hook`, `state-hook`) return before `run()` and open no pseudo-terminal.
+- `portable-pty` loads `conpty.dll` from the executable's folder before the one in Windows, and `conpty.dll` starts `x64/OpenConsole.exe` from its own folder. With the bundled release, the bytes `claude` writes reach xterm.js unchanged; the ConPTY built into Windows rewrites some of them, which breaks composed emojis. `portable-pty` loads it by bare name, so `run()` first restricts the DLL search of the whole process to the executable's folder and `System32` (`restrict_dll_search` in `src-tauri/src/dll_search.rs`): when `conpty.dll` is missing from the executable's folder, a copy in the current directory or a `PATH` folder is never loaded, and `portable-pty` falls back to the ConPTY built into Windows. A failure to restrict the search stops the app. The hook modes (`session-hook`, `state-hook`) and the [browser mode](#browser-mode) return before `run()` and open no pseudo-terminal.
 - A Rust test (`windows_build_ships_exactly_the_bundled_conpty_files` in `src-tauri/src/lib.rs`) fails when the Windows resources change or a source file is missing. `scripts/check-conpty.ps1`, run by the checks workflow, fails when a file is not signed by Microsoft or its version or SHA-256 differs from the values written in the script. Updating the release is described in `vendor/conpty/README.md`.
 
 ## App data folder
@@ -64,7 +64,17 @@ Changes the size of a session's terminal.
 
 ### `pty_kill`
 
-Stops a session's process, closes its pseudo-terminal and closes its recording. On Windows, the processes the session started are stopped too, even those with their own console. Also used to release a session whose process has already exited.
+Stops a session's process, closes its pseudo-terminal and closes its recording. On Windows, the processes the session started are stopped too, even those with their own console, except the browser the [browser mode](#browser-mode) opens. Also used to release a session whose process has already exited.
+
+#### Browser mode
+
+On Windows, every session gets `BROWSER` set to the app's own executable, unless the inherited environment already holds a non-empty `BROWSER`, which is kept. Claude Code opens a URL (`/login`, for instance) by running `$BROWSER <url>` and reading its exit code.
+
+- **Detection**: the executable started with exactly one argument and `CLOITRE_TAB_ID` set, after the hook arguments were ruled out. It runs before Tauri starts and opens no window.
+- **What it does**: when the argument is a web URL (`http://` or `https://`, any case, followed by a host, printable ASCII only, no space and no double quote), it runs `rundll32.exe url.dll,OpenURL <url>` from the system folder by full path, never through the `PATH`, with `CREATE_BREAKAWAY_FROM_JOB`, waits for it and exits with its code. When a job refuses the breakaway (the app itself runs in a job that does not allow it), the same command runs again without it, inside the job, as before.
+- **Refuses**: any other argument (`file:`, a path, another scheme): nothing is opened, exit code 1. A failure to start the opener also exits with code 1.
+- **Job**: the job of each session allows breaking away (`JOB_OBJECT_LIMIT_BREAKAWAY_OK`), and only this launch asks for it: every other process of the session stays in the job and is stopped with it. The browser it starts, when no browser was running, therefore survives `pty_kill` and the app's exit.
+- **Limit**: a Chrome started by the Claude in Chrome extension does not go through `BROWSER` and stays in the job: closing the tab stops it.
 
 The session is released and its recording closed at once, and the call returns at once. A process launched less than 20 seconds ago keeps running until those 20 seconds have passed, then is stopped: `claude` counts a stop during its fullscreen start, which completes about 15 seconds after the launch, as a failed start, and falls back to its classic renderer on the next launch on the machine.
 

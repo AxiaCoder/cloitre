@@ -6,6 +6,7 @@ use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{State, Window};
 use tauri_plugin_dialog::DialogExt;
 
+use crate::browser::browser_program;
 use crate::error::AppError;
 use crate::launch::{claude_command, resolve_claude};
 use crate::projects::{ProjectList, ProjectStore, ProjectView, TabView};
@@ -78,6 +79,7 @@ pub fn pty_spawn(
         mode,
         &session,
         hook.0.as_deref(),
+        browser_program().as_deref(),
     );
     let recording = recordings.create(cols, rows);
     let recorder = recording.as_ref().map(|new| Arc::clone(&new.recorder));

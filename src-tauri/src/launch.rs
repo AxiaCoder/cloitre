@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use portable_pty::CommandBuilder;
 
+use crate::browser::BROWSER_VAR;
 use crate::error::AppError;
 use crate::session::{LaunchMode, SessionId};
 
@@ -84,8 +85,10 @@ pub fn resolve_claude() -> Result<PathBuf, AppError> {
 /// The arguments are `--session-id <session>` for [`LaunchMode::New`] or
 /// `--resume <session>` for [`LaunchMode::Resume`], then `--settings
 /// <settings>` when `settings` is given, and nothing else. On top of the
-/// inherited environment it sets [`SESSION_ENV`] and [`TAB_ID_VAR`] to `tab`
-/// in decimal. The caller must pass a folder already checked by
+/// inherited environment it sets [`SESSION_ENV`], [`TAB_ID_VAR`] to `tab`
+/// in decimal, and [`BROWSER_VAR`] to `browser` when given, unless the
+/// inherited environment already holds a non-empty [`BROWSER_VAR`]. The
+/// caller must pass a folder already checked by
 /// [`crate::folder::validate_folder`], and a settings path free of any
 /// character a shell interprets.
 pub fn claude_command(
@@ -95,6 +98,7 @@ pub fn claude_command(
     mode: LaunchMode,
     session: &SessionId,
     settings: Option<&Path>,
+    browser: Option<&Path>,
 ) -> CommandBuilder {
     let mut command = CommandBuilder::new(program);
     let session_flag = match mode {
@@ -111,6 +115,12 @@ pub fn claude_command(
         command.env(key, value);
     }
     command.env(TAB_ID_VAR, tab.to_string());
+    let inherited_browser = command
+        .get_env(BROWSER_VAR)
+        .is_some_and(|value| !value.is_empty());
+    if let Some(browser) = browser.filter(|_| !inherited_browser) {
+        command.env(BROWSER_VAR, browser);
+    }
     command
 }
 
@@ -220,6 +230,7 @@ mod tests {
             mode,
             &SessionId::parse(SESSION).unwrap(),
             settings,
+            None,
         )
     }
 
@@ -313,6 +324,95 @@ mod tests {
                 "{key} was changed"
             );
         }
+    }
+
+    /// Variable that turns a run of this test binary into [`browser_probe`]:
+    /// the browser to give, or `-` for none.
+    const PROBE_VAR: &str = "CLOITRE_TEST_BROWSER_PROBE";
+
+    /// Prefix of the line on which [`browser_probe`] reports the variable.
+    const PROBE_REPORT: &str = "BROWSER_SEEN:";
+
+    /// Not a check: when [`PROBE_VAR`] is set, builds a command with that
+    /// browser and prints its [`BROWSER_VAR`] after [`PROBE_REPORT`], or
+    /// `absent`.
+    #[test]
+    fn browser_probe() {
+        let Some(given) = env::var_os(PROBE_VAR) else {
+            return;
+        };
+        let browser = (given != "-").then(|| PathBuf::from(given));
+        let command = claude_command(
+            Path::new("/opt/tools/claude"),
+            Path::new("/projects/example"),
+            NonZeroU32::new(42).unwrap(),
+            LaunchMode::New,
+            &SessionId::parse(SESSION).unwrap(),
+            None,
+            browser.as_deref(),
+        );
+        match command.get_env(BROWSER_VAR) {
+            Some(value) => println!("\n{PROBE_REPORT}set {}", value.to_str().unwrap()),
+            None => println!("\n{PROBE_REPORT}absent"),
+        }
+    }
+
+    /// Runs [`browser_probe`] in a fresh process whose [`BROWSER_VAR`] is
+    /// `inherited` (removed when `None`), giving it `given`; returns the
+    /// session's [`BROWSER_VAR`], `None` when absent.
+    fn browser_seen(inherited: Option<&str>, given: Option<&str>) -> Option<String> {
+        let mut probe = std::process::Command::new(env::current_exe().unwrap());
+        probe
+            .args([
+                "launch::tests::browser_probe",
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(PROBE_VAR, given.unwrap_or("-"));
+        match inherited {
+            Some(value) => probe.env(BROWSER_VAR, value),
+            None => probe.env_remove(BROWSER_VAR),
+        };
+        let output = probe.output().expect("the probe runs");
+        assert!(output.status.success(), "the probe failed");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let report = stdout
+            .lines()
+            .find_map(|line| line.split_once(PROBE_REPORT))
+            .expect("the probe reports")
+            .1
+            .trim();
+        report.strip_prefix("set ").map(str::to_owned)
+    }
+
+    #[test]
+    fn sets_the_browser_when_given() {
+        assert_eq!(
+            browser_seen(None, Some("/apps/cloitre.exe")).as_deref(),
+            Some("/apps/cloitre.exe")
+        );
+    }
+
+    #[test]
+    fn keeps_an_inherited_browser() {
+        assert_eq!(
+            browser_seen(Some("/usr/bin/firefox"), Some("/apps/cloitre.exe")).as_deref(),
+            Some("/usr/bin/firefox")
+        );
+    }
+
+    #[test]
+    fn replaces_an_empty_inherited_browser() {
+        assert_eq!(
+            browser_seen(Some(""), Some("/apps/cloitre.exe")).as_deref(),
+            Some("/apps/cloitre.exe")
+        );
+    }
+
+    #[test]
+    fn sets_no_browser_when_none_is_given() {
+        assert_eq!(browser_seen(None, None), None);
     }
 
     #[test]
