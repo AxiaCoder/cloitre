@@ -164,6 +164,7 @@ pub fn run() {
                 cfg!(debug_assertions),
             ));
             state::start_server(app.handle());
+            browser::start_server();
             Ok(())
         })
         .on_window_event(|window, event| {

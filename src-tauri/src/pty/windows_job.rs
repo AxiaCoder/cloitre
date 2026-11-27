@@ -3,9 +3,9 @@ use std::ptr;
 
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
-    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
+    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+    SetInformationJobObject, TerminateJobObject,
 };
 use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
 
@@ -13,8 +13,8 @@ use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROC
 const TERMINATED_EXIT_CODE: u32 = 1;
 
 /// A Windows job object holding a session's process and every process it starts,
-/// including those that open their own console, except a process started with
-/// `CREATE_BREAKAWAY_FROM_JOB`, which stays out of it.
+/// including those that open their own console. None of them may leave it:
+/// a start with `CREATE_BREAKAWAY_FROM_JOB` is refused as access denied.
 ///
 /// Dropping it closes the job, which stops every process still in it. The
 /// system closes the job the same way when the app ends, even abruptly.
@@ -39,7 +39,7 @@ impl Job {
     }
 
     /// Creates an empty, unnamed job that stops its processes when it closes and
-    /// lets a process started with `CREATE_BREAKAWAY_FROM_JOB` stay out of it.
+    /// lets none of them break away.
     ///
     /// # Errors
     /// The system error of the call that failed.
@@ -51,8 +51,7 @@ impl Job {
         }
         let job = Job(handle);
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-        limits.BasicLimitInformation.LimitFlags =
-            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
         // SAFETY: `limits` is the structure this information class expects, the
         // length given is its size, and it outlives the call.
         let set = unsafe {
@@ -285,55 +284,29 @@ mod tests {
     }
 
     #[test]
-    fn breakaway_child_survives_terminate_while_a_plain_child_stops() {
+    fn a_child_asking_to_break_away_cannot_leave_the_job() {
         let (job, mut helper, spawned) = spawn_helper_in(|pid| Job::assign(pid).unwrap());
-        let Spawned::Children {
-            breakaway,
-            attached,
-        } = spawned
-        else {
-            let _ = helper.kill();
-            panic!("the job refused the breakaway");
+        let (breakaway, attached) = match spawned {
+            Spawned::Children {
+                breakaway,
+                attached,
+            } => (breakaway, attached),
+            Spawned::Refused(kind) => {
+                let _ = helper.kill();
+                assert_eq!(kind, "PermissionDenied");
+                return;
+            }
         };
         let breakaway = Process::open(breakaway);
         let attached = Process::open(attached);
         job.terminate();
         let attached_ended = attached.ends_within(5_000);
-        let helper_ended = ends_soon(&mut helper);
-        let breakaway_ended = breakaway.ends_within(1_000);
+        let breakaway_ended = breakaway.ends_within(5_000);
         let _ = helper.kill();
         assert!(attached_ended, "the plain child survived terminate");
-        assert!(helper_ended, "the helper survived terminate");
-        assert!(!breakaway_ended, "the breakaway child stopped with the job");
-    }
-
-    #[test]
-    fn a_job_without_breakaway_ok_refuses_it_as_permission_denied() {
-        let (_job, mut helper, spawned) = spawn_helper_in(|pid| {
-            let job = Job::create().unwrap();
-            let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-            // SAFETY: `limits` is the structure this information class expects,
-            // the length given is its size, and it outlives the call.
-            let set = unsafe {
-                SetInformationJobObject(
-                    job.0,
-                    JobObjectExtendedLimitInformation,
-                    (&raw const limits).cast(),
-                    size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-                )
-            };
-            assert_ne!(set, 0);
-            job.add(pid).unwrap();
-            job
-        });
-        let _ = helper.kill();
-        match spawned {
-            Spawned::Refused(kind) => assert_eq!(kind, "PermissionDenied"),
-            Spawned::Children { breakaway, .. } => {
-                drop(Process::open(breakaway));
-                panic!("the breakaway was allowed");
-            }
-        }
+        assert!(
+            breakaway_ended,
+            "a child started with CREATE_BREAKAWAY_FROM_JOB survived terminate"
+        );
     }
 }

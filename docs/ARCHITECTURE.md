@@ -64,16 +64,25 @@ Changes the size of a session's terminal.
 
 ### `pty_kill`
 
-Stops a session's process, closes its pseudo-terminal and closes its recording. On Windows, the processes the session started are stopped too, even those with their own console, except the browser the [browser mode](#browser-mode) opens. Also used to release a session whose process has already exited.
+Stops a session's process, closes its pseudo-terminal and closes its recording. On Windows, the processes the session started are stopped too, even those with their own console; none of them can leave the session's job. A web page the session opens through the [browser mode](#browser-mode) is opened by the app, outside the job, and survives. Also used to release a session whose process has already exited.
 
 #### Browser mode
 
 On Windows, every session gets `BROWSER` set to the app's own executable, unless the inherited environment already holds a non-empty `BROWSER`, which is kept. Claude Code opens a URL (`/login`, for instance) by running `$BROWSER <url>` and reading its exit code.
 
 - **Detection**: the executable started with exactly one argument and `CLOITRE_TAB_ID` set, after the hook arguments were ruled out. It runs before Tauri starts and opens no window.
-- **What it does**: when the argument is a web URL (`http://` or `https://`, any case, followed by a host, printable ASCII only, no space and no double quote), it runs `rundll32.exe url.dll,OpenURL <url>` from the system folder by full path, never through the `PATH`, with `CREATE_BREAKAWAY_FROM_JOB`, waits for it and exits with its code. When a job refuses the breakaway (the app itself runs in a job that does not allow it), the same command runs again without it, inside the job, as before.
-- **Refuses**: any other argument (`file:`, a path, another scheme): nothing is opened, exit code 1. A failure to start the opener also exits with code 1.
-- **Job**: the job of each session allows breaking away (`JOB_OBJECT_LIMIT_BREAKAWAY_OK`), and only this launch asks for it: every other process of the session stays in the job and is stopped with it. The browser it starts, when no browser was running, therefore survives `pty_kill` and the app's exit.
+- **The opener**: `rundll32.exe url.dll,OpenURL <url>`, run from the system folder by full path, never through the `PATH`.
+- **Web URL** (`http://` or `https://`, any case, followed by a host, printable ASCII only, no space and no double quote; at most 16 KiB): sent to the running app through the [URL pipe](#url-pipe), exit code 0 once written. When the app cannot be reached (no pipe, a pipe served by another user, any write error) or the URL is longer than 16 KiB, the browser mode runs the opener itself, inside the session's job, waits for it and exits with its code.
+- **URL of another scheme** (`vscode:`, `slack:`, `jetbrains:`…, which Claude Code also opens through `BROWSER`): a scheme as RFC 3986 writes it (a letter, then letters, digits, `+`, `-` or `.`) of at least two characters, then `:`, the scheme neither `http`, `https` nor `file` (any case), the whole URL printable ASCII, no space and no double quote. The browser mode runs the opener itself, inside the session's job, waits for it and exits with its code.
+- **Refuses**: any other argument (a path, a drive letter such as `C:`, `file:`, an `http` or `https` URL without a host): nothing is opened, exit code 1. A failure to start the opener also exits with code 1.
+- **Job**: the session's job allows no breakaway: a process of the session that asks for it (`CREATE_BREAKAWAY_FROM_JOB`) is refused, so every process of the session is stopped with it. Only the app, outside every session's job, opens a web page for a session; the browser it starts, when no browser was running, survives `pty_kill`. A browser started by the opener of the browser mode itself (app unreachable, other scheme) is in the job and stops with the tab.
+
+##### URL pipe
+
+- **Channel**: a named pipe, `\\.\pipe\<app identifier>.open-url.<user SID>`, created by Rust at startup next to the [state pipe](#session-states), with the same security: owner-only DACL, no remote client, a client that writes only to a server running as its own user and that the server may not impersonate. When the pipe cannot be created, the app runs without it and sessions open web pages inside their job.
+- **Message**: the URL alone, UTF-8, no line end, at most 16 KiB; the client closes the pipe after writing.
+- **What the app does**: checks the message again as a web URL (same rule as above), then starts the opener with it, outside every session's job, without waiting for it.
+- **Refuses**: a message longer than 16 KiB, not UTF-8, or not a web URL: dropped without a word, nothing is started.
 - **Limit**: a Chrome started by the Claude in Chrome extension does not go through `BROWSER` and stays in the job: closing the tab stops it.
 
 The session is released and its recording closed at once, and the call returns at once. A process launched less than 20 seconds ago keeps running until those 20 seconds have passed, then is stopped: `claude` counts a stop during its fullscreen start, which completes about 15 seconds after the launch, as a failed start, and falls back to its classic renderer on the next launch on the machine.

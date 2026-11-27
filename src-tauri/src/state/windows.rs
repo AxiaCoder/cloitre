@@ -214,8 +214,15 @@ fn trusts(own: &Sid, server: &io::Result<Sid>) -> bool {
 /// current user: `\\.\pipe\<identifier>.session-state.<user SID>`. `None`
 /// when the user's SID cannot be read.
 pub fn pipe_name(identifier: &str) -> Option<String> {
+    pipe_name_for(identifier, "session-state")
+}
+
+/// Returns the name of the pipe `purpose` of the build `identifier` for the
+/// current user: `\\.\pipe\<identifier>.<purpose>.<user SID>`. `None` when the
+/// user's SID cannot be read.
+pub fn pipe_name_for(identifier: &str, purpose: &str) -> Option<String> {
     let sid = current_user().ok()?.to_text().ok()?;
-    Some(format!(r"\\.\pipe\{identifier}.session-state.{sid}"))
+    Some(format!(r"\\.\pipe\{identifier}.{purpose}.{sid}"))
 }
 
 /// A security descriptor allocated by the system, freed on drop.
@@ -294,7 +301,13 @@ impl Server {
     /// wrote before closing, at most [`MESSAGE_LIMIT`] + 1 bytes, to
     /// `on_message`. Returns only when no new instance can be created or a
     /// wait for a client fails.
-    pub fn serve(mut self, mut on_message: impl FnMut(Vec<u8>)) {
+    pub fn serve(self, on_message: impl FnMut(Vec<u8>)) {
+        self.serve_up_to(MESSAGE_LIMIT, on_message);
+    }
+
+    /// Serves clients as [`Server::serve`] does, but passes at most `limit` + 1
+    /// bytes of each message to `on_message`, so a longer one can be refused.
+    pub fn serve_up_to(mut self, limit: usize, mut on_message: impl FnMut(Vec<u8>)) {
         loop {
             // SAFETY: `next` is an open pipe instance; no overlapped I/O.
             let connected = unsafe { ConnectNamedPipe(self.next.as_raw_handle(), ptr::null_mut()) }
@@ -310,7 +323,7 @@ impl Server {
             let client = File::from(std::mem::replace(&mut self.next, next));
             let mut message = Vec::new();
             if client
-                .take(MESSAGE_LIMIT as u64 + 1)
+                .take(limit as u64 + 1)
                 .read_to_end(&mut message)
                 .is_ok()
             {
@@ -533,6 +546,50 @@ mod tests {
             pipe_name("com.example.app"),
             pipe_name("com.example.app.dev")
         );
+    }
+
+    #[test]
+    fn a_pipe_of_another_purpose_differs_only_by_its_purpose() {
+        let sid = current_user().unwrap().to_text().unwrap();
+        let url_pipe = pipe_name_for("com.example.app", "open-url").unwrap();
+        assert_eq!(
+            url_pipe,
+            format!(r"\\.\pipe\com.example.app.open-url.{sid}")
+        );
+        assert_ne!(Some(url_pipe), pipe_name("com.example.app"));
+        assert_eq!(
+            pipe_name_for("com.example.app", "session-state"),
+            pipe_name("com.example.app")
+        );
+    }
+
+    #[test]
+    fn a_server_with_a_higher_limit_receives_a_longer_message_whole() {
+        let name = unique_name();
+        let server = Server::bind(&name).unwrap();
+        let (sender, received) = mpsc::channel();
+        std::thread::spawn(move || {
+            server.serve_up_to(2_000, |message| sender.send(message).unwrap());
+        });
+        let message = vec![b'x'; 1_000];
+        send(&name, &message).unwrap();
+        assert_eq!(
+            received.recv_timeout(Duration::from_secs(5)).unwrap(),
+            message
+        );
+    }
+
+    #[test]
+    fn a_server_with_a_limit_reads_no_more_than_it() {
+        let name = unique_name();
+        let server = Server::bind(&name).unwrap();
+        let (sender, received) = mpsc::channel();
+        std::thread::spawn(move || {
+            server.serve_up_to(500, |message| sender.send(message).unwrap());
+        });
+        send(&name, &[b'x'; 1_000]).unwrap();
+        let message = received.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(message.len(), 501);
     }
 
     #[test]
