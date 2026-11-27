@@ -699,4 +699,78 @@ mod tests {
         assert!(!browser_ended, "the browser was stopped");
         assert!(!browser_child_ended, "the child of the browser was stopped");
     }
+
+    /// Waits up to 5 seconds for a process named `exe`, any case, started by
+    /// process `parent`; returns its id.
+    fn child_named(parent: u32, exe: &str) -> u32 {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            let child = process_snapshot()
+                .unwrap()
+                .into_iter()
+                .find(|process| process.parent == parent && process.exe.eq_ignore_ascii_case(exe));
+            if let Some(child) = child {
+                return child.pid;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        panic!("process {parent} started no {exe}");
+    }
+
+    #[test]
+    fn stopping_a_job_without_browser_stops_every_process() {
+        let system = PathBuf::from(env::var_os("SystemRoot").expect("SystemRoot is set"));
+        let mut shell = gated_shell(&system.join("System32").join("cmd.exe"));
+        let job = Job::assign(shell.id()).unwrap();
+        let shell_child = Process::open(release(&mut shell));
+        let shell_process = Process::open(shell.id());
+
+        job.stop_sparing_browsers();
+        let shell_ended = shell_process.ends_within(5_000);
+        let shell_child_ended = shell_child.ends_within(5_000);
+
+        drop((shell_child, shell_process, job));
+        let _ = shell.wait();
+        assert!(shell_ended, "the session's process survived");
+        assert!(shell_child_ended, "the child of that process survived");
+    }
+
+    #[test]
+    fn stopping_spares_a_browser_the_session_process_started() {
+        let system = PathBuf::from(env::var_os("SystemRoot").expect("SystemRoot is set"));
+        let cmd = system.join("System32").join("cmd.exe");
+        let folder = scratch_folder();
+        let browser_exe = folder.join("chrome.exe");
+        fs::copy(&cmd, &browser_exe).unwrap();
+
+        let mut shell = Command::new(&cmd)
+            .raw_arg(format!(
+                r#"/d /c "set /p x= & "{}" /d /c ping -n 30 127.0.0.1 >nul""#,
+                browser_exe.display()
+            ))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("the shell starts");
+        let job = Job::assign(shell.id()).unwrap();
+        writeln!(shell.stdin.take().unwrap(), "go").unwrap();
+        let browser_pid = child_named(shell.id(), "chrome.exe");
+        let browser_child = Process::open(child_named(browser_pid, "ping.exe"));
+        let browser = Process::open(browser_pid);
+        let shell_process = Process::open(shell.id());
+
+        job.stop_sparing_browsers();
+        drop(job);
+        let shell_ended = shell_process.ends_within(5_000);
+        let browser_ended = browser.ends_within(1_000);
+        let browser_child_ended = browser_child.ends_within(0);
+
+        drop((browser_child, browser, shell_process));
+        let _ = shell.wait();
+        let _ = fs::remove_dir_all(&folder);
+        assert!(shell_ended, "the process that started the browser survived");
+        assert!(!browser_ended, "the browser was stopped");
+        assert!(!browser_child_ended, "the child of the browser was stopped");
+    }
 }
