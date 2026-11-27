@@ -1,5 +1,5 @@
 #[cfg(windows)]
-mod windows;
+pub(crate) mod windows;
 
 use std::ffi::OsStr;
 use std::io::Read;

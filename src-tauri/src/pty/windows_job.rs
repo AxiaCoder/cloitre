@@ -13,7 +13,8 @@ use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROC
 const TERMINATED_EXIT_CODE: u32 = 1;
 
 /// A Windows job object holding a session's process and every process it starts,
-/// including those that open their own console.
+/// including those that open their own console. None of them may leave it:
+/// a start with `CREATE_BREAKAWAY_FROM_JOB` is refused as access denied.
 ///
 /// Dropping it closes the job, which stops every process still in it. The
 /// system closes the job the same way when the app ends, even abruptly.
@@ -37,7 +38,8 @@ impl Job {
         Ok(job)
     }
 
-    /// Creates an empty, unnamed job that stops its processes when it closes.
+    /// Creates an empty, unnamed job that stops its processes when it closes and
+    /// lets none of them break away.
     ///
     /// # Errors
     /// The system error of the call that failed.
@@ -102,12 +104,19 @@ impl Drop for Job {
 
 #[cfg(test)]
 mod tests {
+    use std::env;
+    use std::io::{BufRead, BufReader, Write};
     use std::os::windows::io::AsRawHandle;
+    use std::os::windows::process::CommandExt;
     use std::process::{Child, Command, Stdio};
     use std::thread;
     use std::time::{Duration, Instant};
 
+    use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
     use windows_sys::Win32::System::JobObjects::IsProcessInJob;
+    use windows_sys::Win32::System::Threading::{
+        CREATE_BREAKAWAY_FROM_JOB, PROCESS_SYNCHRONIZE, TerminateProcess, WaitForSingleObject,
+    };
     use windows_sys::core::BOOL;
 
     use super::*;
@@ -168,5 +177,136 @@ mod tests {
     #[test]
     fn assigning_a_missing_process_fails() {
         assert!(Job::assign(0).is_err());
+    }
+
+    /// Variable that turns a run of this test binary into [`spawning_helper`].
+    const HELPER_VAR: &str = "CLOITRE_TEST_SPAWNING_HELPER";
+
+    /// Prefix of the line on which [`spawning_helper`] reports what it started.
+    const REPORT: &str = "SPAWNED:";
+
+    /// A process opened by id, stopped and closed on drop.
+    struct Process(HANDLE);
+
+    impl Process {
+        /// Opens process `pid` to wait for it and stop it.
+        fn open(pid: u32) -> Process {
+            // SAFETY: plain call; a null result is checked below.
+            let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_TERMINATE, 0, pid) };
+            assert!(!handle.is_null(), "process {pid} cannot be opened");
+            Process(handle)
+        }
+
+        /// Waits up to `millis` milliseconds for the process to end; tells whether it did.
+        fn ends_within(&self, millis: u32) -> bool {
+            // SAFETY: `self.0` is open until drop.
+            unsafe { WaitForSingleObject(self.0, millis) == WAIT_OBJECT_0 }
+        }
+    }
+
+    impl Drop for Process {
+        /// Stops the process if it still runs and closes its handle.
+        fn drop(&mut self) {
+            // SAFETY: `self.0` is open and closed only here.
+            unsafe {
+                TerminateProcess(self.0, TERMINATED_EXIT_CODE);
+                CloseHandle(self.0);
+            }
+        }
+    }
+
+    /// What [`spawning_helper`] reported: the ids of its two children, or the
+    /// kind of the error that refused the breakaway one.
+    enum Spawned {
+        Children { breakaway: u32, attached: u32 },
+        Refused(String),
+    }
+
+    /// Starts this test binary as [`spawning_helper`], puts it in the job that
+    /// `job` makes from its id, lets it start its children and returns the job,
+    /// the helper and its report.
+    fn spawn_helper_in(job: impl FnOnce(u32) -> Job) -> (Job, Child, Spawned) {
+        let mut helper = Command::new(env::current_exe().unwrap())
+            .args([
+                "pty::windows_job::tests::spawning_helper",
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(HELPER_VAR, "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("the helper starts");
+        let job = job(helper.id());
+        writeln!(helper.stdin.take().unwrap(), "go").unwrap();
+        let report = BufReader::new(helper.stdout.take().unwrap())
+            .lines()
+            .map(Result::unwrap)
+            .find_map(|line| Some(line.split_once(REPORT)?.1.trim().to_owned()))
+            .expect("the helper reports");
+        let spawned = match report.split_once(' ') {
+            Some(("refused", kind)) => Spawned::Refused(kind.to_owned()),
+            Some((breakaway, attached)) => Spawned::Children {
+                breakaway: breakaway.parse().unwrap(),
+                attached: attached.parse().unwrap(),
+            },
+            None => panic!("unexpected report {report:?}"),
+        };
+        (job, helper, spawned)
+    }
+
+    /// Not a check: when [`HELPER_VAR`] is set, waits for a line on stdin, then
+    /// starts a `ping` without `CREATE_BREAKAWAY_FROM_JOB` and one with it,
+    /// prints their ids after [`REPORT`] (or `refused <error kind>`) and waits.
+    #[test]
+    fn spawning_helper() {
+        if env::var_os(HELPER_VAR).is_none() {
+            return;
+        }
+        std::io::stdin().read_line(&mut String::new()).unwrap();
+        let ping = || {
+            let mut command = Command::new("ping");
+            command
+                .args(["-n", "30", "127.0.0.1"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            command
+        };
+        let mut attached = ping().spawn().expect("ping starts");
+        match ping().creation_flags(CREATE_BREAKAWAY_FROM_JOB).spawn() {
+            Ok(breakaway) => println!("\n{REPORT} {} {}", breakaway.id(), attached.id()),
+            Err(error) => println!("\n{REPORT} refused {:?}", error.kind()),
+        }
+        std::io::stdout().flush().unwrap();
+        let _ = attached.wait();
+    }
+
+    #[test]
+    fn a_child_asking_to_break_away_cannot_leave_the_job() {
+        let (job, mut helper, spawned) = spawn_helper_in(|pid| Job::assign(pid).unwrap());
+        let (breakaway, attached) = match spawned {
+            Spawned::Children {
+                breakaway,
+                attached,
+            } => (breakaway, attached),
+            Spawned::Refused(kind) => {
+                let _ = helper.kill();
+                assert_eq!(kind, "PermissionDenied");
+                return;
+            }
+        };
+        let breakaway = Process::open(breakaway);
+        let attached = Process::open(attached);
+        job.terminate();
+        let attached_ended = attached.ends_within(5_000);
+        let breakaway_ended = breakaway.ends_within(5_000);
+        let _ = helper.kill();
+        assert!(attached_ended, "the plain child survived terminate");
+        assert!(
+            breakaway_ended,
+            "a child started with CREATE_BREAKAWAY_FROM_JOB survived terminate"
+        );
     }
 }

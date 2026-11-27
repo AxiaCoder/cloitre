@@ -641,6 +641,7 @@ mod tests {
                     crate::session::LaunchMode::Resume,
                     &session,
                     None,
+                    None,
                 ),
                 pty_size(80, 24).unwrap(),
                 move |bytes| {
