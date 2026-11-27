@@ -438,6 +438,31 @@ mod tests {
     }
 
     #[test]
+    fn every_registered_command_is_declared_in_the_manifest_and_granted_to_the_main_window() {
+        let source = include_str!("lib.rs");
+        let start = source.find("generate_handler![").unwrap();
+        let end = start + source[start..].find("])").unwrap();
+        let registered: Vec<&str> = source[start..end]
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .filter_map(|token| token.strip_prefix("commands::"))
+            .collect();
+        assert!(registered.contains(&"keep_awake"));
+        let manifest = include_str!("../build.rs");
+        let capability = include_str!("../capabilities/default.json");
+        for command in registered {
+            assert!(
+                manifest.contains(&format!("\"{command}\"")),
+                "{command} is missing from the app manifest of build.rs"
+            );
+            let permission = format!("\"allow-{}\"", command.replace('_', "-"));
+            assert!(
+                capability.contains(&permission),
+                "{permission} is missing from the main window capability"
+            );
+        }
+    }
+
+    #[test]
     fn updates_come_signed_from_the_latest_published_release() {
         let config: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();

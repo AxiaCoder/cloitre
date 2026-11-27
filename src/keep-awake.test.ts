@@ -22,6 +22,20 @@ describe("shouldKeepAwake", () => {
     expect(shouldKeepAwake("working-or-blocked", ["done", activity])).toBe(true);
   });
 
+  it("keeps awake for a working session listed among blocked ones under While a session works", () => {
+    expect(shouldKeepAwake("working", ["blocked", "working"])).toBe(true);
+  });
+
+  it("reads the activities from any iterable", () => {
+    /** Yields a done activity, then a blocked one. */
+    function* activities(): Generator<"done" | "blocked"> {
+      yield "done";
+      yield "blocked";
+    }
+    expect(shouldKeepAwake("working-or-blocked", activities())).toBe(true);
+    expect(shouldKeepAwake("working", activities())).toBe(false);
+  });
+
   it("lets the computer sleep without sessions or with only finished ones", () => {
     expect(shouldKeepAwake("working-or-blocked", [])).toBe(false);
     expect(shouldKeepAwake("working-or-blocked", ["done", "failed", undefined])).toBe(false);
@@ -82,5 +96,16 @@ describe("KeepAwakeSync", () => {
     await expect(sync.update(true)).rejects.toThrow("refused");
     await sync.update(false);
     expect(sent).toEqual([true, false]);
+  });
+
+  it("does not resend a state whose send failed until the state changes", async () => {
+    const sent: boolean[] = [];
+    const sync = new KeepAwakeSync((on) => {
+      sent.push(on);
+      return Promise.reject(new Error("refused"));
+    });
+    await expect(sync.update(true)).rejects.toThrow("refused");
+    await sync.update(true);
+    expect(sent).toEqual([true]);
   });
 });
