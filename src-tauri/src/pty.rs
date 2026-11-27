@@ -268,7 +268,8 @@ impl PtyRegistry {
     }
 
     /// Stops the process of session `id`, and on Windows every process it
-    /// started, and closes its pseudo-terminal.
+    /// started except a web browser and its descendants, and closes its
+    /// pseudo-terminal.
     ///
     /// The session is unregistered at once, even when the process had already
     /// exited. A process launched less than the start grace ago keeps running,

@@ -153,8 +153,9 @@ fn terminate_member(job: HANDLE, pid: u32) -> Option<HANDLE> {
 /// including those that open their own console. None of them may leave it:
 /// a start with `CREATE_BREAKAWAY_FROM_JOB` is refused as access denied.
 ///
-/// Dropping it closes the job, which stops every process still in it. The
-/// system closes the job the same way when the app ends, even abruptly.
+/// Dropping it closes the job, which stops every process still in it, unless
+/// [`Job::stop_sparing_browsers`] lifted that limit. The system closes the job
+/// the same way when the app ends, even abruptly.
 pub struct Job(HANDLE);
 
 // SAFETY: a job handle is a kernel object handle, valid from any thread; `Job`
@@ -324,7 +325,8 @@ impl Job {
 }
 
 impl Drop for Job {
-    /// Closes the job handle, which stops every process still in the job.
+    /// Closes the job handle, which stops every process still in the job,
+    /// unless [`Job::stop_sparing_browsers`] lifted that limit.
     fn drop(&mut self) {
         // SAFETY: `self.0` is open and closed only here.
         unsafe { CloseHandle(self.0) };
@@ -433,11 +435,13 @@ mod tests {
     }
 
     impl Drop for Process {
-        /// Stops the process if it still runs and closes its handle.
+        /// Stops the process if it still runs, waits up to 5 seconds for it to
+        /// end, so its executable can be deleted, and closes its handle.
         fn drop(&mut self) {
             // SAFETY: `self.0` is open and closed only here.
             unsafe {
                 TerminateProcess(self.0, TERMINATED_EXIT_CODE);
+                WaitForSingleObject(self.0, 5_000);
                 CloseHandle(self.0);
             }
         }
