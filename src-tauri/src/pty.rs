@@ -44,7 +44,8 @@ struct PtySession {
 
 impl PtySession {
     /// Stops the session's process and, on Windows, every process it started
-    /// except a web browser and its descendants, which survive the session.
+    /// except an ordinary web browser and its descendants, which survive the
+    /// session; a browser started for automation is stopped with the rest.
     /// Failures are ignored: an already exited process makes the kill fail.
     fn stop(&mut self) {
         #[cfg(windows)]
@@ -268,7 +269,8 @@ impl PtyRegistry {
     }
 
     /// Stops the process of session `id`, and on Windows every process it
-    /// started except a web browser and its descendants, and closes its
+    /// started except an ordinary web browser and its descendants (a browser
+    /// started for automation is stopped too), and closes its
     /// pseudo-terminal.
     ///
     /// The session is unregistered at once, even when the process had already

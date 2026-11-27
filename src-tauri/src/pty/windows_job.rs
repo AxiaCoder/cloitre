@@ -3,7 +3,12 @@ use std::io;
 use std::mem::offset_of;
 use std::ptr;
 
-use windows_sys::Win32::Foundation::{CloseHandle, ERROR_MORE_DATA, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Wdk::System::Threading::{
+    NtQueryInformationProcess, ProcessCommandLineInformation,
+};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, ERROR_MORE_DATA, HANDLE, INVALID_HANDLE_VALUE, UNICODE_STRING,
+};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
@@ -24,13 +29,25 @@ use windows_sys::core::BOOL;
 const TERMINATED_EXIT_CODE: u32 = 1;
 
 /// Executable names, lowercase, of the browsers `claude` may start for Claude
-/// in Chrome. [`Job::stop_sparing_browsers`] leaves them and their descendants running.
+/// in Chrome. [`Job::stop_sparing_browsers`] leaves an ordinary browser of these
+/// and its descendants running, and stops one started for automation (see
+/// [`AUTOMATION_FLAGS`]).
 const BROWSER_EXES: [&str; 5] = [
     "chrome.exe",
     "msedge.exe",
     "brave.exe",
     "vivaldi.exe",
     "opera.exe",
+];
+
+/// Command-line flags, lowercase, of which at least one marks a browser started
+/// for automation (Puppeteer, Playwright, chromedriver, chrome-devtools-mcp);
+/// the browser Claude in Chrome makes `claude` open has none.
+const AUTOMATION_FLAGS: [&str; 4] = [
+    "--enable-automation",
+    "--remote-debugging-pipe",
+    "--remote-debugging-port",
+    "--headless",
 ];
 
 /// Most passes [`Job::stop_sparing_browsers`] makes over the job before it
@@ -49,6 +66,9 @@ struct ProcessEntry {
     parent: u32,
     /// File name of its executable, without the folder.
     exe: String,
+    /// Whether it is a browser started for automation; set only for the
+    /// browsers of a job, `false` elsewhere.
+    automated: bool,
 }
 
 /// Tells whether `exe` is the file name of a browser of [`BROWSER_EXES`], any case.
@@ -58,10 +78,59 @@ fn is_browser(exe: &str) -> bool {
         .any(|browser| exe.eq_ignore_ascii_case(browser))
 }
 
-/// Returns the ids of the processes of `job` to spare: a browser of
-/// [`BROWSER_EXES`] and every process descending from one. A chain of parents
-/// is followed only through processes of `job` listed in `processes`, so a
-/// stale parent id, or a parent outside the job, ends it.
+/// Splits `command_line` into its arguments, the program first: whitespace
+/// separates them outside double quotes, and the quotes themselves are dropped.
+fn arguments(command_line: &str) -> Vec<String> {
+    let mut arguments = Vec::new();
+    let mut current = String::new();
+    let mut started = false;
+    let mut quoted = false;
+    for c in command_line.chars() {
+        if c == '"' {
+            quoted = !quoted;
+            started = true;
+        } else if c.is_whitespace() && !quoted {
+            if started {
+                arguments.push(std::mem::take(&mut current));
+                started = false;
+            }
+        } else {
+            current.push(c);
+            started = true;
+        }
+    }
+    if started {
+        arguments.push(current);
+    }
+    arguments
+}
+
+/// Tells whether `command_line` holds, as an argument after the program, one
+/// of the [`AUTOMATION_FLAGS`], any case, alone or followed by `=` and a value.
+fn is_automation_command_line(command_line: &str) -> bool {
+    arguments(command_line).iter().skip(1).any(|argument| {
+        let name = argument
+            .split_once('=')
+            .map_or(argument.as_str(), |(name, _)| name);
+        AUTOMATION_FLAGS
+            .iter()
+            .any(|flag| name.eq_ignore_ascii_case(flag))
+    })
+}
+
+/// Tells whether a browser whose command line is `command_line` was started
+/// for automation. An unread command line, `None`, counts as an ordinary browser.
+fn is_automated(command_line: Option<&str>) -> bool {
+    command_line.is_some_and(is_automation_command_line)
+}
+
+/// Returns the ids of the processes of `job` to spare: every ordinary browser
+/// root and every process descending from one. A browser root is a browser of
+/// [`BROWSER_EXES`] whose parent is not a browser of `job`; it is ordinary when
+/// not marked `automated`. The processes under an automated root, browsers
+/// included, are not spared by it. A chain of parents is followed only through
+/// processes of `job` listed in `processes`, so a stale parent id, or a parent
+/// outside the job, ends it.
 fn spared_processes(processes: &[ProcessEntry], job: &HashSet<u32>) -> HashSet<u32> {
     let members: HashMap<u32, &ProcessEntry> = processes
         .iter()
@@ -71,25 +140,100 @@ fn spared_processes(processes: &[ProcessEntry], job: &HashSet<u32>) -> HashSet<u
     members
         .keys()
         .copied()
-        .filter(|&pid| descends_from_browser(pid, &members))
+        .filter(|&pid| descends_from_ordinary_browser(pid, &members))
         .collect()
 }
 
-/// Tells whether process `pid`, or one of its parents in `members`, is a
-/// browser. A loop in the parent chain ends the walk.
-fn descends_from_browser(pid: u32, members: &HashMap<u32, &ProcessEntry>) -> bool {
+/// Tells whether `process` is a browser root: a browser whose parent is not a
+/// browser of `members`.
+fn is_browser_root(process: &ProcessEntry, members: &HashMap<u32, &ProcessEntry>) -> bool {
+    is_browser(&process.exe)
+        && !members
+            .get(&process.parent)
+            .is_some_and(|parent| is_browser(&parent.exe))
+}
+
+/// Tells whether process `pid`, or one of its parents in `members`, is an
+/// ordinary browser root (see [`spared_processes`]). A loop in the parent
+/// chain ends the walk.
+fn descends_from_ordinary_browser(pid: u32, members: &HashMap<u32, &ProcessEntry>) -> bool {
     let mut seen = HashSet::new();
     let mut current = pid;
     while seen.insert(current) {
         let Some(process) = members.get(&current) else {
             return false;
         };
-        if is_browser(&process.exe) {
+        if is_browser_root(process, members) && !process.automated {
             return true;
         }
         current = process.parent;
     }
     false
+}
+
+/// Reads the command line of process `pid` when it is in `job`. `None` when
+/// the process cannot be opened, is not in the job, or its command line cannot
+/// be read.
+fn command_line_in_job(job: HANDLE, pid: u32) -> Option<String> {
+    // SAFETY: plain call; a null result is checked below.
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if process.is_null() {
+        return None;
+    }
+    let mut in_job: BOOL = 0;
+    // SAFETY: both handles are open for the whole call.
+    let checked = unsafe { IsProcessInJob(process, job, &raw mut in_job) };
+    let command_line = if checked != 0 && in_job != 0 {
+        query_command_line(process)
+    } else {
+        None
+    };
+    // SAFETY: `process` is open and closed only here.
+    unsafe { CloseHandle(process) };
+    command_line
+}
+
+/// Reads the command line of `process`, open with at least
+/// `PROCESS_QUERY_LIMITED_INFORMATION`. `None` when the system refuses it.
+fn query_command_line(process: HANDLE) -> Option<String> {
+    let mut length: u32 = 0;
+    // SAFETY: a null buffer of length 0 only asks for the length needed.
+    unsafe {
+        NtQueryInformationProcess(
+            process,
+            ProcessCommandLineInformation,
+            ptr::null_mut(),
+            0,
+            &raw mut length,
+        )
+    };
+    if (length as usize) < size_of::<UNICODE_STRING>() {
+        return None;
+    }
+    let mut buffer = vec![0usize; (length as usize).div_ceil(size_of::<usize>())];
+    // SAFETY: `buffer` is aligned for a `UNICODE_STRING`, its length in bytes
+    // is the one given, and it outlives the call.
+    let status = unsafe {
+        NtQueryInformationProcess(
+            process,
+            ProcessCommandLineInformation,
+            buffer.as_mut_ptr().cast(),
+            (buffer.len() * size_of::<usize>()) as u32,
+            &raw mut length,
+        )
+    };
+    if status < 0 {
+        return None;
+    }
+    // SAFETY: on success the buffer starts with a `UNICODE_STRING` whose text
+    // lies further in the same buffer.
+    let text = unsafe { &*buffer.as_ptr().cast::<UNICODE_STRING>() };
+    if text.Buffer.is_null() {
+        return Some(String::new());
+    }
+    // SAFETY: `text.Buffer` holds `text.Length` bytes of UTF-16 inside `buffer`.
+    let units = unsafe { std::slice::from_raw_parts(text.Buffer, usize::from(text.Length) / 2) };
+    Some(String::from_utf16_lossy(units))
 }
 
 /// Lists every running process of the system.
@@ -116,6 +260,7 @@ fn process_snapshot() -> io::Result<Vec<ProcessEntry>> {
             pid: entry.th32ProcessID,
             parent: entry.th32ParentProcessID,
             exe: String::from_utf16_lossy(&name[..length]),
+            automated: false,
         });
         // SAFETY: same as above.
         listed = unsafe { Process32NextW(snapshot, &raw mut entry) };
@@ -256,9 +401,12 @@ impl Job {
         }
     }
 
-    /// Stops every process in the job except the browsers of [`BROWSER_EXES`]
-    /// and their descendants, then lets closing the job leave those running.
-    /// With no browser in the job, stops everything as [`Job::terminate`] does.
+    /// Stops every process in the job except the ordinary browsers of
+    /// [`BROWSER_EXES`] and their descendants, then lets closing the job leave
+    /// those running. A browser root whose command line holds one of the
+    /// [`AUTOMATION_FLAGS`] is stopped with its descendants; one whose command
+    /// line cannot be read counts as ordinary. With no ordinary browser in the
+    /// job, stops everything as [`Job::terminate`] does.
     ///
     /// The job is read again after each pass, for processes started during it.
     /// After [`STOP_PASSES`] passes that each still found a process to stop, or
@@ -270,9 +418,16 @@ impl Job {
             let Ok(members) = self.process_ids() else {
                 break;
             };
-            let Ok(processes) = process_snapshot() else {
+            let Ok(mut processes) = process_snapshot() else {
                 break;
             };
+            for process in processes
+                .iter_mut()
+                .filter(|process| members.contains(&process.pid) && is_browser(&process.exe))
+            {
+                process.automated =
+                    is_automated(command_line_in_job(self.0, process.pid).as_deref());
+            }
             let spared = spared_processes(&processes, &members);
             if spared.is_empty() {
                 break;
@@ -548,6 +703,15 @@ mod tests {
             pid,
             parent,
             exe: exe.to_owned(),
+            automated: false,
+        }
+    }
+
+    /// Builds a snapshot entry for a browser started for automation.
+    fn automated(pid: u32, parent: u32, exe: &str) -> ProcessEntry {
+        ProcessEntry {
+            automated: true,
+            ..entry(pid, parent, exe)
         }
     }
 
@@ -611,6 +775,91 @@ mod tests {
     fn a_loop_in_the_parent_chain_spares_nothing() {
         let processes = [entry(1, 2, "node.exe"), entry(2, 1, "bash.exe")];
         assert!(spared_processes(&processes, &ids(&[1, 2])).is_empty());
+    }
+
+    #[test]
+    fn each_automation_flag_is_recognised_alone_or_with_a_value_in_any_case() {
+        for command_line in [
+            r#""C:\Apps\chrome.exe" --enable-automation"#,
+            r#""C:\Apps\chrome.exe" --REMOTE-DEBUGGING-PIPE --no-first-run"#,
+            r#""C:\Apps\chrome.exe" --remote-debugging-port=9222"#,
+            r#""C:\Apps\chrome.exe" --Headless"#,
+            r#""C:\Apps\chrome.exe" --headless=new about:blank"#,
+            r#"chrome.exe --user-data-dir=C:\Temp\x "--remote-debugging-port=0""#,
+        ] {
+            assert!(is_automation_command_line(command_line), "{command_line}");
+        }
+    }
+
+    #[test]
+    fn a_command_line_without_automation_flag_is_ordinary() {
+        for command_line in [
+            "",
+            r#""C:\Apps\chrome.exe""#,
+            r#""C:\Apps\chrome.exe" --no-first-run --restore-last-session"#,
+            r#""C:\Apps\chrome.exe" --type=renderer --enable-automation-x"#,
+            r#""C:\Apps\chrome.exe" --remote-debugging-portal=1"#,
+            r#""C:\Apps\chrome.exe" -headless /remote-debugging-pipe"#,
+            r#""C:\Apps --headless\chrome.exe" --type=gpu-process"#,
+            r#""C:\Apps\chrome.exe" --user-data-dir="C:\x --remote-debugging-pipe""#,
+            "--headless",
+        ] {
+            assert!(!is_automation_command_line(command_line), "{command_line}");
+        }
+    }
+
+    #[test]
+    fn an_unread_command_line_counts_as_ordinary() {
+        assert!(!is_automated(None));
+        assert!(is_automated(Some("chrome.exe --headless")));
+        assert!(!is_automated(Some("chrome.exe")));
+    }
+
+    #[test]
+    fn an_automated_browser_and_its_descendants_are_not_spared() {
+        let processes = [
+            entry(1, 0, "claude.exe"),
+            automated(2, 1, "chrome.exe"),
+            entry(3, 2, "chrome.exe"),
+            entry(4, 2, "node.exe"),
+            entry(5, 3, "cmd.exe"),
+        ];
+        let spared = spared_processes(&processes, &ids(&[1, 2, 3, 4, 5]));
+        assert!(spared.is_empty(), "spared {spared:?}");
+    }
+
+    #[test]
+    fn ordinary_and_automated_browsers_side_by_side() {
+        let processes = [
+            entry(1, 0, "claude.exe"),
+            entry(2, 1, "chrome.exe"),
+            entry(3, 2, "chrome.exe"),
+            entry(4, 1, "node.exe"),
+            automated(5, 4, "chrome.exe"),
+            entry(6, 5, "chrome.exe"),
+            entry(7, 5, "cmd.exe"),
+        ];
+        let spared = spared_processes(&processes, &ids(&[1, 2, 3, 4, 5, 6, 7]));
+        assert_eq!(spared, ids(&[2, 3]));
+    }
+
+    #[test]
+    fn the_command_line_of_a_process_outside_the_job_is_not_read() {
+        let mut child = long_process();
+        let job = Job::assign(child.id()).unwrap();
+        let in_job = command_line_in_job(job.0, child.id());
+        let missing = command_line_in_job(job.0, 0);
+        let outside = command_line_in_job(job.0, std::process::id());
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(
+            in_job
+                .as_deref()
+                .is_some_and(|line| line.contains("127.0.0.1")),
+            "read {in_job:?}"
+        );
+        assert_eq!(missing, None);
+        assert_eq!(outside, None);
     }
 
     #[test]
@@ -702,6 +951,67 @@ mod tests {
         assert!(shell_child_ended, "the child of that process survived");
         assert!(!browser_ended, "the browser was stopped");
         assert!(!browser_child_ended, "the child of the browser was stopped");
+    }
+
+    #[test]
+    fn stopping_stops_an_automated_browser_and_spares_an_ordinary_one() {
+        let system = PathBuf::from(env::var_os("SystemRoot").expect("SystemRoot is set"));
+        let cmd = system.join("System32").join("cmd.exe");
+        let folder = scratch_folder();
+        let browser_exe = folder.join("chrome.exe");
+        fs::copy(&cmd, &browser_exe).unwrap();
+
+        let mut ordinary = gated_shell(&browser_exe);
+        let mut automated = Command::new(&browser_exe)
+            .raw_arg(
+                r#"/d /c "set /p x= & ping -n 30 127.0.0.1 >nul & rem" --remote-debugging-pipe"#,
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("the shell starts");
+        let job = Job::assign(ordinary.id()).unwrap();
+        job.add(automated.id()).unwrap();
+        let automated_line = command_line_in_job(job.0, automated.id());
+        let ordinary_child = Process::open(release(&mut ordinary));
+        let automated_child = Process::open(release(&mut automated));
+        let ordinary_process = Process::open(ordinary.id());
+        let automated_process = Process::open(automated.id());
+
+        job.stop_sparing_browsers();
+        drop(job);
+        let automated_ended = automated_process.ends_within(5_000);
+        let automated_child_ended = automated_child.ends_within(5_000);
+        let ordinary_ended = ordinary_process.ends_within(1_000);
+        let ordinary_child_ended = ordinary_child.ends_within(0);
+
+        drop((
+            ordinary_child,
+            automated_child,
+            ordinary_process,
+            automated_process,
+        ));
+        let _ = ordinary.wait();
+        let _ = automated.wait();
+        let _ = fs::remove_dir_all(&folder);
+
+        assert!(
+            automated_line
+                .as_deref()
+                .is_some_and(is_automation_command_line),
+            "read {automated_line:?}"
+        );
+        assert!(automated_ended, "the automated browser survived");
+        assert!(
+            automated_child_ended,
+            "the child of the automated browser survived"
+        );
+        assert!(!ordinary_ended, "the ordinary browser was stopped");
+        assert!(
+            !ordinary_child_ended,
+            "the child of the ordinary browser was stopped"
+        );
     }
 
     /// Waits up to 5 seconds for a process named `exe`, any case, started by
