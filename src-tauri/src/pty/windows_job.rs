@@ -844,6 +844,77 @@ mod tests {
     }
 
     #[test]
+    fn arguments_split_on_whitespace_outside_quotes_and_drop_the_quotes() {
+        assert_eq!(arguments(""), Vec::<String>::new());
+        assert_eq!(arguments("  \t "), Vec::<String>::new());
+        assert_eq!(arguments(r#""""#), vec![String::new()]);
+        assert_eq!(arguments("a.exe \t --x=1   b"), vec!["a.exe", "--x=1", "b"]);
+        assert_eq!(
+            arguments(r#""C:\A B\c.exe" --d="e f" g"h i"j"#),
+            vec![r"C:\A B\c.exe", "--d=e f", "gh ij"]
+        );
+    }
+
+    #[test]
+    fn an_automation_flag_with_an_empty_value_or_after_an_empty_argument_is_recognised() {
+        assert!(is_automation_command_line("chrome.exe --headless="));
+        assert!(is_automation_command_line(
+            r#"chrome.exe "" --enable-automation"#
+        ));
+        assert!(is_automation_command_line(
+            "chrome.exe\t--remote-debugging-pipe"
+        ));
+    }
+
+    #[test]
+    fn an_automated_browser_under_an_ordinary_root_is_spared_with_it() {
+        let processes = [
+            entry(1, 0, "claude.exe"),
+            entry(2, 1, "chrome.exe"),
+            automated(3, 2, "chrome.exe"),
+            entry(4, 3, "chrome.exe"),
+        ];
+        let spared = spared_processes(&processes, &ids(&[1, 2, 3, 4]));
+        assert_eq!(spared, ids(&[2, 3, 4]));
+    }
+
+    #[test]
+    fn an_automated_browser_started_through_a_child_of_an_ordinary_root_is_spared() {
+        let processes = [
+            entry(1, 0, "claude.exe"),
+            entry(2, 1, "chrome.exe"),
+            entry(3, 2, "cmd.exe"),
+            automated(4, 3, "chrome.exe"),
+        ];
+        let spared = spared_processes(&processes, &ids(&[1, 2, 3, 4]));
+        assert_eq!(spared, ids(&[2, 3, 4]));
+    }
+
+    #[test]
+    fn an_automated_browser_whose_browser_parent_is_outside_the_job_is_not_spared() {
+        let processes = [
+            entry(1, 0, "claude.exe"),
+            entry(9, 0, "chrome.exe"),
+            automated(2, 9, "chrome.exe"),
+            entry(3, 2, "chrome.exe"),
+        ];
+        let spared = spared_processes(&processes, &ids(&[1, 2, 3]));
+        assert!(spared.is_empty(), "spared {spared:?}");
+    }
+
+    #[test]
+    fn an_ordinary_browser_whose_browser_parent_is_outside_the_job_is_spared() {
+        let processes = [
+            entry(1, 0, "claude.exe"),
+            automated(9, 0, "chrome.exe"),
+            entry(2, 9, "chrome.exe"),
+            entry(3, 2, "chrome.exe"),
+        ];
+        let spared = spared_processes(&processes, &ids(&[1, 2, 3]));
+        assert_eq!(spared, ids(&[2, 3]));
+    }
+
+    #[test]
     fn the_command_line_of_a_process_outside_the_job_is_not_read() {
         let mut child = long_process();
         let job = Job::assign(child.id()).unwrap();
