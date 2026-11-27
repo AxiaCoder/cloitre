@@ -119,10 +119,10 @@ export class ActivityStore {
    * conversation ends the wait for background tasks; `"background"` keeps it working until a
    * `"settled"` or a `"done"`; `"settled"` is ignored for a tab not waiting for
    * its background tasks. `"failed"` shows until the next `"prompted"`.
-   * Returns whether the tab's activity changed.
+   * Returns whether the tab's activity or its work changed.
    */
   report(tabId: number, state: ReportedState, seen: boolean, agent?: string): boolean {
-    const before = this.of(tabId);
+    const before = this.stateOf(tabId);
     if (state === "blocked") {
       const agents = this.blocks.get(tabId) ?? new Set<string>();
       agents.add(agent ?? MAIN_AGENT);
@@ -138,7 +138,7 @@ export class ActivityStore {
       this.unblock(tabId, agent ?? MAIN_AGENT);
       this.apply(tabId, state, seen, agent);
     }
-    return this.of(tabId) !== before;
+    return this.changedSince(tabId, before);
   }
 
   /** Ends every block of tab `tabId`, whose user just answered from the keyboard. Returns whether it was blocked. */
@@ -149,16 +149,27 @@ export class ActivityStore {
   /**
    * Ends the work and every block of tab `tabId`, whose user just interrupted
    * it from the keyboard, without showing it done. A tab that only waits for
-   * its background tasks keeps working. Returns whether the tab's activity changed.
+   * its background tasks keeps working. Returns whether the tab's activity or its work changed.
    */
   interrupt(tabId: number): boolean {
     if (this.awaiting.has(tabId)) {
       return false;
     }
-    const before = this.of(tabId);
+    const before = this.stateOf(tabId);
     this.blocks.delete(tabId);
     this.working.delete(tabId);
-    return this.of(tabId) !== before;
+    return this.changedSince(tabId, before);
+  }
+
+  /** Returns the activity of tab `tabId` and whether it works, to compare before and after a change. */
+  private stateOf(tabId: number): { activity: SessionActivity | undefined; working: boolean } {
+    return { activity: this.of(tabId), working: this.isWorking(tabId) };
+  }
+
+  /** Returns whether the activity or the work of tab `tabId` differs from `before`, taken by {@link stateOf}. */
+  private changedSince(tabId: number, before: { activity: SessionActivity | undefined; working: boolean }): boolean {
+    const after = this.stateOf(tabId);
+    return after.activity !== before.activity || after.working !== before.working;
   }
 
   /** Marks tab `tabId` as seen on screen in the focused window: a `"done"` goes out, any other activity stays. Returns whether it changed. */
