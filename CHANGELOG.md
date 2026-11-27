@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.9.0](https://github.com/AxiaCoder/cloitre/compare/v0.8.0...v0.9.0) (2026-11-27)
+
+
+### Features
+
+* **power:** the computer stays awake while a session works ([#107](https://github.com/AxiaCoder/cloitre/issues/107)) ([1a8f0b2](https://github.com/AxiaCoder/cloitre/commit/1a8f0b2e594add248c5035ac854f4ec8d7e5d821))
+
+
+### Bug Fixes
+
+* **build:** a build left the generated permission files modified ([#102](https://github.com/AxiaCoder/cloitre/issues/102)) ([1fc89e1](https://github.com/AxiaCoder/cloitre/commit/1fc89e1e3655dbfea6c568469b0d0d220eafa6c5))
+* **pty:** closing a tab closed the browser claude had started ([#106](https://github.com/AxiaCoder/cloitre/issues/106)) ([2f125d0](https://github.com/AxiaCoder/cloitre/commit/2f125d05f9140e54843d0283afd6c0e56e230ec2))
+* **pty:** closing a tab closed the Chrome Claude in Chrome had made claude open ([#108](https://github.com/AxiaCoder/cloitre/issues/108)) ([c9bb80a](https://github.com/AxiaCoder/cloitre/commit/c9bb80aa6b0da8949b5066dd24ae63ce54aeecff))
+
 ## [0.8.0](https://github.com/AxiaCoder/cloitre/compare/v0.7.0...v0.8.0) (2026-11-26)
 
 
