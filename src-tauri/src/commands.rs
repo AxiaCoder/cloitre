@@ -396,6 +396,14 @@ pub fn clipboard_file_paths() -> Vec<String> {
     crate::clipboard::file_paths()
 }
 
+/// Keeps the system from sleeping (`on`) or lets it sleep again (see
+/// [`crate::keep_awake::set`]). The screen may still turn off. Does nothing
+/// outside Windows.
+#[tauri::command(async)]
+pub fn keep_awake(on: bool) {
+    crate::keep_awake::set(on);
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::{self, Write};

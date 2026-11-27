@@ -2,12 +2,18 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_IDLE_DELAY,
+  DEFAULT_KEEP_AWAKE,
   IDLE_DELAY_KEY,
   IDLE_DELAYS,
   idleDelayValue,
+  KEEP_AWAKE_CHOICES,
+  KEEP_AWAKE_KEY,
   loadIdleDelay,
+  loadKeepAwake,
   parseIdleDelay,
+  parseKeepAwake,
   saveIdleDelay,
+  saveKeepAwake,
   type SettingsStorage,
 } from "./settings";
 
@@ -52,5 +58,32 @@ describe("the idle delay setting", () => {
 
   it("parses every option value back to its delay", () => {
     expect(IDLE_DELAYS.map((delay) => parseIdleDelay(idleDelayValue(delay)))).toEqual(IDLE_DELAYS);
+  });
+});
+
+describe("the keep-awake setting", () => {
+  it("offers Never, while a session works, while a session works or waits", () => {
+    expect(KEEP_AWAKE_CHOICES).toEqual(["never", "working", "working-or-blocked"]);
+  });
+
+  it("defaults to while a session works or waits", () => {
+    expect(DEFAULT_KEEP_AWAKE).toBe("working-or-blocked");
+    expect(loadKeepAwake(new FakeStorage())).toBe("working-or-blocked");
+  });
+
+  it.each(KEEP_AWAKE_CHOICES)("reads back %s once stored", (choice) => {
+    const storage = new FakeStorage();
+    saveKeepAwake(storage, choice);
+    expect(loadKeepAwake(storage)).toBe(choice);
+  });
+
+  it("stores the choice under its key", () => {
+    const storage = new FakeStorage();
+    saveKeepAwake(storage, "never");
+    expect(storage.items.get(KEEP_AWAKE_KEY)).toBe("never");
+  });
+
+  it.each([null, "", "Never", "blocked", " working"])("falls back to the default for %j", (value) => {
+    expect(parseKeepAwake(value)).toBe(DEFAULT_KEEP_AWAKE);
   });
 });

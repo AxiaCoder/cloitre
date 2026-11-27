@@ -37,7 +37,18 @@ import type { SpawnMode } from "./pty";
 import { ReplayDeck, type LoadedReplay } from "./replay-deck";
 import { ActivityStore, parseActivityReport, type SessionActivity } from "./session-activity";
 import { IdleClock, isIdle } from "./idle-stop";
-import { IDLE_DELAYS, idleDelayValue, loadIdleDelay, parseIdleDelay, saveIdleDelay } from "./settings";
+import { keepAwake, KeepAwakeSync, shouldKeepAwake } from "./keep-awake";
+import {
+  IDLE_DELAYS,
+  idleDelayValue,
+  KEEP_AWAKE_CHOICES,
+  loadIdleDelay,
+  loadKeepAwake,
+  parseIdleDelay,
+  parseKeepAwake,
+  saveIdleDelay,
+  saveKeepAwake,
+} from "./settings";
 import { fillTexts, messages, texts } from "./strings";
 import { closeWarning, NO_WARNING, warningText as shownWarning, type WarningState } from "./warning-bar";
 import { listen } from "@tauri-apps/api/event";
@@ -142,6 +153,10 @@ let idleDelay = loadIdleDelay(localStorage);
 const idleClock = new IdleClock(idleDelay, (tabId) => {
   report(() => stopIdleTab(tabId));
 });
+/** The keep-awake choice of the settings: when the computer is kept from sleeping. */
+let keepAwakeChoice = loadKeepAwake(localStorage);
+/** Sends Rust the keep-awake state when it changes. */
+const keepAwakeSync = new KeepAwakeSync(keepAwake);
 /** The terminal of each open tab, by tab id: a session pane or the replay pane. */
 const panes = new Map<number, TabPane | ReplayPane>();
 /** The projects as last listed by Rust. */
@@ -389,6 +404,7 @@ function renderTabs(): void {
   showRecording(shown instanceof TabPane ? shown.recording : undefined);
   renderSessionCounts();
   watchIdleTabs();
+  syncKeepAwake();
 }
 
 /** Gives the idle clock every idle session tab, of every project (see {@link isIdle}). */
@@ -400,6 +416,20 @@ function watchIdleTabs(): void {
         .flatMap((tab) => (tab.kind === "session" && isIdle(tab.state, activities.of(tab.id)) ? [tab.id] : [])),
     ),
   );
+}
+
+/** Keeps the computer awake, or lets it sleep, as {@link keepAwakeChoice} and the session tabs of every project ask. */
+function syncKeepAwake(): void {
+  const sessions = projects.flatMap((project) =>
+    tabs
+      .tabsOf(project.id)
+      .flatMap((tab) =>
+        tab.kind === "session"
+          ? [{ working: activities.isWorking(tab.id), blocked: activities.isBlocked(tab.id) }]
+          : [],
+      ),
+  );
+  report(() => keepAwakeSync.update(shouldKeepAwake(keepAwakeChoice, sessions)));
 }
 
 /**
@@ -1314,6 +1344,21 @@ function openSettingsDialog(): void {
   const row = document.createElement("div");
   row.className = "settings-row";
   row.append(label, delaySelect);
+  const awakeSelect = document.createElement("select");
+  awakeSelect.id = "keep-awake";
+  awakeSelect.append(...KEEP_AWAKE_CHOICES.map((choice) => new Option(messages.keepAwakeOption(choice), choice)));
+  awakeSelect.value = keepAwakeChoice;
+  awakeSelect.addEventListener("change", () => {
+    keepAwakeChoice = parseKeepAwake(awakeSelect.value);
+    saveKeepAwake(localStorage, keepAwakeChoice);
+    syncKeepAwake();
+  });
+  const awakeLabel = document.createElement("label");
+  awakeLabel.htmlFor = awakeSelect.id;
+  awakeLabel.textContent = texts.keepAwake;
+  const awakeRow = document.createElement("div");
+  awakeRow.className = "settings-row";
+  awakeRow.append(awakeLabel, awakeSelect);
   const close = document.createElement("button");
   close.type = "button";
   close.textContent = texts.close;
@@ -1321,7 +1366,7 @@ function openSettingsDialog(): void {
   const actions = document.createElement("div");
   actions.className = "remove-actions";
   actions.append(close);
-  dialog.append(title, row, actions);
+  dialog.append(title, row, awakeRow, actions);
   dialog.addEventListener("keydown", (event) => {
     trapFocus(dialog, event);
   });
@@ -1817,6 +1862,7 @@ void loadRecordingAvailability().then((available) => {
   }
   refreshRecordingsOrReport();
 });
+syncKeepAwake();
 report(async () => {
   await fontsReady;
   await restoreAllTabs();

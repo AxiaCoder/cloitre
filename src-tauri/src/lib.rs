@@ -4,6 +4,7 @@ mod commands;
 mod dll_search;
 mod error;
 mod folder;
+mod keep_awake;
 mod launch;
 mod projects;
 mod pty;
@@ -207,7 +208,8 @@ pub fn run() {
             commands::tab_close,
             commands::tab_activate,
             commands::tab_set_title,
-            commands::clipboard_file_paths
+            commands::clipboard_file_paths,
+            commands::keep_awake
         ])
         .build(context)
         .expect("error while building the app")
@@ -424,6 +426,7 @@ mod tests {
             "allow-tab-activate",
             "allow-tab-set-title",
             "allow-clipboard-file-paths",
+            "allow-keep-awake",
             "core:event:allow-listen",
             "core:event:allow-unlisten",
             "updater:allow-check",
@@ -432,6 +435,31 @@ mod tests {
         ];
         expected.sort_unstable();
         assert_eq!(granted, expected);
+    }
+
+    #[test]
+    fn every_registered_command_is_declared_in_the_manifest_and_granted_to_the_main_window() {
+        let source = include_str!("lib.rs");
+        let start = source.find("generate_handler![").unwrap();
+        let end = start + source[start..].find("])").unwrap();
+        let registered: Vec<&str> = source[start..end]
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .filter_map(|token| token.strip_prefix("commands::"))
+            .collect();
+        assert!(registered.contains(&"keep_awake"));
+        let manifest = include_str!("../build.rs");
+        let capability = include_str!("../capabilities/default.json");
+        for command in registered {
+            assert!(
+                manifest.contains(&format!("\"{command}\"")),
+                "{command} is missing from the app manifest of build.rs"
+            );
+            let permission = format!("\"allow-{}\"", command.replace('_', "-"));
+            assert!(
+                capability.contains(&permission),
+                "{permission} is missing from the main window capability"
+            );
+        }
     }
 
     #[test]

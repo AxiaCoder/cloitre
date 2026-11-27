@@ -1,6 +1,6 @@
 # Architecture
 
-The webview (TypeScript, xterm.js) draws the terminal and handles everything the user sees. Rust only runs `claude` in a pseudo-terminal (ConPTY on Windows, through `portable-pty`), moves bytes in and out, in a development build records the output of each session to a file (see [Recordings](#recordings)), and owns the project list, whose folders it picks itself (see [Projects](#projects)), with the tabs of each project and the Claude Code session each tab resumes (see [Sessions](#sessions)). It also reads the paths of the files copied to the clipboard, which the webview cannot see (see [`clipboard_file_paths`](#clipboard_file_paths)).
+The webview (TypeScript, xterm.js) draws the terminal and handles everything the user sees. Rust only runs `claude` in a pseudo-terminal (ConPTY on Windows, through `portable-pty`), moves bytes in and out, in a development build records the output of each session to a file (see [Recordings](#recordings)), and owns the project list, whose folders it picks itself (see [Projects](#projects)), with the tabs of each project and the Claude Code session each tab resumes (see [Sessions](#sessions)). It also reads the paths of the files copied to the clipboard, which the webview cannot see (see [`clipboard_file_paths`](#clipboard_file_paths)), and keeps the computer from sleeping while the webview asks it to (see [Keeping the computer awake](#keeping-the-computer-awake)).
 
 ## Bundled ConPTY (Windows)
 
@@ -223,6 +223,14 @@ Reads the full paths of the files copied to the system clipboard, such as a Copy
 - **Returns**: an array of strings, the paths in the clipboard's order. On Windows they come from the clipboard's `CF_HDROP` file list; a path that is not valid Unicode is left out. Empty when the clipboard holds no file list, when another app still holds it open after about 100 ms of retries, and always outside Windows.
 - **Refuses**: nothing.
 
+### `keep_awake`
+
+Keeps the system from sleeping, or lets it sleep again. The webview sends the state it wants only when it changes, each call after the previous one has resolved, and sends it once when it starts, even `false`, so a reloaded webview never leaves a request a previous one made (see [Keeping the computer awake](#keeping-the-computer-awake)). On Windows a dedicated thread, started on the first call, holds the request: `SetThreadExecutionState` keeps a request per thread, and commands run on a pool of threads, so a request lifted from another thread would remove nothing. That thread applies `ES_CONTINUOUS | ES_SYSTEM_REQUIRED` for `true` and `ES_CONTINUOUS` for `false`, never `ES_DISPLAY_REQUIRED`, and answers each call with its previous execution state, which the call waits for and the command ignores. The request ends with the app's process.
+
+- **Arguments**: `on` (boolean): `true` to keep the system awake, `false` to let it sleep.
+- **Returns**: nothing, once the thread has applied the state. Does nothing outside Windows.
+- **Refuses**: nothing.
+
 ## Projects
 
 The project list belongs to Rust: `pty_spawn` runs only in the folder of a project, so a list the webview could write would make that check circular.
@@ -324,6 +332,10 @@ When the main window is asked to close, Rust counts the sessions whose process s
 ## Idle sessions
 
 A session tab is idle when its session runs and shows no activity: not waiting for an answer, not stopped on an error, no finished turn left unseen, not working (background tasks included). A starting session is never idle. Once a tab has been idle for the delay of the settings dialog (gear button of the rail: Never, 5, 15 or 30 minutes, 1, 2 or 4 hours; 1 hour by default), the webview stops its session through `pty_kill`, as an update does, and the tab offers `"resume"` or `"new"`, saying how long it stayed idle. Any activity Rust reports, and any input sent to the session, restarts the time. The delay is kept in the webview's local storage under `cloitre.idleStopDelay`; Rust knows nothing of it. A new delay applies at once, counted from each tab's last activity.
+
+## Keeping the computer awake
+
+The settings dialog chooses when the computer is kept from sleeping: Never, While a session works, or While a session works or waits for an answer (the default). A session works as in [Idle sessions](#idle-sessions), background tasks included; it waits for an answer when its tab is blocked on a question or a permission. A subagent waiting for an answer does not stop a tab whose main conversation works from counting as working, although the tab shows blocked. The webview recomputes the state over the session tabs of every project on each render and when the choice changes, and calls [`keep_awake`](#keep_awake) when the state changes. The choice is kept in the webview's local storage under `cloitre.keepAwake`; Rust knows nothing of it. Only system sleep is held off: the screen may still turn off, and closing the lid or pressing the power button still puts the computer to sleep.
 
 ## Updates
 

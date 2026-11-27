@@ -83,7 +83,7 @@ describe("ActivityStore with agents", () => {
   it("keeps a subagent's block when another subagent works", () => {
     const store = new ActivityStore();
     store.report(1, "blocked", true, "agent-a");
-    expect(store.report(1, "working", true, "agent-b")).toBe(false);
+    expect(store.report(1, "working", true, "agent-b")).toBe(true);
     expect(store.of(1)).toBe("blocked");
     expect(store.report(1, "working", true, "agent-a")).toBe(true);
     expect(store.of(1)).toBe("working");
@@ -350,7 +350,8 @@ describe("ActivityStore working and failed", () => {
     expect(store.of(1)).toBe("failed");
     expect(store.see(1)).toBe(false);
     expect(store.of(1)).toBe("failed");
-    expect(store.report(1, "working", true)).toBe(false);
+    expect(store.report(1, "working", true)).toBe(true);
+    expect(store.of(1)).toBe("failed");
     expect(store.report(1, "prompted", true)).toBe(true);
     expect(store.of(1)).toBe("working");
   });
@@ -513,5 +514,72 @@ describe("ActivityStore turn woken by background tasks", () => {
     store.report(1, "working", false, "agent-a");
     expect(store.report(1, "settled", false, "agent-a")).toBe(true);
     expect(store.of(1)).toBe("done");
+  });
+});
+
+describe("ActivityStore work and blocks behind the shown activity", () => {
+  it("still reports working a tab whose subagent is blocked while its main conversation works", () => {
+    const store = new ActivityStore();
+    store.report(1, "prompted", false);
+    store.report(1, "working", false);
+    store.report(1, "blocked", false, "a1");
+    expect(store.of(1)).toBe("blocked");
+    expect(store.isWorking(1)).toBe(true);
+    expect(store.isBlocked(1)).toBe(true);
+  });
+
+  it("does not report working a tab whose main conversation is blocked", () => {
+    const store = new ActivityStore();
+    store.report(1, "prompted", false);
+    store.report(1, "blocked", false);
+    expect(store.isWorking(1)).toBe(false);
+    expect(store.isBlocked(1)).toBe(true);
+  });
+
+  it("reports neither working nor blocked a tab without activity", () => {
+    const store = new ActivityStore();
+    expect(store.isWorking(1)).toBe(false);
+    expect(store.isBlocked(1)).toBe(false);
+  });
+});
+
+describe("ActivityStore change of work behind an unchanged activity", () => {
+  it("reports a change when the main conversation blocks a tab a subagent already blocks", () => {
+    const store = new ActivityStore();
+    store.report(1, "prompted", false);
+    store.report(1, "working", false);
+    store.report(1, "blocked", false, "a1");
+    expect(store.report(1, "blocked", false)).toBe(true);
+    expect(store.of(1)).toBe("blocked");
+    expect(store.isWorking(1)).toBe(false);
+  });
+
+  it("reports a change when the main conversation works again while a subagent still blocks the tab", () => {
+    const store = new ActivityStore();
+    store.report(1, "prompted", false);
+    store.report(1, "blocked", false, "a1");
+    store.report(1, "blocked", false);
+    expect(store.report(1, "working", false)).toBe(true);
+    expect(store.of(1)).toBe("blocked");
+    expect(store.isWorking(1)).toBe(true);
+  });
+
+  it("reports a change when a failed tab works again", () => {
+    const store = new ActivityStore();
+    store.report(1, "prompted", false);
+    store.report(1, "failed", false);
+    expect(store.report(1, "working", false)).toBe(true);
+    expect(store.of(1)).toBe("failed");
+    expect(store.isWorking(1)).toBe(true);
+  });
+
+  it("reports a change when interrupting a failed tab that works again", () => {
+    const store = new ActivityStore();
+    store.report(1, "prompted", false);
+    store.report(1, "failed", false);
+    store.report(1, "working", false);
+    expect(store.interrupt(1)).toBe(true);
+    expect(store.of(1)).toBe("failed");
+    expect(store.isWorking(1)).toBe(false);
   });
 });
