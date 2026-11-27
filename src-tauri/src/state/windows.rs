@@ -268,7 +268,7 @@ impl Drop for SecurityDescriptor {
     }
 }
 
-/// The server end of the state pipe: always one instance waiting for the next
+/// The server end of a pipe (the state pipe or the URL pipe): always one instance waiting for the next
 /// client.
 pub struct Server {
     /// The pipe name, null-terminated UTF-16.
